@@ -6,26 +6,44 @@ This guide explains how to install UniFMU in your standalone Python 3.12 environ
 
 ## ✅ Requirements
 
+- Create a virtual environment and activate the environment
+  ```
+  python -m venv venv
+  .\venv\Scripts\activate
+  ```
+- Install requirements .txt:
+  ```
+  pip install -r requirements.txt
+  ```
 - Python 3.12 installed at:
   ```
-  C:\Users\<YourUsername>\AppData\Local\Programs\Python\Python312
+  C:\Users\<YourUsername>\Documents\repositories\2025_Inkindcontributions\venv
   ```
-
-- Admin or user terminal access (CMD, PowerShell, or terminal inside VS Code)
 
 ---
 
-## 📦 Step 1: Install `unifmu` for Python 3.12
+## 📦 Step 1: Install dependencies of `unifmu` from `requirements.txt`
 
-Use the following command to install UniFMU and the rest of dependencies via pip in the correct environment:
+To install **UniFMU** and all required dependencies in a Python 3.12 environment, you can use the provided `requirements.txt` file located in the project’s root directory.
+
+This ensures all packages are installed consistently, including compatibility fixes such as the correct `protobuf` version required by UniFMU.
+
+### ▶️ Instructions:
+
+1. **Activate your Python 3.12 environment**, if not already active.
+
+2. **Run the following commands in your terminal:**
 
 ```bash
-"C:\Users\<YourUsername>\AppData\Local\Programs\Python\Python312\python.exe" -m pip install --upgrade pip
-"C:\Users\<YourUsername>\AppData\Local\Programs\Python\Python312\python.exe" -m pip install unifmu
-"C:\Users\<YourUsername>\AppData\Local\Programs\Python\Python312\python.exe" -m pip install "unifmu[python-backend]"
-"C:\Users\<YourUsername>\AppData\Local\Programs\Python\Python312\python.exe" -m pip install protobuf==3.20.3
+pip install --upgrade pip
+pip install -r requirements.txt
 ```
 
+The last version can be found in https://github.com/INTO-CPS-Association/unifmu/releases/tag/0.0.11 and it is not available in pip, so download the binaries and replace in the Scripts folder. Make sure that everything is installed:
+
+```
+pip install unifmu[python-backend]
+```
 ---
 
 ## 🔍 Step 2: Verify the Installation
@@ -33,7 +51,7 @@ Use the following command to install UniFMU and the rest of dependencies via pip
 To confirm that UniFMU is installed:
 
 ```bash
-"C:\Users\<YourUsername>\AppData\Local\Programs\Python\Python312\python.exe" -m pip show unifmu
+pip show unifmu
 ```
 
 You should see output showing the package name, version, and install location.
@@ -45,10 +63,10 @@ You should see output showing the package name, version, and install location.
 Once installed, you can generate your FMU using the UniFMU CLI:
 
 ```bash
-"C:\Users\<YourUsername>\AppData\Local\Programs\Python\Python312\Scripts\unifmu.exe" generate python python_adder.fmu
+"C:\Users\<YourUsername>\Documents\repositories\2025_Inkindcontributions\venv\Scripts\unifmu.exe" generate python ORIGINAL.fmu
 ```
 
-- `python_adder.fmu` is the name of the FMU that will be created.
+- `ORIGINAL.fmu` is the name of the FMU that will be created.
 - This assumes you have a valid Python class that inherits from `PythonModel` in your script (e.g. `model.py`).
 
 ---
@@ -58,7 +76,7 @@ Once installed, you can generate your FMU using the UniFMU CLI:
 To use `unifmu` globally without the full path, add this folder to your system `PATH`:
 
 ```
-C:\Users\<YourUsername>\AppData\Local\Programs\Python\Python312\Scripts
+C:\Users\<YourUsername>\Documents\repositories\2025_Inkindcontributions\venv\Scripts
 ```
 
 ---
@@ -69,11 +87,11 @@ C:\Users\<YourUsername>\AppData\Local\Programs\Python\Python312\Scripts
 python_adder_model_eium.fmu/
 ├── binaries/
 │   ├── darwin64/
-│   │   └── model.dylib         # macOS shared library (placeholder or real binary)
+│   │   └── unifmu.dylib         # macOS shared library (placeholder or real binary)
 │   ├── linux64/
-│   │   └── model.so            # Linux shared object (placeholder or real binary)
+│   │   └── unifmu.so            # Linux shared object (placeholder or real binary)
 │   └── win64/
-│       └── model.dll           # Windows DLL (placeholder or real binary)
+│       └── unifmu.dll           # Windows DLL (placeholder or real binary)
 ├── resources/
 │   ├── schemas/
 │   │   ├── unifmu_fmi2_pb2.py
@@ -105,13 +123,13 @@ backend = "grpc"
 [grpc]
 linux = ["python3", "backend_grpc.py"]
 macos = ["python3", "backend_grpc.py"]
-windows = ["C:/Users/Lucia/AppData/Local/Programs/Python/Python312/python.exe", "backend_grpc.py"]
+windows = ["C:/Users/Lucia/Documents/repositories/2025_Inkindcontributions/venv/Scripts/python.exe", "backend_grpc.py"]
 
 [zmq]
 linux = ["python3", "backend_schemaless_rpc.py"]
 macos = ["python3", "backend_schemaless_rpc.py"]
 serialization_format = "Pickle"
-windows = ["C:/Users/Lucia/AppData/Local/Programs/Python/Python312/python.exe", "backend_schemaless_rpc.py"]
+windows = ["C:/Users/Lucia/Documents/repositories/2025_Inkindcontributions/venv/Scripts/python.exe", "backend_schemaless_rpc.py"]
 
 ```
 
@@ -124,22 +142,23 @@ This guarantees that your FMU will run using the correct interpreter and avoid e
 - If `unifmu` is not recognized, always use the full path.
 - Use `--help` to see available commands:
   ```bash
-  "C:\Users\<YourUsername>\AppData\Local\Programs\Python\Python312\Scripts\unifmu.exe" --help
+  "C:/Users/Lucia/Documents/repositories/2025_Inkindcontributions/venv/Scripts/unifmu.exe" --help
   ```
 - Add path to the environmental variables in which `unifmu.exe` is installed in order to be able to execute the tool:
   ```bash
-  C:\Users\<YourUsername>\AppData\Local\Programs\Python\Python312\Scripts
+  C:/Users/Lucia/Documents/repositories/2025_Inkindcontributions/venv/Scripts
   ```
 
 ---
 
 ## 🔄 Step 4: Update and Package FMU from Source Code
 
-Once you have the FMU template structure generated (including `model.py`, `modelDescription.xml`, and folder layout inside `python_adder_model_eium.fmu`), you can regenerate and update the contents using the script `update_and_package_fmu.py`.
+Once you have the FMU template structure generated (including `model.py`, `modelDescription.xml`, and folder layout inside `ORIGINAL.fmu`), you can regenerate and update the contents using the script `update_and_package_fmu.py`.
 
 ### 📌 Purpose:
 This script:
 - Regenerates the logic in `model.py` and `modelDescription.xml` using the function defined in `fmu_psycrometry.py`.
+- Use the input names and the initial values of the script `fmu_psycrometry.py`.
 - Saves these files into the `resources/` subfolder of the FMU template.
 - Compresses the FMU folder and renames it as a `.fmu` file (instead of `.zip`).
 
@@ -154,13 +173,11 @@ python update_and_package_fmu.py
 You will get an updated FMU file:
 
 ```
-python_adder_model_eium_generated.fmu
+ORIGINAL_generated_auto.fmu
 ```
 
 This can now be used for testing or simulation.
 ---
-
-Very important! The name of the dll inside the folders of binaries should be the same as the name of the model.py in this case `model.dll`, `model.so` and `model.dylib`
 
 ## ▶️ Step 5: Execute the FMU with FMPy
 
@@ -171,8 +188,8 @@ To run your generated FMU in a graphical environment using [FMPy GUI](https://gi
 Use your Python 3.12 environment to install:
 
 ```bash
-"C:/Users/Lucia/AppData/Local/Programs/Python/Python312/python.exe" -m pip install fmpy
-"C:/Users/Lucia/AppData/Local/Programs/Python/Python312/python.exe" -m pip install PySide6
+"C:/Users/Lucia/Documents/repositories/2025_Inkindcontributions/venv/Scripts/python.exe" -m pip install fmpy
+"C:/Users/Lucia/Documents/repositories/2025_Inkindcontributions/venv/Scripts/python.exe" -m pip install PySide6
 ```
 
 ---
@@ -182,7 +199,7 @@ Use your Python 3.12 environment to install:
 To launch the graphical interface:
 
 ```bash
-"C:/Users/Lucia/AppData/Local/Programs/Python/Python312/python.exe" -m fmpy.gui
+"C:/Users/Lucia/Documents/repositories/2025_Inkindcontributions/venv/Scripts/python.exe" -m fmpy.gui
 ```
 
 A window like the one below will open.

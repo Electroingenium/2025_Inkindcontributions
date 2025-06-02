@@ -1,0 +1,44 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.5.2.0
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "venv", "venv", "{05F94FD3-B77B-E2F0-500B-568E6F852E0C}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Lib", "Lib", "{32EFE0E7-BB31-3F3C-4587-6C0021A00D63}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "site-packages", "site-packages", "{3623AA7E-0020-D6AA-1DD3-538930F80BCA}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "unifmu", "unifmu", "{271038C3-2252-71ED-C985-623A216BF249}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "resources", "resources", "{EC6F0F88-413E-C59E-E79B-98E7693ABF9A}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "backends", "backends", "{B8C11BB5-7F0F-FC53-B8D6-087EAFD5F285}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "csharp", "venv\Lib\site-packages\unifmu\resources\backends\csharp\csharp.csproj", "{CB298317-77BC-B132-17D0-9EAE4E9B2BED}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{CB298317-77BC-B132-17D0-9EAE4E9B2BED}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{CB298317-77BC-B132-17D0-9EAE4E9B2BED}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{CB298317-77BC-B132-17D0-9EAE4E9B2BED}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{CB298317-77BC-B132-17D0-9EAE4E9B2BED}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{32EFE0E7-BB31-3F3C-4587-6C0021A00D63} = {05F94FD3-B77B-E2F0-500B-568E6F852E0C}
+		{3623AA7E-0020-D6AA-1DD3-538930F80BCA} = {32EFE0E7-BB31-3F3C-4587-6C0021A00D63}
+		{271038C3-2252-71ED-C985-623A216BF249} = {3623AA7E-0020-D6AA-1DD3-538930F80BCA}
+		{EC6F0F88-413E-C59E-E79B-98E7693ABF9A} = {271038C3-2252-71ED-C985-623A216BF249}
+		{B8C11BB5-7F0F-FC53-B8D6-087EAFD5F285} = {EC6F0F88-413E-C59E-E79B-98E7693ABF9A}
+		{CB298317-77BC-B132-17D0-9EAE4E9B2BED} = {B8C11BB5-7F0F-FC53-B8D6-087EAFD5F285}
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {5431CDB2-3B0E-49FA-8B7C-1530D06D1119}
+	EndGlobalSection
+EndGlobal
