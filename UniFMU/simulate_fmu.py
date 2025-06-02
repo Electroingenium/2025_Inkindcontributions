@@ -4,7 +4,7 @@ from fmpy import simulate_fmu, read_model_description,dump
 import os
 
 # === Configuration ===
-fmu_path = 'UniFMU\ORIGINAL_generated_auto.fmu'  # Path to your FMU
+fmu_path = 'UniFMU\ORIGINAL_generated_autov2.fmu'  # Path to your FMU
 start_time = 0.0
 stop_time = 10.0
 step_size = 1.0
