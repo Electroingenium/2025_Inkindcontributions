@@ -1,6 +1,6 @@
 colorama
 coloredlogs
-FMPy
+fmpy[complete]
 protobuf==3.20.3
 pyzmq
 toml
@@ -9,5 +9,6 @@ pyqtgraph
 grpcio
 grpcio-tools
 pandas
+unifmu[python-backend]
 
 

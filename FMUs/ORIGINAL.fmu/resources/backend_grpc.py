@@ -205,6 +205,7 @@ if __name__ == "__main__":
 
     reference_to_attr = {}
     path = Path.cwd().parent / "modelDescription.xml"
+    print(path)
     with open(path) as f:
         for v in ET.parse(f).find("ModelVariables"):
             reference_to_attr[int(v.attrib["valueReference"])] = v.attrib["name"]
