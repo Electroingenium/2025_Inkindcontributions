@@ -3,10 +3,10 @@ backend = "grpc"
 [grpc]
 linux = ["python3", "backend_grpc.py"]
 macos = ["python3", "backend_grpc.py"]
-windows = ["C:/Users/Lucia/Documents/repositories/2025_Inkindcontributions/venv/Scripts/python.exe", "backend_grpc.py"]
+windows = ["python", "backend_grpc.py"]
 
 [zmq]
 linux = ["python3", "backend_schemaless_rpc.py"]
 macos = ["python3", "backend_schemaless_rpc.py"]
 serialization_format = "Pickle"
-windows = ["C:/Users/Lucia/Documents/repositories/2025_Inkindcontributions/venv/Scripts/python.exe", "backend_schemaless_rpc.py"]
+windows = ["python", "backend_schemaless_rpc.py"]
