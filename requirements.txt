@@ -10,5 +10,6 @@ grpcio
 grpcio-tools
 pandas
 unifmu[python-backend]
+matplotlib
 
 

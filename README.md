@@ -22,7 +22,7 @@ This guide explains how to install UniFMU in your standalone Python 3.12 environ
 
 ---
 
-## 📦 Step 1: Install dependencies of `unifmu` from `requirements.txt`
+## 📦 Step 1: Install dependencies of `unifmu` and the rest of packages from `requirements.txt`
 
 To install **UniFMU** and all required dependencies in a Python 3.12 environment, you can use the provided `requirements.txt` file located in the project’s root directory.
 
@@ -161,6 +161,7 @@ This script:
 - Use the input names and the initial values of the script `fmu_psycrometry.py`.
 - Saves these files into the `resources/` subfolder of the FMU template.
 - Compresses the FMU folder and renames it as a `.fmu` file (instead of `.zip`).
+- The original .fmu is overwritten by the script.
 
 ### ▶️ To run it:
 
@@ -170,31 +171,22 @@ python update_and_package_fmu.py
 
 ### 📁 Result:
 
-You will get an updated FMU file:
+You will get an updated FMU file (zipped and without zipped). This:
 
 ```
 ORIGINAL_generated_auto.fmu
 ```
 
-This can now be used for testing or simulation.
+This can now be used for testing or simulation with fmpy library.
 ---
 
 ## ▶️ Step 5: Execute the FMU with FMPy
 
-To run your generated FMU in a graphical environment using [FMPy GUI](https://github.com/CATIA-Systems/FMPy), you must first install the necessary packages.
-
-### ✅ Install FMPy and GUI dependencies
-
-Use your Python 3.12 environment to install:
-
-```bash
-"C:/Users/Lucia/Documents/repositories/2025_Inkindcontributions/venv/Scripts/python.exe" -m pip install fmpy
-"C:/Users/Lucia/Documents/repositories/2025_Inkindcontributions/venv/Scripts/python.exe" -m pip install PySide6
-```
+To run your generated FMU in a graphical environment using [FMPy GUI](https://github.com/CATIA-Systems/FMPy) or you can run in a separate script.
 
 ---
 
-### ▶️ Launch FMUGUI
+### ▶️ Option 1: Launch FMUGUI
 
 To launch the graphical interface:
 
@@ -206,9 +198,9 @@ A window like the one below will open.
 
 ---
 
-### 📂 Load and Run the FMU
+### 📂 Load and Run the FMU with gui
 
-1. Click **File > Open** and select your `.fmu` file (e.g., `python_adder_model_eium_generated.fmu`).
+1. Click **File > Open** and select your `.fmu` file (e.g., `ORIGINAL_generated_auto_zipped.fmu`).
 2. Use the **Start** column to initialize inputs.
 3. Press the **Play** ▶️ button to simulate.
 4. Check the **Plot** boxes for outputs you'd like to visualize.
@@ -220,6 +212,19 @@ A window like the one below will open.
 Below is an example plot obtained by loading the FMU and simulating it over 5 seconds:
 
 ![alt text](image.png)
+
+---
+
+### ▶️ Option 2: Execute simulate_fmu.py
+
+This script takes the fmu `ORIGINAL_generated_auto_zipped.fmu` located in FMUs folder and uses fmpy package to get the results. They are obtained in a scsv file(`simulation_inputs_outputs.csv`) file and a pdf(`simulation_plots.pdf`):
+
+Some of the results are shown in the following images:
+![alt text](image-1.png)
+
+
+---
+
 
 
 ## 🔗 References
