@@ -1,15 +1,22 @@
 import os
+import sys
+import shutil
 import pickle
 import zipfile
 from pathlib import Path
 
-# === FMU resource path ===
-FMU_DIR = Path("ORIGINAL.fmu")
-RESOURCE_DIR = FMU_DIR / "resources"
-FMU_DIR.mkdir(parents=True, exist_ok=True)
-RESOURCE_DIR.mkdir(parents=True, exist_ok=True)
+# === Initial configuration ===
+SOURCE_FMU = Path("FMUs/ORIGINAL.fmu")              # Original FMU
+MODIFIED_DIR = Path("FMUs/ORIGINAL_modified.fmu")   # Modified FMU folder
+RESOURCE_DIR = MODIFIED_DIR / "resources"
 
-# === Define I/O variable names ===
+# === Copy original folder ===
+if MODIFIED_DIR.exists():
+    shutil.rmtree(MODIFIED_DIR)
+shutil.copytree(SOURCE_FMU, MODIFIED_DIR)
+print(f"📁 Copy of {SOURCE_FMU} created at: {MODIFIED_DIR.resolve()}")
+
+# === Input and output variables ===
 inputs = [
     "regen_target_temp", "regen_vfr_setpoint", "regen_heater_power",
     "temp_1", "RH_1", "vfr_1",
@@ -18,7 +25,6 @@ inputs = [
     "vfr_8", "temp_9", "RH_9",
     "temp_10", "RH_10", "temp_11", "vfr_13"
 ]
-
 initial_values = [
     60.0, 0.1, 0.0,
     25.0, 0.5, 0.1,
@@ -27,14 +33,13 @@ initial_values = [
     0.1, 25.0, 0.5,
     25.0, 0.5, 25.0, 0.1
 ]
-
 outputs = ["mass_balance", "energy_balance", "mdot_air_in", "mdot_air_out", "Q_in", "Q_out"]
 
 # === Generate model.py ===
-assignment_block = "\n        ".join([f"self.{name} = {value}" for name, value in zip(inputs, initial_values)] + [f"self.{name} = 0.0" for name in outputs])
-result_assignments = "\n        ".join([f"self.{name} = results[{i}]" for i, name in enumerate(outputs)])
+assignment_block = "\n        ".join([f"self.{n} = {v}" for n, v in zip(inputs, initial_values)] + [f"self.{n} = 0.0" for n in outputs])
+result_block = "\n        ".join([f"self.{n} = results[{i}]" for i, n in enumerate(outputs)])
 
-model_code = f"""from fmi2 import Fmi2FMU, Fmi2Status
+model_py = f"""from fmi2 import Fmi2FMU, Fmi2Status
 import pickle
 
 def compute_balances_simplified(inputs):
@@ -57,7 +62,7 @@ def compute_balances_simplified(inputs):
     return [mass_balance, energy_balance, mdot_air_in, mdot_air_out, Q_in, Q_out]
 
 class Model(Fmi2FMU):
-    def __init__(self, reference_to_attr=None) -> None:
+    def __init__(self, reference_to_attr=None):
         super().__init__(reference_to_attr)
         {assignment_block}
         self._update_outputs()
@@ -74,16 +79,17 @@ class Model(Fmi2FMU):
         return Fmi2Status.ok
 
     def _update_outputs(self):
-        input_values = [{", ".join(f"self.{name}" for name in inputs)}]
+        input_values = [{", ".join(f"self.{n}" for n in inputs)}]
         results = compute_balances_simplified(input_values)
-        {result_assignments}
+        {result_block}
 
     def do_step(self, current_time, step_size, no_step_prior):
         self._update_outputs()
         return Fmi2Status.ok
 """
 
-(RESOURCE_DIR / "model.py").write_text(model_code.strip())
+(RESOURCE_DIR / "model.py").write_text(model_py.strip())
+print(f"✅ model.py updated at: {RESOURCE_DIR / 'model.py'}")
 
 # === Generate modelDescription.xml ===
 xml = '''<?xml version='1.0' encoding='utf-8'?>
@@ -100,44 +106,58 @@ xml = '''<?xml version='1.0' encoding='utf-8'?>
   <ModelVariables>
 '''
 
-for i, (name, value) in enumerate(zip(inputs, initial_values)):
-    xml += f'''    <ScalarVariable name="{name}" valueReference="{i}" causality="input" variability="continuous">
-      <Real start="{value}" />
+for i, (n, v) in enumerate(zip(inputs, initial_values)):
+    xml += f'''    <ScalarVariable name="{n}" valueReference="{i}" causality="input" variability="continuous">
+      <Real start="{v}" />
     </ScalarVariable>\n'''
-
-for i, name in enumerate(outputs, start=len(inputs)):
-    xml += f'''    <ScalarVariable name="{name}" valueReference="{i}" causality="output" variability="continuous" initial="calculated">
+for i, n in enumerate(outputs, start=len(inputs)):
+    xml += f'''    <ScalarVariable name="{n}" valueReference="{i}" causality="output" variability="continuous" initial="calculated">
       <Real />
     </ScalarVariable>\n'''
 
 xml += '''  </ModelVariables>
   <ModelStructure>
-    <Outputs>
-'''
+    <Outputs>\n'''
 for i in range(len(inputs), len(inputs) + len(outputs)):
     xml += f'      <Unknown index="{i+1}" />\n'
-
 xml += '''    </Outputs>
-    <InitialUnknowns>
-'''
+    <InitialUnknowns>\n'''
 for i in range(len(inputs), len(inputs) + len(outputs)):
     xml += f'      <Unknown index="{i+1}" />\n'
-
 xml += '''    </InitialUnknowns>
   </ModelStructure>
 </fmiModelDescription>
 '''
 
-(FMU_DIR / "modelDescription.xml").write_text(xml.strip())
+(MODIFIED_DIR / "modelDescription.xml").write_text(xml.strip())
+print(f"✅ modelDescription.xml updated at: {MODIFIED_DIR / 'modelDescription.xml'}")
 
-# === Zip and rename as .fmu ===
-zip_path = Path("ORIGINAL_generated_auto.zip")
-fmu_final_path = Path("ORIGINAL_generated_auto.fmu")
+# === Dynamic launch.toml ===
+python_exec = sys.executable.replace("\\", "/")
+launch_toml = f"""backend = "grpc"
+
+[grpc]
+linux = ["python3", "backend_grpc.py"]
+macos = ["python3", "backend_grpc.py"]
+windows = ["{python_exec}", "backend_grpc.py"]
+
+[zmq]
+linux = ["python3", "backend_schemaless_rpc.py"]
+macos = ["python3", "backend_schemaless_rpc.py"]
+serialization_format = "Pickle"
+windows = ["{python_exec}", "backend_schemaless_rpc.py"]
+"""
+
+(RESOURCE_DIR / "launch.toml").write_text(launch_toml.strip())
+print(f"✅ launch.toml updated at: {RESOURCE_DIR / 'launch.toml'}")
+
+# === Generate .fmu ===
+zip_path = Path("FMUs/ORIGINAL_modified_auto.zip")
+fmu_final_path = Path("FMUs/ORIGINAL_modified_auto.fmu")
 
 with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
-    for file in FMU_DIR.rglob("*"):
-        zipf.write(file, arcname=file.relative_to(FMU_DIR))
+    for file in MODIFIED_DIR.rglob("*"):
+        zipf.write(file, arcname=file.relative_to(MODIFIED_DIR))
 
 zip_path.rename(fmu_final_path)
-
-print(f"✅ FMU generated: {fmu_final_path}")
+print(f"✅ Final FMU generated at: {fmu_final_path.resolve()}")

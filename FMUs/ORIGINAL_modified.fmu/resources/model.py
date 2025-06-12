@@ -21,7 +21,7 @@ def compute_balances_simplified(inputs):
     return [mass_balance, energy_balance, mdot_air_in, mdot_air_out, Q_in, Q_out]
 
 class Model(Fmi2FMU):
-    def __init__(self, reference_to_attr=None) -> None:
+    def __init__(self, reference_to_attr=None):
         super().__init__(reference_to_attr)
         self.regen_target_temp = 60.0
         self.regen_vfr_setpoint = 0.1
