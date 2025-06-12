@@ -7,13 +7,16 @@ from fmpy.fmi2 import FMU2Slave
 from pathlib import Path
 import matplotlib.pyplot as plt
 
-# === CONFIGURACIÓN ===
-FMU_PATH = Path("C:/Users/Lucia/Documents/repositories/2025_Inkindcontributions/FMUs/ORIGINAL_generated_auto_zipped.fmu")
+# === CONFIGURATION ===
+FMU_PATH = Path("FMUs/ORIGINAL_modified_auto.fmu").resolve()
+RESULTS_DIR = Path("results")
+RESULTS_DIR.mkdir(exist_ok=True)
+
+OUTPUT_CSV = RESULTS_DIR / "simulation_inputs_outputs.csv"
+PLOT_PDF = RESULTS_DIR / "simulation_plots.pdf"
 START_TIME = 0.0
 STOP_TIME = 10.0
 STEP_SIZE = 1.0
-OUTPUT_CSV = "simulation_inputs_outputs.csv"
-PLOT_PDF = "simulation_plots.pdf"
 
 # === LOGGING ===
 logging.basicConfig(level=logging.INFO)
@@ -46,7 +49,6 @@ def simulate_fmu():
         logger.info("Simulation started")
         sim_time = START_TIME
         while sim_time <= STOP_TIME:
-            # Tomar los valores actuales de inputs y outputs
             input_vals = fmu.getReal([vrs[name] for name in input_names])
             fmu.doStep(currentCommunicationPoint=sim_time, communicationStepSize=STEP_SIZE)
             output_vals = fmu.getReal([vrs[name] for name in output_names])
@@ -95,13 +97,12 @@ def plot_results(df, input_names, output_names):
         fig_outputs.suptitle("Output Variables")
         fig_outputs.tight_layout(rect=[0, 0.03, 1, 0.95])
 
-        # Save both figures to one PDF
         from matplotlib.backends.backend_pdf import PdfPages
         with PdfPages(PLOT_PDF) as pdf:
             pdf.savefig(fig_inputs)
             pdf.savefig(fig_outputs)
 
-        print(f"📊 Plots saved to {PLOT_PDF}")
+        print(f"📊 Plots saved to: {PLOT_PDF}")
 
 if __name__ == "__main__":
     simulate_fmu()

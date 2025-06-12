@@ -15,11 +15,6 @@ This guide explains how to install UniFMU in your standalone Python 3.12 environ
   ```
   pip install -r requirements.txt
   ```
-- Python 3.12 installed at:
-  ```
-  C:\Users\<YourUsername>\Documents\repositories\2025_Inkindcontributions\venv
-  ```
-
 ---
 
 ## 📦 Step 1: Install dependencies of `unifmu` and the rest of packages from `requirements.txt`
@@ -63,7 +58,7 @@ You should see output showing the package name, version, and install location.
 Once installed, you can generate your FMU using the UniFMU CLI:
 
 ```bash
-"C:\Users\<YourUsername>\Documents\repositories\2025_Inkindcontributions\venv\Scripts\unifmu.exe" generate python ORIGINAL.fmu
+".\venv\Scripts\unifmu.exe" generate python ORIGINAL.fmu
 ```
 
 - `ORIGINAL.fmu` is the name of the FMU that will be created.
@@ -114,7 +109,7 @@ python_adder_model_eium.fmu/
 
 ## 🧩 FMU Configuration: `launch.toml` Setup for Python 3.12
 
-To ensure that UniFMU uses the correct Python interpreter when launching the FMU backend on Windows, update your `resources/launch.toml` file as follows if using `zmq` or `gprc`:
+To ensure that UniFMU uses the correct Python interpreter when launching the FMU backend on Windows, update your `resources/launch.toml` file as follows if using `zmq` or `gprc`. It will be updated automatically with the `update_and_package_fmu.py`:
 
 ```toml
 
@@ -123,13 +118,13 @@ backend = "grpc"
 [grpc]
 linux = ["python3", "backend_grpc.py"]
 macos = ["python3", "backend_grpc.py"]
-windows = ["C:/Users/Lucia/Documents/repositories/2025_Inkindcontributions/venv/Scripts/python.exe", "backend_grpc.py"]
+windows = ["./venv/Scripts/python.exe", "backend_grpc.py"]
 
 [zmq]
 linux = ["python3", "backend_schemaless_rpc.py"]
 macos = ["python3", "backend_schemaless_rpc.py"]
 serialization_format = "Pickle"
-windows = ["C:/Users/Lucia/Documents/repositories/2025_Inkindcontributions/venv/Scripts/python.exe", "backend_schemaless_rpc.py"]
+windows = ["./venv/Scripts/python.exe", "backend_schemaless_rpc.py"]
 
 ```
 
@@ -142,26 +137,27 @@ This guarantees that your FMU will run using the correct interpreter and avoid e
 - If `unifmu` is not recognized, always use the full path.
 - Use `--help` to see available commands:
   ```bash
-  "C:/Users/Lucia/Documents/repositories/2025_Inkindcontributions/venv/Scripts/unifmu.exe" --help
+  "./venv/Scripts/unifmu.exe" --help
   ```
 - Add path to the environmental variables in which `unifmu.exe` is installed in order to be able to execute the tool:
   ```bash
-  C:/Users/Lucia/Documents/repositories/2025_Inkindcontributions/venv/Scripts
+  ./venv/Scripts
   ```
 
 ---
 
 ## 🔄 Step 4: Update and Package FMU from Source Code
 
-Once you have the FMU template structure generated (including `model.py`, `modelDescription.xml`, and folder layout inside `ORIGINAL.fmu`), you can regenerate and update the contents using the script `update_and_package_fmu.py`.
+Once you have the FMU template structure generated (including `model.py`, `modelDescription.xml` and `launch.toml` and folder layout inside `FMUs/ORIGINAL.fmu`), you can regenerate and update the contents using the script `update_and_package_fmu.py`.
 
 ### 📌 Purpose:
 This script:
+- Creates a copy of `ORIGINAL.fmu` (obtained directly from UNIFMU) and gives the name of `ORIGINAL_modified.fmu`
 - Regenerates the logic in `model.py` and `modelDescription.xml` using the function defined in `fmu_psycrometry.py`.
+- Update `launch.toml` according to the instalation of the python environment.
 - Use the input names and the initial values of the script `fmu_psycrometry.py`.
 - Saves these files into the `resources/` subfolder of the FMU template.
-- Compresses the FMU folder and renames it as a `.fmu` file (instead of `.zip`).
-- The original .fmu is overwritten by the script.
+- Compresses the FMU folder and renames it as a `.fmu` file (instead of `.zip`) and update the name to `ORIGINAL_modified_auto.fmu`.
 
 ### ▶️ To run it:
 
@@ -171,14 +167,8 @@ python update_and_package_fmu.py
 
 ### 📁 Result:
 
-You will get an updated FMU file (zipped and without zipped). This:
+You will get an updated FMU file (zipped and without zipped) in `FMUs/ORIGINAL_modified_auto.fmu`. This can now be used for testing or simulation with fmpy library.
 
-```
-ORIGINAL_generated_auto.fmu
-```
-
-This can now be used for testing or simulation with fmpy library.
----
 
 ## ▶️ Step 5: Execute the FMU with FMPy
 
@@ -191,7 +181,7 @@ To run your generated FMU in a graphical environment using [FMPy GUI](https://gi
 To launch the graphical interface:
 
 ```bash
-"C:/Users/Lucia/Documents/repositories/2025_Inkindcontributions/venv/Scripts/python.exe" -m fmpy.gui
+"./venv/Scripts/python.exe" -m fmpy.gui
 ```
 
 A window like the one below will open.
