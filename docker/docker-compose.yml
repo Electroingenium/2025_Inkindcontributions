@@ -1,0 +1,32 @@
+version: "3.9"
+
+services:
+  opcua-server:
+    build: { context: ./opcua_server }
+    container_name: opcua-server
+    ports:
+      - "4840:4840"
+
+  fmu-client:
+    build: { context: ./fmu_client }
+    container_name: fmu-client
+    depends_on: [opcua-server]
+    environment:
+      - OPCUA_ENDPOINT=opc.tcp://opcua-server:4840
+      - FMU_PATH=/app/model.fmu
+      - RESULTS_DIR=/results
+      - START_TIME=0.0
+      - STOP_TIME=10.0         # cambia duración
+      - STEP_SIZE=1.0
+    volumes:
+      - ./model/model.fmu:/app/model.fmu:ro
+      - ./results:/results
+
+  streamlit-ui:
+    build: { context: ./streamlit_ui }
+    container_name: streamlit-ui
+    depends_on: [opcua-server]
+    environment:
+      - OPCUA_ENDPOINT=opc.tcp://opcua-server:4840
+    ports:
+      - "8501:8501"

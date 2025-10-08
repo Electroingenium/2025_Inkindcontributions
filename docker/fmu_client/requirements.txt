@@ -1,0 +1,15 @@
+colorama
+coloredlogs
+fmpy[complete]
+protobuf==3.20.3
+pyzmq
+toml
+PySide6
+pyqtgraph
+grpcio
+pandas
+unifmu[python-backend]
+matplotlib
+opcua
+cryptography
+
