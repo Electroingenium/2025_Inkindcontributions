@@ -1,0 +1,10 @@
+FROM python:3.11-slim
+RUN pip install --no-cache-dir opcua cryptography
+WORKDIR /app
+COPY opcua_server.py /app/
+EXPOSE 4840
+ENV OPCUA_ENDPOINT=opc.tcp://0.0.0.0:4840
+CMD ["python", "opcua_server.py"]
+
+
+

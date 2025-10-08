@@ -7,7 +7,6 @@ toml
 PySide6
 pyqtgraph
 grpcio
-grpcio-tools
 pandas
 unifmu[python-backend]
 matplotlib
