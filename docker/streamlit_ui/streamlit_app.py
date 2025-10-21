@@ -5,6 +5,7 @@ import streamlit as st
 from opcua import Client as OPCClient, ua
 import docker
 from datetime import datetime
+import pandas as pd
 
 OPCUA_ENDPOINT = os.getenv("OPCUA_ENDPOINT", "opc.tcp://opcua-server:4840")
 DOCKER_NETWORK = os.getenv("DOCKER_NETWORK", "simnet")
@@ -34,19 +35,24 @@ def get_opc():
 
 def node(c, name):
     try:
-        return c.get_objects_node().get_child(f"0:{name}")
+        # list all namespaces so we can find the correct index dynamically
+        ns_array = c.get_namespace_array()
+        ns_idx = None
+        for i, ns in enumerate(ns_array):
+            if "urn:eium:opcua:fmu" in ns:
+                ns_idx = i
+                break
+
+        if ns_idx is None:
+            st.warning(f"⚠️ Namespace 'urn:eium:opcua:fmu' not found in {ns_array}")
+            return None
+
+        return c.get_objects_node().get_child([ua.QualifiedName(name, ns_idx)])
+
     except Exception as e:
         st.warning(f"⚠️ Could not find node '{name}': {e}")
         return None
-# def node(c, name):
-#     try:
-#         # obtener el índice de namespace correcto (el 2 que imprime el servidor)
-#         ns_idx = c.get_namespace_index("urn:eium:opcua:fmu")
-#         # acceder al nodo dentro de Objects usando ese namespace
-#         return c.get_objects_node().get_child([ua.QualifiedName(name, ns_idx)])
-#     except Exception as e:
-#         st.warning(f"⚠️ Could not find node '{name}': {e}")
-#         return None
+
 
 
 @st.cache_resource
@@ -124,7 +130,7 @@ dock   = docker_client()
 colL, colR = st.columns(2)
 
 with colL:
-    st.subheader("Lecturas (OPC UA)")
+    st.subheader("Read variables (OPC UA)")
     for n in SHOW_VARS:
         try:
             v = float(node(client, n).get_value())
@@ -194,3 +200,31 @@ else:
                     st.success(f"Removed {ct.name}")
                 except Exception as e:
                     st.error(f"Remove error: {e}")
+
+st.markdown("---")
+st.subheader("📊 Resultados de la simulación FMU")
+
+csv_path = "/results/simulation_outputs.csv"
+
+if os.path.exists(csv_path):
+    try:
+        df = pd.read_csv(csv_path)
+        st.success(f"Datos cargados correctamente desde `{csv_path}`")
+
+        st.dataframe(df)
+
+        numeric_cols = [col for col in df.columns if col != "time"]
+        selected_vars = st.multiselect(
+            "Selecciona las variables a graficar",
+            numeric_cols,
+            default=["energy_balance", "mass_balance"]
+        )
+
+        if selected_vars:
+            st.line_chart(df.set_index("time")[selected_vars])
+        else:
+            st.info("Selecciona una o más variables para visualizar la gráfica.")
+    except Exception as e:
+        st.error(f"Error al cargar el CSV: {e}")
+else:
+    st.warning("⚠️ El archivo de resultados no se ha encontrado aún. Ejecuta la simulación primero.")
