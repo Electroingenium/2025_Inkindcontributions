@@ -1,10 +1,10 @@
 # 🧩 FMU Simulation + OPC UA + Streamlit (UI)
 
-This project implements a simulation architecture using **Docker** that integrates three main components:
+This project implements a **modular simulation architecture** based on **Docker**, integrating three synchronized components:
 
-1. **OPC UA Server** – exposes FMU model variables as OPC UA nodes.  
-2. **OPC UA Client + FMU Executor** – runs the FMU using [FMPy](https://github.com/CATIA-Systems/FMPy), publishes its outputs to the OPC UA server, and saves results in CSV and PDF formats.  
-3. **Streamlit Interface** – provides a simple real-time dashboard to monitor and modify setpoints.
+1. **🖥️ OPC UA Server** – exposes model variables (calculated, control, and auxiliary) as OPC UA nodes.  
+2. **⚙️ FMU Client + OPC UA Publisher** – runs the FMU using [FMPy](https://github.com/CATIA-Systems/FMPy), exchanges data with the OPC UA server, and stores results in CSV format.  
+3. **📊 Streamlit Dashboard** – provides a user interface for real-time monitoring, setpoint control, and graphical visualization of simulation outputs.
 
 ---
 
@@ -14,141 +14,173 @@ This project implements a simulation architecture using **Docker** that integrat
 .
 ├─ docker-compose.yml
 ├─ model/
-│  └─ model.fmu               # Your FMU file (must include linux64 binaries)
-├─ results/                    # Generated output files: CSV and PDF
+│  └─ model.fmu                # FMU file (must include linux64 binaries)
+├─ results/                    # Generated simulation outputs (CSV)
 ├─ opcua_server/
 │  ├─ Dockerfile
-│  └─ opcua_server.py
+│  └─ opcua_server.py          # Defines all OPC UA variables and permissions
 ├─ fmu_client/
 │  ├─ Dockerfile
-│  └─ fmu_runner_opc.py
+│  └─ fmu_runner_opc.py        # Runs FMU and exchanges variables via OPC UA
 └─ streamlit_ui/
    ├─ Dockerfile
-   └─ streamlit_app.py
+   └─ streamlit_app.py         # Streamlit dashboard with tabs and charts
 ```
 
 ---
 
 ## ⚙️ Prerequisites
 
-- **Docker** and **Docker Compose** installed.  
-- Valid `.fmu` file with Linux binaries (`binaries/linux64`).  
-- Enough disk space for simulation results.
+- 🐳 **Docker** and **Docker Compose** installed.  
+- Valid `.fmu` file containing `binaries/linux64/`.  
+- Shared `results/` directory for inter-container data exchange.  
 
 ---
 
 ## 🚀 How to Run
 
 ### 1️⃣ Prepare the FMU
-
-Copy your FMU file to the `model/` directory:
+Copy your FMU file into the `model/` directory:
 ```bash
 mkdir -p model results
-cp FMUs/ORIGINAL_modified_auto.fmu model/model.fmu
+cp FMUs/your_model.fmu model/model.fmu
 ```
 
 ---
 
 ### 2️⃣ Build Containers
-
 ```bash
 docker compose build
 ```
 
 ---
 
-### 3️⃣ Start the Environment
-
+### 3️⃣ Start the System
 ```bash
 docker compose up
 ```
 
 This will start:
 
-- **OPC UA Server:** `opc.tcp://localhost:4840`  
-- **FMU Client:** runs the FMU simulation and sends variable data to the server.  
-- **Streamlit UI:** available at [http://localhost:8501](http://localhost:8501)
+| Component | Description | Default Endpoint |
+|------------|--------------|------------------|
+| 🖥️ **OPC UA Server** | Hosts model variables | `opc.tcp://localhost:4840` |
+| ⚙️ **FMU Client** | Executes the FMU and updates OPC UA nodes | Internal Docker network |
+| 📊 **Streamlit UI** | Web dashboard to view and control variables | [http://localhost:8501](http://localhost:8501) |
 
 ---
 
-### 4️⃣ Simulation Results
+### 4️⃣ View Simulation Results
 
-Simulation results are saved in the `results/` folder:
+Simulation outputs are automatically saved in:
 
-| File | Description |
-|-------|--------------|
-| `simulation_inputs_outputs.csv` | Input/output variables recorded at each simulation step |
-| `simulation_plots.pdf` | Plots of inputs and outputs |
+```
+results/simulation_outputs.csv
+```
+
+You can view them interactively in Streamlit under the **📊 Resultados (FMU)** tab.
 
 ---
 
 ## 🧠 Architecture Overview
 
 ```text
- ┌────────────────────┐      ┌──────────────────────────┐      ┌──────────────────────┐
- │  OPC UA Server     │◄────►│  OPC UA Client + FMU     │◄────►│  Streamlit UI (web)  │
- │ (python-opcua)     │      │ (FMPy + python-opcua)    │      │ (streamlit)          │
- └────────────────────┘      └──────────────────────────┘      └──────────────────────┘
-         ↑                           ↑
-         │                           │
-         │      Publishes variables  │
-         │      and reads setpoints  │
-         └───────────────────────────┘
+ ┌──────────────────────────────┐
+ │         Streamlit UI         │
+ │  - View & edit setpoints     │
+ │  - Visualize CSV results     │
+ └─────────────▲────────────────┘
+               │
+               │ OPC UA (python-opcua)
+               │
+ ┌─────────────┴────────────────┐
+ │        OPC UA Server         │
+ │  - Defines namespaces         │
+ │  - Controls read/write perms  │
+ └─────────────▲────────────────┘
+               │
+               │ Variable updates
+               │
+ ┌─────────────┴────────────────┐
+ │     FMU Runner + Client      │
+ │  - Runs FMU via FMPy         │
+ │  - Reads setpoints from OPC  │
+ │  - Publishes results (CSV)   │
+ └──────────────────────────────┘
 ```
 
 ---
 
-## ⚙️ Main Environment Variables
+## ⚙️ Environment Variables
 
 | Variable | Description | Service |
-|-----------|--------------|----------|
-| `OPCUA_ENDPOINT` | OPC UA server address (default `opc.tcp://opcua-server:4840`) | All |
-| `FMU_PATH` | Path to the `.fmu` file inside the container | fmu-client |
-| `RESULTS_DIR` | Directory to store simulation results | fmu-client |
-| `START_TIME`, `STOP_TIME`, `STEP_SIZE` | Simulation time parameters | fmu-client |
+|-----------|-------------|----------|
+| `OPCUA_ENDPOINT` | OPC UA server address (`opc.tcp://opcua-server:4840`) | fmu-client |
+| `FMU_PATH` | Path to FMU file | fmu-client |
+| `RESULTS_DIR` | Directory to save results | fmu-client |
+| `START_TIME` / `STOP_TIME` / `STEP_SIZE` | FMU simulation timing | fmu-client |
+
+---
+
+## 💡 Streamlit Dashboard Overview
+
+The Streamlit app is divided into **three tabs**:
+
+| Tab | Description |
+|-----|--------------|
+| 🟩 **Lecturas (OPC UA)** | Displays calculated read-only variables (e.g., `energy_balance`, `Q_in`, `Q_out`). |
+| 🟦 **Setpoints (OPC UA)** | Allows user input to update control and auxiliary variables (e.g., `regen_target_temp`, `temp_1`, etc.). |
+| 📊 **Resultados (FMU)** | Loads `/results/simulation_outputs.csv`, shows data table, and interactive line charts of selected variables. |
+
+### Example Chart View:
+- Select one or more variables from the multiselect dropdown.
+- Data plotted dynamically against simulation time.
+- Optionally auto-refreshable for near real-time updates.
 
 ---
 
 ## 🧩 Customization
 
-- **Simulation duration:** adjust `STOP_TIME` and `STEP_SIZE` in `docker-compose.yml`.  
-- **Published variables:** edit `DEFAULT_OUTPUTS` in `fmu_runner_opc.py` and `VARS_READONLY` / `VARS_WRITABLE` in `opcua_server.py`.  
-- **Real-time updates:** Streamlit provides manual refresh buttons or auto-reload as desired.
+- 🕒 **Adjust simulation duration** → edit `STOP_TIME` and `STEP_SIZE` in `docker-compose.yml`.  
+- 🧾 **Add or remove OPC UA variables** → modify `calc_vars`, `control_vars`, or `aux_vars` in `opcua_server.py`.  
+- 🔄 **Auto-refresh UI** → Streamlit can be configured to reload the CSV at intervals.  
+- 🎨 **Charts** → The app uses `st.line_chart` (simple) or `Altair` (multi-variable, color-coded).
 
 ---
 
 ## 🧾 Example Output
 
-After a typical run:
+After simulation completes:
+
 ```
-✅ CSV Results: /results/simulation_inputs_outputs.csv
-📊 PDF Charts: /results/simulation_plots.pdf
+INFO:fmu_runner_opc:📊 Results saved to /results/simulation_outputs.csv
 ```
 
-The CSV file contains time-series data of all input and output variables, and the PDF shows the corresponding plots.
+The CSV typically contains:
+
+| time | energy_balance | mass_balance | mdot_air_in | Q_in | Q_out |
+|------|----------------|---------------|--------------|------|-------|
+| 0.0  | 3029.9 | 0.12 | 0.24 | 6059.9 | 3029.9 |
+| 1.0  | 3039.9 | 0.13 | 0.25 | 6069.9 | 3039.9 |
+| ...  | ... | ... | ... | ... | ... |
 
 ---
 
 ## 🧰 Useful Commands
 
-- **Restart environment**
-  ```bash
-  docker compose down && docker compose up --build
-  ```
-
-- **Check FMU Client logs**
-  ```bash
-  docker logs fmu-client
-  ```
-
-- **Open the web UI**
-  [http://localhost:8501](http://localhost:8501)
+| Action | Command |
+|---------|----------|
+| 🧱 Rebuild all containers | `docker compose build --no-cache` |
+| 🚀 Start simulation | `docker compose up` |
+| 🧼 Stop and remove | `docker compose down` |
+| 📄 View FMU logs | `docker logs fmu-client` |
+| 🌐 Open UI | [http://localhost:8501](http://localhost:8501) |
 
 ---
 
 ## 🧹 Cleanup
 
-To stop and remove everything:
+To remove containers and generated data:
 ```bash
 docker compose down
 rm -rf results/*
@@ -156,7 +188,10 @@ rm -rf results/*
 
 ---
 
-## 🧑‍💻 Author
+## 👩‍💻 Author
 
-Integration environment for **FMU–OPC UA simulation** with real-time visualization using **Streamlit**.  
-Fully modular structure ready for deployment in containerized systems.
+**EIUM – FMU/OPC UA Integration Environment**  
+Developed by *Lucia Royo-Pascual, Ph.D.*  
+
+> Real-time FMU simulation environment with OPC UA communication and Streamlit visualization.  
+> Fully modular and containerized for research, testing, and deployment.

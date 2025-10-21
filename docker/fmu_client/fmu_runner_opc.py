@@ -67,10 +67,32 @@ def simulate_and_publish():
         "RH_1", "RH_6", "RH_9"
     ]
 
+    # # Get OPC nodes by name
+    # def get_node(name):
+    #     try:
+    #         return objects.get_child(f"0:{name}")
+    #     except Exception:
+    #         logger.warning(f"⚠️ Could not find node '{name}' in OPC UA server")
+    #         return None
+
+    # calc_nodes = {n: get_node(n) for n in calc_vars}
+    # control_nodes = {n: get_node(n) for n in control_vars}
+    # aux_nodes = {n: get_node(n) for n in aux_vars}
+    # Get OPC nodes by name
+    # Detect namespace index automatically
+    namespaces = opc.get_namespace_array()
+    logger.info(f"Namespaces: {namespaces}")
+    try:
+        ns_idx = opc.get_namespace_index("urn:eium:opcua:fmu")
+    except Exception:
+        ns_idx = 2  # fallback si no lo encuentra
+
+    logger.info(f"Using namespace index: {ns_idx}")
+
     # Get OPC nodes by name
     def get_node(name):
         try:
-            return objects.get_child(f"0:{name}")
+            return objects.get_child([ua.QualifiedName(name, ns_idx)])
         except Exception:
             logger.warning(f"⚠️ Could not find node '{name}' in OPC UA server")
             return None
@@ -78,6 +100,8 @@ def simulate_and_publish():
     calc_nodes = {n: get_node(n) for n in calc_vars}
     control_nodes = {n: get_node(n) for n in control_vars}
     aux_nodes = {n: get_node(n) for n in aux_vars}
+
+
 
     # -------------------------------------------------
     # INITIALIZE FMU
