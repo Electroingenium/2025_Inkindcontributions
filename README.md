@@ -230,3 +230,11 @@ Some of the results are shown in the following images:
   *A Universal Mechanism for Implementing Functional Mock-up Units*.  
   In G. Wagner et al. (Eds.), Proceedings of the 11th International Conference on Simulation and Modeling Methodologies, Technologies and Applications, SIMULTECH 2021, pp. 121–129. SCITEPRESS.  
   https://doi.org/10.5220/0010577601210129
+
+
+---
+
+## 👩‍💻 Author
+
+**EIUM – FMU development using UniFMU from python script (psycrometry application)**  
+Developed by *Lucia Royo-Pascual, Ph.D.*  
