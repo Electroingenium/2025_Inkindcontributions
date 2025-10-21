@@ -59,7 +59,7 @@ def run_fmu_container(client, stop_time, step_size, start_time=0.0):
         raise RuntimeError("HOST_FMU_PATH (ruta absoluta en el host) no está definida o no es absoluta")
 
     # 👉 Generar un nombre único basado en la hora actual
-    run_name = f"fmu-run-{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}"
+    run_name = f"fmu-run-{datetime.now().strftime('%Y%m%d%H%M%S')}"
 
     env = {
         "FMU_PATH": CONT_MODEL_PATH,

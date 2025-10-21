@@ -42,4 +42,5 @@ services:
     volumes:
       - ./model/ORIGINAL_generated_auto.fmu:/app/model.fmu:ro
       - ./results:/results
+    entrypoint: ["tail", "-f", "/dev/null"]
 
