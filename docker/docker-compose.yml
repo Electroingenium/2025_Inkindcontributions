@@ -1,32 +1,45 @@
-version: "3.9"
+networks:
+  simnet:
+    name: simnet     # Nombre fijo y visible para todos los servicios
+    driver: bridge
 
 services:
   opcua-server:
-    build: { context: ./opcua_server }
+    build: ./opcua_server
     container_name: opcua-server
+    networks: [simnet]
     ports:
-      - "4840:4840"
+      - "4841:4840"
+
+  streamlit-ui:
+    build: ./streamlit_ui
+    container_name: streamlit-ui
+    networks: [simnet]
+    ports: ["8501:8501"]
+    environment:
+      - OPCUA_ENDPOINT=opc.tcp://opcua-server:4840
+      - DOCKER_NETWORK=simnet
+      - FMU_IMAGE=fmu-client:latest
+      - FMU_CONTAINER_NAME_BASE=fmu-run
+      - HOST_FMU_PATH=${HOST_FMU_PATH}
+      - HOST_RESULTS_PATH=${HOST_RESULTS_PATH}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./results:/results
+
+
 
   fmu-client:
-    build: { context: ./fmu_client }
+    build: ./fmu_client
+    image: fmu-client:latest
     container_name: fmu-client
-    depends_on: [opcua-server]
+    networks: [simnet]
     environment:
       - OPCUA_ENDPOINT=opc.tcp://opcua-server:4840
       - FMU_PATH=/app/model.fmu
       - RESULTS_DIR=/results
-      - START_TIME=0.0
-      - STOP_TIME=10.0         # cambia duración
-      - STEP_SIZE=1.0
+      - OPC_WAIT=10
     volumes:
-      - ./model/model.fmu:/app/model.fmu:ro
+      - ./model/ORIGINAL_generated_auto.fmu:/app/model.fmu:ro
       - ./results:/results
 
-  streamlit-ui:
-    build: { context: ./streamlit_ui }
-    container_name: streamlit-ui
-    depends_on: [opcua-server]
-    environment:
-      - OPCUA_ENDPOINT=opc.tcp://opcua-server:4840
-    ports:
-      - "8501:8501"
