@@ -1,36 +1,30 @@
+
 import os
 import time
 import streamlit as st
 from opcua import Client as OPCClient, ua
-
-# Docker SDK
 import docker
 from datetime import datetime
 
-# --- Config ---
 OPCUA_ENDPOINT = os.getenv("OPCUA_ENDPOINT", "opc.tcp://opcua-server:4840")
-NAMESPACE_URI  = os.getenv("OPCUA_NAMESPACE", "urn:eium:opcua:fmu")
 DOCKER_NETWORK = os.getenv("DOCKER_NETWORK", "simnet")
-FMU_IMAGE      = os.getenv("FMU_IMAGE", "fmu-client:latest")
-FMU_NAME_BASE  = os.getenv("FMU_CONTAINER_NAME_BASE", "fmu-run")
+FMU_IMAGE = os.getenv("FMU_IMAGE", "fmu-client:latest")
+FMU_NAME_BASE = os.getenv("FMU_CONTAINER_NAME_BASE", "fmu-run")
 
-# Rutas que montaremos al lanzar el contenedor de simulación
-HOST_MODEL_PATH   = os.getenv("HOST_FMU_PATH")      # ruta del host, absoluta
+HOST_MODEL_PATH = os.getenv("HOST_FMU_PATH")
 HOST_RESULTS_PATH = os.getenv("HOST_RESULTS_PATH")
-CONT_MODEL_PATH   = "/app/model.fmu"
+CONT_MODEL_PATH = "/app/model.fmu"
 CONT_RESULTS_PATH = "/results"
-
-volumes = {
-    HOST_MODEL_PATH:   {"bind": CONT_MODEL_PATH,   "mode": "ro"},  # <-- bind de ARCHIVO
-    HOST_RESULTS_PATH: {"bind": CONT_RESULTS_PATH, "mode": "rw"},
-}
-
 
 SHOW_VARS = [
     "energy_balance","mass_balance","mdot_air_in","mdot_air_out","Q_in","Q_out",
     "temp_1","temp_5","temp_10","vfr_1","vfr_5","vfr_13","RH_1","RH_6","RH_9","regen_heater_power"
 ]
-SETPOINTS = ["regen_vfr_setpoint","regen_target_temp"]
+
+SETPOINTS = [
+    "regen_vfr_setpoint","regen_target_temp",
+    "temp_1","temp_5","temp_10","vfr_1","vfr_5","vfr_13","RH_1","RH_6","RH_9"
+]
 
 @st.cache_resource
 def get_opc():
@@ -39,12 +33,21 @@ def get_opc():
     return c
 
 def node(c, name):
-    idx = c.get_namespace_index(NAMESPACE_URI)
-    return c.get_root_node().get_child([
-        ua.QualifiedName("Objects", 0),
-        ua.QualifiedName("FMU", idx),
-        ua.QualifiedName(name, idx)
-    ])
+    try:
+        return c.get_objects_node().get_child(f"0:{name}")
+    except Exception as e:
+        st.warning(f"⚠️ Could not find node '{name}': {e}")
+        return None
+# def node(c, name):
+#     try:
+#         # obtener el índice de namespace correcto (el 2 que imprime el servidor)
+#         ns_idx = c.get_namespace_index("urn:eium:opcua:fmu")
+#         # acceder al nodo dentro de Objects usando ese namespace
+#         return c.get_objects_node().get_child([ua.QualifiedName(name, ns_idx)])
+#     except Exception as e:
+#         st.warning(f"⚠️ Could not find node '{name}': {e}")
+#         return None
+
 
 @st.cache_resource
 def docker_client():
