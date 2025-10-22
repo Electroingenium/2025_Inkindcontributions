@@ -190,7 +190,7 @@ A window like the one below will open.
 
 ### 📂 Load and Run the FMU with gui
 
-1. Click **File > Open** and select your `.fmu` file (e.g., `ORIGINAL_generated_auto_zipped.fmu`).
+1. Click **File > Open** and select your `.fmu` file (e.g., `ORIGINAL_generated_auto.fmu`).
 2. Use the **Start** column to initialize inputs.
 3. Press the **Play** ▶️ button to simulate.
 4. Check the **Plot** boxes for outputs you'd like to visualize.
