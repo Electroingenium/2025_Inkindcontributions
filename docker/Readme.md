@@ -128,9 +128,9 @@ The Streamlit app is divided into **three tabs**:
 
 | Tab | Description |
 |-----|--------------|
-| 🟩 **Lecturas (OPC UA)** | Displays calculated read-only variables (e.g., `energy_balance`, `Q_in`, `Q_out`). |
+| 🟩 **Read (OPC UA)** | Displays calculated read-only variables (e.g., `energy_balance`, `Q_in`, `Q_out`). |
 | 🟦 **Setpoints (OPC UA)** | Allows user input to update control and auxiliary variables (e.g., `regen_target_temp`, `temp_1`, etc.). |
-| 📊 **Resultados (FMU)** | Loads `/results/simulation_outputs.csv`, shows data table, and interactive line charts of selected variables. |
+| 📊 **Results (FMU)** | Loads `/results/simulation_outputs.csv`, shows data table, and interactive line charts of selected variables. |
 
 ### Example Chart View:
 - Select one or more variables from the multiselect dropdown.
