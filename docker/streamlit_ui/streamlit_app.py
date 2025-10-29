@@ -65,7 +65,7 @@ def list_active_runs(client: docker.DockerClient):
 
 def run_fmu_container(client, stop_time, step_size, start_time=0.0):
     if not HOST_MODEL_PATH or not os.path.isabs(HOST_MODEL_PATH):
-        raise RuntimeError("HOST_FMU_PATH (ruta absoluta en el host) no está definida o no es absoluta")
+        raise RuntimeError("HOST_FMU_PATH is not defined or is not absolute")
 
     # 👉 Generar un nombre único basado en la hora actual
     run_name = f"fmu-run-{datetime.now().strftime('%Y%m%d%H%M%S')}"
@@ -147,7 +147,7 @@ with colR:
         except Exception:
             cur = 0.0
         newv = st.number_input(n, value=float(cur), key=f"sp-{n}")
-        if st.button(f"Actualizar {n}", key=f"btn-{n}"):
+        if st.button(f"Update {n}", key=f"btn-{n}"):
             try:
                 nd.set_value(ua.Variant(float(newv), ua.VariantType.Double))
                 st.success(f"{n} = {newv}")
@@ -174,7 +174,7 @@ if c2.button("⏹ Stop last"):
         ok, msg = stop_container(dock, last)
         st.write(msg if ok else f"Stop error: {msg}")
     else:
-        st.info("No hay 'last run' todavía.")
+        st.info("There is not 'last run' yet.")
 
 if c3.button("🔄 Refresh"):
     time.sleep(0.2)
@@ -202,20 +202,20 @@ else:
                     st.error(f"Remove error: {e}")
 
 st.markdown("---")
-st.subheader("📊 Resultados de la simulación FMU")
+st.subheader("📊 Results of the simulation FMU")
 
 csv_path = "/results/simulation_outputs.csv"
 
 if os.path.exists(csv_path):
     try:
         df = pd.read_csv(csv_path)
-        st.success(f"Datos cargados correctamente desde `{csv_path}`")
+        st.success(f"DAta load correctly from `{csv_path}`")
 
         st.dataframe(df)
 
         numeric_cols = [col for col in df.columns if col != "time"]
         selected_vars = st.multiselect(
-            "Selecciona las variables a graficar",
+            "Select variable to plot:",
             numeric_cols,
             default=["energy_balance", "mass_balance"]
         )
@@ -223,8 +223,8 @@ if os.path.exists(csv_path):
         if selected_vars:
             st.line_chart(df.set_index("time")[selected_vars])
         else:
-            st.info("Selecciona una o más variables para visualizar la gráfica.")
+            st.info("Select one or more variable to plot in the graph.")
     except Exception as e:
         st.error(f"Error al cargar el CSV: {e}")
 else:
-    st.warning("⚠️ El archivo de resultados no se ha encontrado aún. Ejecuta la simulación primero.")
+    st.warning("⚠️ The results file is not available yet. Run a simulation first.")
