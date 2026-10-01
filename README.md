@@ -139,7 +139,7 @@ This guarantees that your FMU will run using the correct interpreter and avoid e
   ```bash
   "./venv/Scripts/unifmu.exe" --help
   ```
-- Add path to the environmental variables in which `unifmu.exe` is installed in order to be able to execute the tool:
+- Add path to the environmental variables in which `unifmu` is installed in order to be able to execute the tool:
   ```bash
   ./venv/Scripts
   ```
