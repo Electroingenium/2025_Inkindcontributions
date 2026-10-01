@@ -1,7 +1,7 @@
 """fmugen CLI.
 
-    python -m fmugen build path/to/model.py -o out/model.fmu   # packaged FMU
-    python -m fmugen build path/to/model.py -o out/model       # unzipped UniFMU folder
+    python -m fmugen build path/to/model.py -o out/model.fmu                   # packaged FMU (default)
+    python -m fmugen build path/to/model.py -o out/model --format folder       # unzipped UniFMU folder
 """
 import argparse
 import shutil
@@ -28,9 +28,18 @@ def _write_launch_toml(resources_dir, python_exec):
     )
 
 
-def build(model_path, output, model_name=None, author="", python_exec=None):
+FORMATS = ("fmu", "folder")
+
+
+def build(model_path, output, model_name=None, author="", python_exec=None, output_format="fmu"):
+    if output_format not in FORMATS:
+        raise ValueError(f"unknown output format {output_format!r}, expected one of {FORMATS}")
     model_path = Path(model_path).resolve()
     output = Path(output)
+    if output_format == "fmu" and output.is_dir():
+        raise FileExistsError(f"{output} is a directory; cannot write an .fmu archive there")
+    if output_format == "folder" and output.is_file():
+        raise FileExistsError(f"{output} is a file; cannot write a folder there")
 
     interface = load_interface(model_path)
 
@@ -50,7 +59,7 @@ def build(model_path, output, model_name=None, author="", python_exec=None):
             _write_launch_toml(resources, python_exec)
 
         output.parent.mkdir(parents=True, exist_ok=True)
-        if output.suffix == ".fmu":
+        if output_format == "fmu":
             output.unlink(missing_ok=True)
             with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as zipf:
                 for file in sorted(fmu_dir.rglob("*")):
@@ -70,8 +79,9 @@ def main(argv=None):
 
     b = sub.add_parser("build", help="build a UniFMU from a Python model")
     b.add_argument("model", help="path to the model .py file")
-    b.add_argument("-o", "--output", required=True,
-                   help="output path; ending in .fmu produces a zip, otherwise a folder")
+    b.add_argument("-o", "--output", required=True, help="output path, used exactly as given")
+    b.add_argument("--format", choices=FORMATS, default="fmu",
+                   help="fmu: zipped .fmu archive (default); folder: unzipped UniFMU folder")
     b.add_argument("--name", help="modelName in modelDescription.xml (default: module name)")
     b.add_argument("--author", default="")
     b.add_argument("--python", nargs="?", const=sys.executable, default=None,
@@ -79,7 +89,10 @@ def main(argv=None):
                         "(flag alone = the current interpreter; omitted = keep boilerplate 'python')")
 
     args = parser.parse_args(argv)
-    output, interface = build(args.model, args.output, args.name, args.author, args.python)
+    try:
+        output, interface = build(args.model, args.output, args.name, args.author, args.python, args.format)
+    except FileExistsError as e:
+        parser.error(str(e))
 
     counts = {}
     for v in interface["variables"]:
