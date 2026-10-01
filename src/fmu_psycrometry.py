@@ -1,4 +1,42 @@
-import pandas as pd
+"""Simplified mass and energy balance of an air-based drying process."""
+
+# === FMU interface (read by fmugen) ===
+# Order must match the unpacking in compute_balances_simplified.
+INPUTS = {
+    "regen_target_temp":   {"start": 60.0, "unit": "degC"},
+    "airCond_target_temp": {"start": 22.0, "unit": "degC"},
+    "precool_target_temp": {"start": 18.0, "unit": "degC"},
+    "temp_1":    {"start": 28.0, "unit": "degC"},
+    "hum_rel_1": {"start": 50.0, "unit": "%"},
+    "temp_3":    {"start": 26.0, "unit": "degC"},
+    "hum_rel_3": {"start": 45.0, "unit": "%"},
+    "temp_4":    {"start": 25.0, "unit": "degC"},
+    "vfr_5":     {"start": 1.2,  "unit": "m3/s"},
+    "temp_6":    {"start": 24.0, "unit": "degC"},
+    "hum_rel_6": {"start": 40.0, "unit": "%"},
+    "temp_7":    {"start": 23.0, "unit": "degC"},
+    "vfr_8":     {"start": 0.8,  "unit": "m3/s"},
+    "temp_9":    {"start": 22.0, "unit": "degC"},
+    "hum_rel_9": {"start": 35.0, "unit": "%"},
+    "temp_10":   {"start": 21.0, "unit": "degC"},
+    "temp_11":   {"start": 20.0, "unit": "degC"},
+    "vfr_13":    {"start": 1.7,  "unit": "m3/s"},
+}
+
+OUTPUTS = {
+    "mass_balance":   {"unit": "kg/s"},
+    "energy_balance": {"unit": "W"},
+    "mdot_air_in":    {"unit": "kg/s"},
+    "mdot_air_out":   {"unit": "kg/s"},
+    "Q_in":           {"unit": "W"},
+    "Q_out":          {"unit": "W"},
+}
+
+
+def step(**inputs):
+    """FMU entry point: named inputs in, {output_name: value} out."""
+    return compute_balances_simplified([inputs[name] for name in INPUTS])
+
 
 def compute_balances_simplified(inputs):
     """
