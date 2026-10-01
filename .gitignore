@@ -4,3 +4,6 @@ venv/
 fmus/generated/
 __pycache__/
 out/
+docker/model/*.fmu
+docker/results/*
+!docker/results/.gitkeep

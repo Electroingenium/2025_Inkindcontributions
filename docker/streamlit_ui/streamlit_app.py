@@ -1,5 +1,6 @@
 
 import os
+import socket
 import time
 import streamlit as st
 from opcua import Client as OPCClient, ua
@@ -12,20 +13,13 @@ DOCKER_NETWORK = os.getenv("DOCKER_NETWORK", "simnet")
 FMU_IMAGE = os.getenv("FMU_IMAGE", "fmu-client:latest")
 FMU_NAME_BASE = os.getenv("FMU_CONTAINER_NAME_BASE", "fmu-run")
 
-HOST_MODEL_PATH = os.getenv("HOST_FMU_PATH")
-HOST_RESULTS_PATH = os.getenv("HOST_RESULTS_PATH")
-CONT_MODEL_PATH = "/app/model.fmu"
+NAMESPACE_URI = "urn:eium:opcua:fmu"
+MODEL_FILE = "model.fmu"
+
+# Paths inside this container (see docker-compose.yml)
+CONT_MODEL_DIR = "/model"
 CONT_RESULTS_PATH = "/results"
 
-SHOW_VARS = [
-    "energy_balance","mass_balance","mdot_air_in","mdot_air_out","Q_in","Q_out",
-    "temp_1","temp_5","temp_10","vfr_1","vfr_5","vfr_13","RH_1","RH_6","RH_9","regen_heater_power"
-]
-
-SETPOINTS = [
-    "regen_vfr_setpoint","regen_target_temp",
-    "temp_1","temp_5","temp_10","vfr_1","vfr_5","vfr_13","RH_1","RH_6","RH_9"
-]
 
 @st.cache_resource
 def get_opc():
@@ -33,45 +27,52 @@ def get_opc():
     c.connect()
     return c
 
-def node(c, name):
-    try:
-        # list all namespaces so we can find the correct index dynamically
-        ns_array = c.get_namespace_array()
-        ns_idx = None
-        for i, ns in enumerate(ns_array):
-            if "urn:eium:opcua:fmu" in ns:
-                ns_idx = i
-                break
 
-        if ns_idx is None:
-            st.warning(f"⚠️ Namespace 'urn:eium:opcua:fmu' not found in {ns_array}")
-            return None
-
-        return c.get_objects_node().get_child([ua.QualifiedName(name, ns_idx)])
-
-    except Exception as e:
-        st.warning(f"⚠️ Could not find node '{name}': {e}")
-        return None
-
+@st.cache_resource
+def opc_nodes(_c):
+    """Return {"Inputs": {name: node}, "Outputs": {name: node}} as published by the OPC UA server."""
+    ns_idx = _c.get_namespace_index(NAMESPACE_URI)
+    objects = _c.get_objects_node()
+    nodes = {}
+    for folder_name in ("Inputs", "Outputs"):
+        folder = objects.get_child([ua.QualifiedName(folder_name, ns_idx)])
+        nodes[folder_name] = {ch.get_browse_name().Name: ch for ch in folder.get_children()}
+    return nodes
 
 
 @st.cache_resource
 def docker_client():
     return docker.from_env()
 
+
+def host_path(client, container_path, env_var):
+    """Host path behind one of this container's bind mounts.
+
+    FMU runs are sibling containers started through the Docker socket, so their
+    bind mounts need host paths. These are read from this container's own
+    mounts unless overridden with an environment variable.
+    """
+    if os.getenv(env_var):
+        return os.getenv(env_var)
+    me = client.containers.get(socket.gethostname())
+    for mount in me.attrs["Mounts"]:
+        if mount["Destination"] == container_path:
+            return mount["Source"]
+    raise RuntimeError(f"{container_path} is not mounted in this container and {env_var} is not set")
+
 def list_active_runs(client: docker.DockerClient):
     return [ct for ct in client.containers.list(all=True) if FMU_NAME_BASE in (ct.name or "")]
 
 
 def run_fmu_container(client, stop_time, step_size, start_time=0.0):
-    if not HOST_MODEL_PATH or not os.path.isabs(HOST_MODEL_PATH):
-        raise RuntimeError("HOST_FMU_PATH is not defined or is not absolute")
+    host_model_dir = host_path(client, CONT_MODEL_DIR, "HOST_MODEL_DIR")
+    host_results_dir = host_path(client, CONT_RESULTS_PATH, "HOST_RESULTS_DIR")
 
     # 👉 Generar un nombre único basado en la hora actual
     run_name = f"fmu-run-{datetime.now().strftime('%Y%m%d%H%M%S')}"
 
     env = {
-        "FMU_PATH": CONT_MODEL_PATH,
+        "FMU_PATH": f"{CONT_MODEL_DIR}/{MODEL_FILE}",
         "RESULTS_DIR": CONT_RESULTS_PATH,
         "START_TIME": str(start_time),
         "STOP_TIME": str(stop_time),
@@ -80,8 +81,8 @@ def run_fmu_container(client, stop_time, step_size, start_time=0.0):
     }
 
     volumes = {
-        HOST_MODEL_PATH:   {"bind": CONT_MODEL_PATH,   "mode": "ro"},
-        HOST_RESULTS_PATH: {"bind": CONT_RESULTS_PATH, "mode": "rw"},
+        host_model_dir:   {"bind": CONT_MODEL_DIR,    "mode": "ro"},
+        host_results_dir: {"bind": CONT_RESULTS_PATH, "mode": "rw"},
     }
 
     container = client.containers.run(
@@ -119,37 +120,44 @@ with st.sidebar:
     START_TIME = st.number_input("START_TIME [s]", value=0.0, step=1.0, format="%.3f")
     STOP_TIME  = st.number_input("STOP_TIME [s]",  value=10.0, step=1.0, format="%.3f")
     STEP_SIZE  = st.number_input("STEP_SIZE [s]",  value=1.0, step=0.1, format="%.3f")
-    st.write("Model path (mounted):")
-    st.code(HOST_MODEL_PATH)
-    st.write("Results dir (mounted):")
-    st.code(HOST_RESULTS_PATH)
+    st.write("Model:")
+    st.code(f"{CONT_MODEL_DIR}/{MODEL_FILE}")
 
 client = get_opc()
 dock   = docker_client()
+nodes  = opc_nodes(client)
 
 colL, colR = st.columns(2)
 
 with colL:
-    st.subheader("Read variables (OPC UA)")
-    for n in SHOW_VARS:
+    st.subheader("Outputs (OPC UA)")
+    for n, nd in nodes["Outputs"].items():
         try:
-            v = float(node(client, n).get_value())
-            st.metric(n, f"{v:.3f}")
+            v = nd.get_value()
+            st.metric(n, f"{v:.3f}" if isinstance(v, float) else str(v))
         except Exception:
             st.text(f"{n}: (NA)")
 
 with colR:
-    st.subheader("Setpoints (OPC UA)")
-    for n in SETPOINTS:
-        nd = node(client, n)
+    st.subheader("Inputs (OPC UA)")
+    for n, nd in nodes["Inputs"].items():
         try:
-            cur = float(nd.get_value())
-        except Exception:
-            cur = 0.0
-        newv = st.number_input(n, value=float(cur), key=f"sp-{n}")
+            cur = nd.get_value()
+            vtype = nd.get_data_type_as_variant_type()
+        except Exception as e:
+            st.text(f"{n}: (NA) {e}")
+            continue
+        if vtype == ua.VariantType.Boolean:
+            newv = st.checkbox(n, value=bool(cur), key=f"sp-{n}")
+        elif vtype == ua.VariantType.String:
+            newv = st.text_input(n, value=str(cur), key=f"sp-{n}")
+        elif vtype == ua.VariantType.Double:
+            newv = st.number_input(n, value=float(cur), key=f"sp-{n}")
+        else:
+            newv = st.number_input(n, value=int(cur), step=1, key=f"sp-{n}")
         if st.button(f"Update {n}", key=f"btn-{n}"):
             try:
-                nd.set_value(ua.Variant(float(newv), ua.VariantType.Double))
+                nd.set_value(ua.Variant(newv, vtype))
                 st.success(f"{n} = {newv}")
             except Exception as e:
                 st.error(f"Error: {e}")
@@ -209,7 +217,7 @@ csv_path = "/results/simulation_outputs.csv"
 if os.path.exists(csv_path):
     try:
         df = pd.read_csv(csv_path)
-        st.success(f"DAta load correctly from `{csv_path}`")
+        st.success(f"Data loaded from `{csv_path}`")
 
         st.dataframe(df)
 
@@ -217,7 +225,7 @@ if os.path.exists(csv_path):
         selected_vars = st.multiselect(
             "Select variable to plot:",
             numeric_cols,
-            default=["energy_balance", "mass_balance"]
+            default=[n for n in nodes["Outputs"] if n in numeric_cols][:2]
         )
 
         if selected_vars:
@@ -225,6 +233,6 @@ if os.path.exists(csv_path):
         else:
             st.info("Select one or more variable to plot in the graph.")
     except Exception as e:
-        st.error(f"Error al cargar el CSV: {e}")
+        st.error(f"Error loading the CSV: {e}")
 else:
     st.warning("⚠️ The results file is not available yet. Run a simulation first.")
