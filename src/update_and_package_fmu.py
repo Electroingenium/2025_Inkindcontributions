@@ -93,8 +93,8 @@ print(f"✅ model.py updated at: {RESOURCE_DIR / 'model.py'}")
 
 # === Generate modelDescription.xml ===
 xml = '''<?xml version='1.0' encoding='utf-8'?>
-<fmiModelDescription fmiVersion="2.0" modelName="unifmu" guid="77236337-210e-4e9c-8f2c-c1a0677db21b" author="L. Royo-Pascual" generationDateAndTime="2020-10-23T19:51:25Z" variableNamingConvention="flat" generationTool="unifmu">
-  <CoSimulation modelIdentifier="unifmu" needsExecutionTool="true" canNotUseMemoryManagementFunctions="false" canHandleVariableCommunicationStepSize="true" canGetAndSetFMUstate="true" canSerializeFMUstate="true" />
+<fmiModelDescription fmiVersion="2.0" modelName="unifmu.exe" guid="77236337-210e-4e9c-8f2c-c1a0677db21b" author="L. Royo-Pascual" generationDateAndTime="2020-10-23T19:51:25Z" variableNamingConvention="flat" generationTool="unifmu.exe">
+  <CoSimulation modelIdentifier="unifmu.exe" needsExecutionTool="true" canNotUseMemoryManagementFunctions="false" canHandleVariableCommunicationStepSize="true" canGetAndSetFMUstate="true" canSerializeFMUstate="true" />
   <LogCategories>
     <Category name="logStatusWarning" />
     <Category name="logStatusDiscard" />
