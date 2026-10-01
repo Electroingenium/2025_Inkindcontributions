@@ -1,3 +1,4 @@
+import sys
 import time
 import shutil
 import logging
@@ -8,7 +9,8 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 
 # === CONFIGURATION ===
-FMU_PATH = Path("FMUs/ORIGINAL_modified_auto.fmu").resolve()
+# FMU path can be passed as the first CLI argument
+FMU_PATH = Path(sys.argv[1] if len(sys.argv) > 1 else "FMUs/ORIGINAL_modified_auto.fmu").resolve()
 RESULTS_DIR = Path("results")
 RESULTS_DIR.mkdir(exist_ok=True)
 
@@ -30,7 +32,7 @@ def simulate_fmu():
     vrs = {v.name: v.valueReference for v in model_description.modelVariables}
 
     input_names = [v.name for v in model_description.modelVariables if v.causality == "input" and v.type == "Real"]
-    output_names = ["mass_balance", "energy_balance", "mdot_air_in", "mdot_air_out", "Q_in", "Q_out"]
+    output_names = [v.name for v in model_description.modelVariables if v.causality == "output" and v.type == "Real"]
     results = []
 
     try:
