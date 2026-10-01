@@ -1,7 +1,7 @@
 """fmugen CLI.
 
-    python -m fmugen build path/to/model.py -o out/model.fmu                   # packaged FMU (default)
-    python -m fmugen build path/to/model.py -o out/model --format folder       # unzipped UniFMU folder
+    fmugen build path/to/model.py -o out/model.fmu                   # packaged FMU (default)
+    fmugen build path/to/model.py -o out/model --format folder       # unzipped UniFMU folder
 """
 import argparse
 import shutil

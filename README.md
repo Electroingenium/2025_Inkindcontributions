@@ -10,7 +10,7 @@ The example model is [`src/fmu_psycrometry.py`](src/fmu_psycrometry.py), a simpl
 
 ## Requirements
 
-- [uv](https://docs.astral.sh/uv/) (installs Python 3.13 and the dependencies from `pyproject.toml`)
+- [uv](https://docs.astral.sh/uv/) (installs Python 3.13, the dependencies from `pyproject.toml`, and the `fmugen` command)
 
 ```bash
 uv sync
@@ -23,7 +23,7 @@ uv sync
 Build the example model into an FMU:
 
 ```bash
-uv run python src/update_and_package_fmu.py build src/fmu_psycrometry.py -o out/psycrometry.fmu --python
+uv run fmugen build src/fmu_psycrometry.py -o out/psycrometry.fmu --python
 ```
 
 Check it:
@@ -85,10 +85,10 @@ Notes:
 ## CLI
 
 ```
-python src/update_and_package_fmu.py build MODEL -o OUTPUT [options]
+uv run fmugen build MODEL -o OUTPUT [options]
 ```
 
-Equivalent: `python -m fmugen build ...` from inside `src/`.
+`uv sync` installs the project in editable mode, so `fmugen` always runs the code in `src/fmugen/` and finds the boilerplate in `src/fmu/`.
 
 | Option | Description |
 |---|---|
@@ -136,8 +136,6 @@ psycrometry.fmu
 | `src/fmugen/` | The generator: `interface.py` (introspection), `description.py` (XML), `templates/model.py` (adapter), `__main__.py` (CLI). |
 | `src/fmu/` | UniFMU Python boilerplate the FMU is built from. |
 | `src/fmu_psycrometry.py` | Example model. |
-| `src/update_and_package_fmu.py` | Entry point for the `fmugen` CLI. |
-| `src/simulate_fmu.py` | Runs an FMU with FMPy and writes a CSV and PDF of inputs and outputs. |
 | `tools/unifmu.exe` | UniFMU CLI, used to regenerate `src/fmu/`. |
 | `docker/` | FMU + OPC UA + Streamlit demo stack (see [docker/Readme.md](docker/Readme.md)). |
 
@@ -169,8 +167,6 @@ Options:
 
 ## Simulating
 
-**FMPy CLI or GUI**
-
 ```bash
 uv run fmpy simulate out/psycrometry.fmu --stop-time 10 --start-values temp_1 30 --output-file out/results.csv
 ```
@@ -184,16 +180,6 @@ uv run python -m fmpy.gui
 In the GUI, open the `.fmu`, set start values, press play, and tick outputs to plot.
 
 ![FMPy GUI example](image.png)
-
-**`simulate_fmu.py`**
-
-Runs the FMU from t=0 to 10 s and writes `results/simulation_inputs_outputs.csv` and `results/simulation_plots.pdf` in the current directory. Output names are read from the FMU. It needs pandas and matplotlib, which are not project dependencies:
-
-```bash
-uv run --with pandas --with matplotlib python src/simulate_fmu.py out/psycrometry.fmu
-```
-
-On Windows consoles, set `PYTHONIOENCODING=utf-8` first, as the script prints emoji.
 
 ---
 
