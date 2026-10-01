@@ -46,7 +46,7 @@ pip install unifmu[python-backend]
 To confirm that UniFMU is installed:
 
 ```bash
-pip show unifmu
+pip show unifmu.exe
 ```
 
 You should see output showing the package name, version, and install location.
