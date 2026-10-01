@@ -1,7 +1,6 @@
 """Simplified mass and energy balance of an air-based drying process."""
 
 # === FMU interface (read by fmugen) ===
-# Order must match the unpacking in compute_balances_simplified.
 INPUTS = {
     "regen_target_temp":   {"start": 60.0, "unit": "degC"},
     "airCond_target_temp": {"start": 22.0, "unit": "degC"},
@@ -33,31 +32,19 @@ OUTPUTS = {
 }
 
 
-def step(**inputs):
-    """FMU entry point: named inputs in, {output_name: value} out."""
-    return compute_balances_simplified([inputs[name] for name in INPUTS])
-
-
-def compute_balances_simplified(inputs):
+def step(regen_target_temp, airCond_target_temp, precool_target_temp,
+         temp_1, hum_rel_1, temp_3, hum_rel_3, temp_4, vfr_5,
+         temp_6, hum_rel_6, temp_7, vfr_8,
+         temp_9, hum_rel_9, temp_10, temp_11, vfr_13):
     """
     Simplified mass and energy balance calculator for an air-based drying process.
 
     Parameters:
-    - inputs: list of 18 values representing temperature, humidity and volumetric flow rates
-      [regen_target_temp, airCond_target_temp, precool_target_temp,
-       temp_1, hum_rel_1, temp_3, hum_rel_3, temp_4, vfr_5,
-       temp_6, hum_rel_6, temp_7, vfr_8,
-       temp_9, hum_rel_9, temp_10, temp_11, vfr_13]
+    - 18 temperature, humidity and volumetric flow rate values, named as in INPUTS
 
     Returns:
     - Dictionary with mass flow rates, energy terms and balances
     """
-
-    # Unpack inputs
-    (regen_target_temp, airCond_target_temp, precool_target_temp,
-     temp_1, hum_rel_1, temp_3, hum_rel_3, temp_4, vfr_5,
-     temp_6, hum_rel_6, temp_7, vfr_8,
-     temp_9, hum_rel_9, temp_10, temp_11, vfr_13) = inputs
 
     # Physical constants
     rho_air = 1.2      # [kg/m³] density of dry air
@@ -98,7 +85,7 @@ if __name__ == "__main__":
         22, 35, 21, 20, 1.7  # temp/hum 9-11 and vfr_13
     ]
 
-    result = compute_balances_simplified(example_inputs)
+    result = step(*example_inputs)
     print("Mass balance [kg/s]:", result["mass_balance"])
     print("Energy balance [W]:", result["energy_balance"])
     print("Air mass flow in [kg/s]:", result["mdot_air_in"])
