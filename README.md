@@ -1,240 +1,208 @@
-# UniFMU Setup and FMU Generation on Windows (Python 3.12)
+# Python model → UniFMU generator
 
-This guide explains how to install UniFMU in your standalone Python 3.12 environment and use it to generate an FMU from a Python model.
+Turns a plain Python model into a [UniFMU](https://github.com/INTO-CPS-Association/unifmu) FMU (FMI 2.0 Co-Simulation).
+
+You write a Python module that declares its inputs and outputs and has a `step()` function. `fmugen` reads that interface from the module and generates everything else (`modelDescription.xml`, the UniFMU adapter, packaging). Your model file is copied into the FMU unchanged, and no model logic is generated or duplicated.
+
+The example model is [`src/fmu_psycrometry.py`](src/fmu_psycrometry.py), a simplified mass and energy balance of an air-based drying process.
 
 ---
 
-## ✅ Requirements
+## Requirements
 
-- Create a virtual environment and activate the environment
-  ```
-  python -m venv venv
-  .\venv\Scripts\activate
-  ```
-- Install requirements .txt:
-  ```
-  pip install -r requirements.txt
-  ```
----
-
-## 📦 Step 1: Install dependencies of `unifmu` and the rest of packages from `requirements.txt`
-
-To install **UniFMU** and all required dependencies in a Python 3.12 environment, you can use the provided `requirements.txt` file located in the project’s root directory.
-
-This ensures all packages are installed consistently, including compatibility fixes such as the correct `protobuf` version required by UniFMU.
-
-### ▶️ Instructions:
-
-1. **Activate your Python 3.12 environment**, if not already active.
-
-2. **Run the following commands in your terminal:**
+- [uv](https://docs.astral.sh/uv/) (installs Python 3.13 and the dependencies from `pyproject.toml`)
 
 ```bash
-pip install --upgrade pip
-pip install -r requirements.txt
+uv sync
 ```
 
-The last version can be found in https://github.com/INTO-CPS-Association/unifmu/releases/tag/0.0.11 and it is not available in pip, so download the binaries and replace in the Scripts folder. Make sure that everything is installed:
-
-```
-pip install unifmu[python-backend]
-```
 ---
 
-## 🔍 Step 2: Verify the Installation
+## Quick start
 
-To confirm that UniFMU is installed:
+Build the example model into an FMU:
 
 ```bash
-pip show unifmu.exe
+uv run python src/update_and_package_fmu.py build src/fmu_psycrometry.py -o out/psycrometry.fmu --python
 ```
 
-You should see output showing the package name, version, and install location.
-
----
-
-## ⚙️ Step 3: Generate the FMU
-
-Once installed, you can generate your FMU using the UniFMU CLI:
+Check it:
 
 ```bash
-".\venv\Scripts\unifmu.exe" generate python ORIGINAL.fmu
+uv run fmpy validate out/psycrometry.fmu
 ```
-
-- `ORIGINAL.fmu` is the name of the FMU that will be created.
-- This assumes you have a valid Python class that inherits from `PythonModel` in your script (e.g. `model.py`).
-
----
-
-## ✅ Optional: Add to PATH
-
-To use `unifmu` globally without the full path, add this folder to your system `PATH`:
-
-```
-C:\Users\<YourUsername>\Documents\repositories\2025_Inkindcontributions\venv\Scripts
-```
-
----
-
-## 📁 Project Example Structure
-
-```
-python_adder_model_eium.fmu/
-├── binaries/
-│   ├── darwin64/
-│   │   └── unifmu.dylib         # macOS shared library (placeholder or real binary)
-│   ├── linux64/
-│   │   └── unifmu.so            # Linux shared object (placeholder or real binary)
-│   └── win64/
-│       └── unifmu.dll           # Windows DLL (placeholder or real binary)
-├── resources/
-│   ├── schemas/
-│   │   ├── unifmu_fmi2_pb2.py
-│   │   └── unifmu_fmi2_pb2_grpc.py
-│   ├── backend_grpc.py
-│   ├── backend_schemaless_rpc.py
-│   ├── fmi2.py
-│   ├── launch.toml             # Updated to point to Python 3.12 interpreter
-│   └── model.py                # Your Python FMU model logic
-├── modelDescription.xml        # Describes inputs, outputs, and structure
-└── README.md                   # Documentation (optional)
-```
-
-- The `binaries/` directory contains native shared libraries for different operating systems (required even if empty or mocked).
-- The `resources/` directory contains the actual Python backend and model implementation.
-- `modelDescription.xml` must be at the root of the FMU.
-- `launch.toml` controls how the backend is started based on OS.
-
----
-
-## 🧩 FMU Configuration: `launch.toml` Setup for Python 3.12
-
-To ensure that UniFMU uses the correct Python interpreter when launching the FMU backend on Windows, update your `resources/launch.toml` file as follows if using `zmq` or `gprc`. It will be updated automatically with the `update_and_package_fmu.py`:
-
-```toml
-
-backend = "grpc"
-
-[grpc]
-linux = ["python3", "backend_grpc.py"]
-macos = ["python3", "backend_grpc.py"]
-windows = ["./venv/Scripts/python.exe", "backend_grpc.py"]
-
-[zmq]
-linux = ["python3", "backend_schemaless_rpc.py"]
-macos = ["python3", "backend_schemaless_rpc.py"]
-serialization_format = "Pickle"
-windows = ["./venv/Scripts/python.exe", "backend_schemaless_rpc.py"]
-
-```
-
-This guarantees that your FMU will run using the correct interpreter and avoid errors with missing modules or backend startup. In this case we are using backend "grpc", but we add the correct adress in both sections
-
----
-
-## 🆘 Troubleshooting
-
-- If `unifmu` is not recognized, always use the full path.
-- Use `--help` to see available commands:
-  ```bash
-  "./venv/Scripts/unifmu.exe" --help
-  ```
-- Add path to the environmental variables in which `unifmu` is installed in order to be able to execute the tool:
-  ```bash
-  ./venv/Scripts
-  ```
-
----
-
-## 🔄 Step 4: Update and Package FMU from Source Code
-
-Once you have the FMU template structure generated (including `model.py`, `modelDescription.xml` and `launch.toml` and folder layout inside `FMUs/ORIGINAL.fmu`), you can regenerate and update the contents using the script `update_and_package_fmu.py`.
-
-### 📌 Purpose:
-This script:
-- Creates a copy of `ORIGINAL.fmu` (obtained directly from UNIFMU) and gives the name of `ORIGINAL_modified.fmu`
-- Regenerates the logic in `model.py` and `modelDescription.xml` using the function defined in `fmu_psycrometry.py`.
-- Update `launch.toml` according to the instalation of the python environment.
-- Use the input names and the initial values of the script `fmu_psycrometry.py`.
-- Saves these files into the `resources/` subfolder of the FMU template.
-- Compresses the FMU folder and renames it as a `.fmu` file (instead of `.zip`) and update the name to `ORIGINAL_modified_auto.fmu`.
-
-### ▶️ To run it:
 
 ```bash
-python update_and_package_fmu.py
+uv run fmpy simulate out/psycrometry.fmu --stop-time 5 --output-file out/psycrometry.csv
 ```
-
-### 📁 Result:
-
-You will get an updated FMU file (zipped and without zipped) in `FMUs/ORIGINAL_modified_auto.fmu`. This can now be used for testing or simulation with fmpy library.
-
-
-## ▶️ Step 5: Execute the FMU with FMPy
-
-To run your generated FMU in a graphical environment using [FMPy GUI](https://github.com/CATIA-Systems/FMPy) or you can run in a separate script.
 
 ---
 
-### ▶️ Option 1: Launch FMUGUI
+## Writing a model
 
-To launch the graphical interface:
+A model is a Python module with three things:
+
+```python
+INPUTS = {
+    "temp_1": {"start": 28.0, "unit": "degC"},
+    "vfr_5":  {"start": 1.2,  "unit": "m3/s"},
+}
+
+OUTPUTS = {
+    "mdot_air_in": {"unit": "kg/s"},
+}
+
+def step(temp_1, vfr_5):
+    return {"mdot_air_in": vfr_5 * 1.2}
+```
+
+| Name | Required | Description |
+|---|---|---|
+| `INPUTS` | yes | `{name: info}` of FMU inputs. |
+| `OUTPUTS` | yes | `{name: info}` of FMU outputs. |
+| `PARAMETERS` | no | Same shape as `INPUTS`; becomes `causality="parameter"`, settable before initialization. |
+| `step(**inputs)` | yes | Called with every input and parameter as a keyword argument. Must return a dict containing every output. |
+
+Each `info` dict is optional (`{}` or `None` is fine) and accepts:
+
+| Key | Default | Notes |
+|---|---|---|
+| `start` | `0.0` / `0` / `False` / `""` | Value used until the importer sets the variable. Not used for outputs. |
+| `type` | inferred from `start`, else `Real` | `Real`, `Integer`, `Boolean` or `String`. Needed for non-Real variables without a `start`. |
+| `unit` | none | Informational only; written to `modelDescription.xml`. |
+| `description` | none | Written to `modelDescription.xml`. |
+
+Notes:
+
+- `step()` is stateless: it is called on initialization and on every `doStep` with the current inputs.
+- Variable names must be valid Python identifiers and match the `step()` parameter names.
+- At build time `step()` is called once with the start values to check that all outputs are returned. If an input of `0.0` would break your model (e.g. a division), give it a non-zero `start`.
+- The module docstring becomes the FMU description.
+- Anything the model imports must be installed in the Python that runs the FMU (see [Runtime Python](#runtime-python)).
+
+---
+
+## CLI
+
+```
+python src/update_and_package_fmu.py build MODEL -o OUTPUT [options]
+```
+
+Equivalent: `python -m fmugen build ...` from inside `src/`.
+
+| Option | Description |
+|---|---|
+| `-o, --output` | Output path, used exactly as given. |
+| `--format {fmu,folder}` | `fmu` (default): zipped `.fmu` archive. `folder`: unzipped UniFMU folder. |
+| `--python [PATH]` | Python executable written into `launch.toml` for Windows. The flag alone uses the current interpreter. If omitted, the boilerplate's `python` is kept. |
+| `--name` | `modelName` in `modelDescription.xml` (default: the module name). |
+| `--author` | `author` in `modelDescription.xml`. |
+
+---
+
+## How it works
+
+```
+model.py (INPUTS / OUTPUTS / step)
+   │  fmugen imports it and reads the interface
+   ▼
+interface spec ──► modelDescription.xml
+               └─► resources/interface.json
+   +  src/fmu/ boilerplate (binaries, UniFMU backend)
+   +  generic resources/model.py adapter (same for every model)
+   +  your model file, copied as-is
+   ▼
+.fmu archive or folder
+```
+
+Generated FMU layout:
+
+```
+psycrometry.fmu
+├── binaries/{win64,linux64,darwin64}/   # UniFMU native libraries
+├── modelDescription.xml                 # generated from the interface
+└── resources/
+    ├── main.py, backend.py, ...         # UniFMU Python backend (boilerplate)
+    ├── launch.toml                      # how UniFMU starts the backend per OS
+    ├── model.py                         # generic adapter: loads interface.json, calls step()
+    ├── interface.json                   # variables, value references, start values
+    └── fmu_psycrometry.py               # your model, unchanged
+```
+
+### Project layout
+
+| Path | Contents |
+|---|---|
+| `src/fmugen/` | The generator: `interface.py` (introspection), `description.py` (XML), `templates/model.py` (adapter), `__main__.py` (CLI). |
+| `src/fmu/` | UniFMU Python boilerplate the FMU is built from. |
+| `src/fmu_psycrometry.py` | Example model. |
+| `src/update_and_package_fmu.py` | Entry point for the `fmugen` CLI. |
+| `src/simulate_fmu.py` | Runs an FMU with FMPy and writes a CSV and PDF of inputs and outputs. |
+| `tools/unifmu.exe` | UniFMU CLI, used to regenerate `src/fmu/`. |
+| `docker/` | FMU + OPC UA + Streamlit demo stack (see [docker/Readme.md](docker/Readme.md)). |
+
+### Updating the UniFMU boilerplate
+
+`src/fmu/` was created with the UniFMU CLI. To refresh it with a newer UniFMU version:
 
 ```bash
-"./venv/Scripts/python.exe" -m fmpy.gui
+./tools/unifmu.exe generate python src/fmu fmi2
 ```
 
-A window like the one below will open.
+`fmugen` only replaces `resources/model.py`, `modelDescription.xml` and (with `--python`) `launch.toml`, so the backend and binaries are taken as-is from this folder.
 
 ---
 
-### 📂 Load and Run the FMU with gui
+## Runtime Python
 
-1. Click **File > Open** and select your `.fmu` file (e.g., `ORIGINAL_generated_auto.fmu`).
-2. Use the **Start** column to initialize inputs.
-3. Press the **Play** ▶️ button to simulate.
-4. Check the **Plot** boxes for outputs you'd like to visualize.
+UniFMU starts the model in a separate Python process using the command in `resources/launch.toml`. That Python needs:
 
----
+- `protobuf==5.27.3`, `pyzmq` (UniFMU backend; see `resources/requirements.txt`)
+- everything your model imports
 
-### 📊 Example Output
+Options:
 
-Below is an example plot obtained by loading the FMU and simulating it over 5 seconds:
-
-![alt text](image.png)
+- `--python` writes the current interpreter (e.g. the project's `.venv`) into `launch.toml`. Simplest for local use, but the FMU only works on that machine.
+- Without it, the FMU uses `python` / `python3` from `PATH`, which must have the packages above installed.
 
 ---
 
-### ▶️ Option 2: Execute simulate_fmu.py
+## Simulating
 
-This script takes the fmu `ORIGINAL_generated_auto_zipped.fmu` located in FMUs folder and uses fmpy package to get the results. They are obtained in a scsv file(`simulation_inputs_outputs.csv`) file and a pdf(`simulation_plots.pdf`):
+**FMPy CLI or GUI**
 
-Some of the results are shown in the following images:
-![alt text](image-1.png)
+```bash
+uv run fmpy simulate out/psycrometry.fmu --stop-time 10 --start-values temp_1 30 --output-file out/results.csv
+```
 
+Without `--output-file`, FMPy plots the result instead, which requires matplotlib (`uv run --with matplotlib ...`).
+
+```bash
+uv run python -m fmpy.gui
+```
+
+In the GUI, open the `.fmu`, set start values, press play, and tick outputs to plot.
+
+![FMPy GUI example](image.png)
+
+**`simulate_fmu.py`**
+
+Runs the FMU from t=0 to 10 s and writes `results/simulation_inputs_outputs.csv` and `results/simulation_plots.pdf` in the current directory. Output names are read from the FMU. It needs pandas and matplotlib, which are not project dependencies:
+
+```bash
+uv run --with pandas --with matplotlib python src/simulate_fmu.py out/psycrometry.fmu
+```
+
+On Windows consoles, set `PYTHONIOENCODING=utf-8` first, as the script prints emoji.
 
 ---
 
+## References
 
+- UniFMU: https://github.com/INTO-CPS-Association/unifmu
+- FMPy: https://github.com/CATIA-Systems/FMPy
+- Legaard, C. M., Tola, D., Schranz, T., Macedo, H. D., & Larsen, P. G. (2021). *A Universal Mechanism for Implementing Functional Mock-up Units*. SIMULTECH 2021, pp. 121–129. https://doi.org/10.5220/0010577601210129
 
-## 🔗 References
+## Credits
 
-- 🔧 Official UniFMU repository and installation instructions:  
-  https://github.com/INTO-CPS-Association/unifmu/tree/master?tab=readme-ov-file#getting-the-tool
-
-- 🖥 How to use the CLI:  
-  https://github.com/INTO-CPS-Association/unifmu/tree/master?tab=readme-ov-file#how-can-i-execute-the-launch-command-through-a-shell
-
-- 📄 Reference article:  
-  Legaard, C. M., Tola, D., Schranz, T., Macedo, H. D., & Larsen, P. G. (2021).  
-  *A Universal Mechanism for Implementing Functional Mock-up Units*.  
-  In G. Wagner et al. (Eds.), Proceedings of the 11th International Conference on Simulation and Modeling Methodologies, Technologies and Applications, SIMULTECH 2021, pp. 121–129. SCITEPRESS.  
-  https://doi.org/10.5220/0010577601210129
-
-
----
-
-## 👩‍💻 Author
-
-**EIUM – FMU development using UniFMU from python script (psycrometry application)**  
-Developed by *Lucia Royo-Pascual, Ph.D.*  
+Original psychrometry model and UniFMU workflow by Lucia Royo-Pascual, Ph.D. (EIUM).
