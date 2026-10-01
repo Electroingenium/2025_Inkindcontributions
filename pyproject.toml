@@ -8,9 +8,12 @@ dependencies = [
     "colorama>=0.4.6",
     "coloredlogs>=15.0.1",
     "fmpy>=0.3.32",
+    "plotly>=7.1.0",
     "protobuf==5.27.3",
+    "pyside6>=6.11.2",
     "pyzmq>=27.2.0",
     "toml>=0.10.2",
+    "typing-extensions>=4.16.0",
 ]
 
 [project.scripts]
