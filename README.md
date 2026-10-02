@@ -1,16 +1,14 @@
-# Python model → UniFMU generator
+# fmugen: Python models → UniFMU FMUs
 
-Turns a plain Python model into a [UniFMU](https://github.com/INTO-CPS-Association/unifmu) FMU (FMI 2.0 Co-Simulation).
+`fmugen` turns an ordinary Python model into a [UniFMU](https://github.com/INTO-CPS-Association/unifmu) FMU (FMI 2.0 Co-Simulation) that any FMI importer can run.
 
-You write a Python module that declares its inputs and outputs and has a `step()` function. `fmugen` reads that interface from the module and generates everything else (`modelDescription.xml`, the UniFMU adapter, packaging). Your model file is copied into the FMU unchanged, and no model logic is generated or duplicated.
-
-The example model is [`src/fmu_psycrometry.py`](src/fmu_psycrometry.py), a simplified mass and energy balance of an air-based drying process.
+**You don't change your code.** A plain function, a class with a step method, a multi-file package, or a model from PyPI is packaged as it is. What fmugen needs to know (which function or class to call, which arguments are inputs or parameters, where outputs come from, units) lives in a separate `fmugen.toml`. `fmugen init` writes a first version of that file by inspecting your model.
 
 ---
 
 ## Requirements
 
-- [uv](https://docs.astral.sh/uv/) (installs Python 3.13, the dependencies from `pyproject.toml`, and the `fmugen` command)
+- [uv](https://docs.astral.sh/uv/). It installs Python 3.13, the dependencies from `pyproject.toml`, and the `fmugen` command:
 
 ```bash
 uv sync
@@ -20,175 +18,123 @@ uv sync
 
 ## Quick start
 
-Build the example model into an FMU:
+For your own model:
+
+1. Let fmugen inspect the model and write `fmugen.toml` next to it:
+
+   ```bash
+   uv run fmugen init path/to/your_model.py
+   ```
+
+2. Review the file. Check the start values, add units, and remove anything you don't want in the FMU.
+3. Build:
+
+   ```bash
+   uv run fmugen build path/to/fmugen.toml -o out/your_model.fmu --python
+   ```
+
+The examples already have reviewed configs. To see what `init` would infer for one without overwriting it, print to the terminal:
 
 ```bash
-uv run fmugen build src/fmu_psycrometry.py -o out/psycrometry.fmu --python
+uv run fmugen init examples/psychrometry/psychrometry.py -o -
 ```
 
-Check it:
+Then build it, validate it, and simulate it:
 
 ```bash
-uv run fmpy validate out/psycrometry.fmu
+uv run fmugen build examples/psychrometry -o out/psychrometry.fmu --python
 ```
 
 ```bash
-uv run fmpy simulate out/psycrometry.fmu --stop-time 5 --output-file out/psycrometry.csv
+uv run fmpy validate out/psychrometry.fmu
+```
+
+```bash
+uv run fmpy simulate out/psychrometry.fmu --stop-time 5 --output-file out/psychrometry.csv
+```
+
+For a quick try you can skip the config and build straight from a `.py` file. fmugen then infers the config in memory, without units:
+
+```bash
+uv run fmugen build examples/psychrometry/psychrometry.py -o out/quick.fmu --python
 ```
 
 ---
 
-## Writing a model
+## What a model can look like
 
-A model is a Python module with three things:
-
-```python
-INPUTS = {
-    "temp_1": {"start": 28.0, "unit": "degC"},
-    "vfr_5":  {"start": 1.2,  "unit": "m3/s"},
-}
-
-OUTPUTS = {
-    "mdot_air_in": {"unit": "kg/s"},
-}
-
-def step(temp_1, vfr_5):
-    return {"mdot_air_in": vfr_5 * 1.2}
-```
-
-| Name | Required | Description |
+| Your code | How it runs in the FMU | Example |
 |---|---|---|
-| `INPUTS` | yes | `{name: info}` of FMU inputs. |
-| `OUTPUTS` | yes | `{name: info}` of FMU outputs. |
-| `PARAMETERS` | no | Same shape as `INPUTS`; becomes `causality="parameter"`, settable before initialization. |
-| `step(**inputs)` | yes | Called with every input and parameter as a keyword argument. Must return a dict containing every output. |
+| A function `f(a, b, ...)` returning a dict, tuple, number or object | Called once per step; outputs are read from the return value | [`examples/psychrometry`](examples/psychrometry) |
+| A class `C(params...)` with a method `step(inputs...)` / `__call__` | Built once at initialization; the method is called once per step | [`examples/simple_pid`](examples/simple_pid) |
+| A method that stores its results as attributes | Outputs are read from the object's attributes after each step | [`examples/rc_building`](examples/rc_building) |
+| A method that needs last step's value (`x_prev`) | A *state*: fed back from the result after each step | [`examples/rc_building`](examples/rc_building) |
+| Code that needs the time or step size (`t`, `dt`) | The FMU passes its communication time / step size | [`examples/simple_pid`](examples/simple_pid) |
+| Several files, flat or package imports | Copied into the FMU with their layout | [`examples/rc_building`](examples/rc_building) |
+| A package from PyPI | Listed as a requirement, optionally vendored into the FMU | [`examples/simple_pid`](examples/simple_pid) |
 
-Each `info` dict is optional (`{}` or `None` is fine) and accepts:
+The FMU supports FMI 2 Co-Simulation as far as UniFMU's Python backend goes:
+- parameters (fixed and tunable) and calculated parameters
+- inputs, outputs, locals and states
+- Real, Integer, Boolean, String and Enumeration variables
+- variable or fixed step size, and a default experiment
+- saving and restoring FMU state, which lets an importer roll back
+- reset
+- log messages from the model's `logging` calls, forwarded to the importer
 
-| Key | Default | Notes |
-|---|---|---|
-| `start` | `0.0` / `0` / `False` / `""` | Value used until the importer sets the variable. Not used for outputs. |
-| `type` | inferred from `start`, else `Real` | `Real`, `Integer`, `Boolean` or `String`. Needed for non-Real variables without a `start`. |
-| `unit` | none | Informational only; written to `modelDescription.xml`. |
-| `description` | none | Written to `modelDescription.xml`. |
+See [docs/fmi.md](docs/fmi.md) for what each FMI call does and what isn't supported.
 
-Notes:
+---
 
-- `step()` is stateless: it is called on initialization and on every `doStep` with the current inputs.
-- Variable names must be valid Python identifiers and match the `step()` parameter names.
-- At build time `step()` is called once with the start values to check that all outputs are returned. If an input of `0.0` would break your model (e.g. a division), give it a non-zero `start`.
-- The module docstring becomes the FMU description.
-- Anything the model imports must be installed in the Python that runs the FMU (see [Runtime Python](#runtime-python)).
+## Documentation
+
+| Page | Contents |
+|---|---|
+| [docs/models.md](docs/models.md) | Writing models: the supported shapes with examples, what `fmugen init` infers and what to check |
+| [docs/config.md](docs/config.md) | `fmugen.toml` reference: every key and its default |
+| [docs/fmi.md](docs/fmi.md) | FMI 2 behaviour: initialization, steps, parameters, state, logging, unsupported functions |
+| [docs/packaging.md](docs/packaging.md) | CLI, the generated FMU's layout, requirements and `--vendor`, the runtime Python, updating UniFMU |
+| [docker/Readme.md](docker/Readme.md) | Demo stack: the FMU in Docker, exchanging data over OPC UA, with a Streamlit dashboard |
 
 ---
 
 ## CLI
 
 ```
-uv run fmugen build MODEL -o OUTPUT [options]
+uv run fmugen init MODEL [-o fmugen.toml] [--call METHOD] [--force]
+uv run fmugen build MODEL -o OUTPUT [--format fmu|folder] [--python [PATH]] [--vendor] [--name NAME] [--author AUTHOR]
 ```
 
-`uv sync` installs the project in editable mode, so `fmugen` always runs the code in `src/fmugen/` and finds the boilerplate in `src/fmu/`.
+`MODEL` can be any of these:
+- for `build`: a `fmugen.toml`, or a directory containing one
+- for both: `model.py`, `model.py:Name`, or `package.module:Name` for an installed module
 
-| Option | Description |
-|---|---|
-| `-o, --output` | Output path, used exactly as given. |
-| `--format {fmu,folder}` | `fmu` (default): zipped `.fmu` archive. `folder`: unzipped UniFMU folder. |
-| `--python [PATH]` | Python executable written into `launch.toml` for Windows. The flag alone uses the current interpreter. If omitted, the boilerplate's `python` is kept. |
-| `--name` | `modelName` in `modelDescription.xml` (default: the module name). |
-| `--author` | `author` in `modelDescription.xml`. |
+Details are in [docs/packaging.md](docs/packaging.md#cli).
 
 ---
 
-## How it works
-
-```
-model.py (INPUTS / OUTPUTS / step)
-   │  fmugen imports it and reads the interface
-   ▼
-interface spec ──► modelDescription.xml
-               └─► resources/interface.json
-   +  src/fmu/ boilerplate (binaries, UniFMU backend)
-   +  generic resources/model.py adapter (same for every model)
-   +  your model file, copied as-is
-   ▼
-.fmu archive or folder
-```
-
-Generated FMU layout:
-
-```
-psycrometry.fmu
-├── binaries/{win64,linux64,darwin64}/   # UniFMU native libraries
-├── modelDescription.xml                 # generated from the interface
-└── resources/
-    ├── main.py, backend.py, ...         # UniFMU Python backend (boilerplate)
-    ├── launch.toml                      # how UniFMU starts the backend per OS
-    ├── model.py                         # generic adapter: loads interface.json, calls step()
-    ├── interface.json                   # variables, value references, start values
-    └── fmu_psycrometry.py               # your model, unchanged
-```
-
-### Project layout
-
-| Path | Contents |
-|---|---|
-| `src/fmugen/` | The generator: `interface.py` (introspection), `description.py` (XML), `templates/model.py` (adapter), `__main__.py` (CLI). |
-| `src/fmu/` | UniFMU Python boilerplate the FMU is built from. |
-| `src/fmu_psycrometry.py` | Example model. |
-| `tools/unifmu.exe` | UniFMU CLI, used to regenerate `src/fmu/`. |
-| `docker/` | FMU + OPC UA + Streamlit demo stack (see [docker/Readme.md](docker/Readme.md)). |
-
-### Updating the UniFMU boilerplate
-
-`src/fmu/` was created with the UniFMU CLI. To refresh it with a newer UniFMU version:
+## Tests
 
 ```bash
-./tools/unifmu.exe generate python src/fmu fmi2
+uv run pytest
 ```
 
-`fmugen` only replaces `resources/model.py`, `modelDescription.xml` and (with `--python`) `launch.toml`, so the backend and binaries are taken as-is from this folder.
-
----
-
-## Runtime Python
-
-UniFMU starts the model in a separate Python process using the command in `resources/launch.toml`. That Python needs:
-
-- `protobuf==5.27.3`, `pyzmq` (UniFMU backend; see `resources/requirements.txt`)
-- everything your model imports
-
-Options:
-
-- `--python` writes the current interpreter (e.g. the project's `.venv`) into `launch.toml`. Simplest for local use, but the FMU only works on that machine.
-- Without it, the FMU uses `python` / `python3` from `PATH`, which must have the packages above installed.
-
----
-
-## Simulating
-
-```bash
-uv run fmpy simulate out/psycrometry.fmu --stop-time 10 --start-values temp_1 30 --output-file out/results.csv
-```
-
-Without `--output-file`, FMPy plots the result instead, which requires matplotlib (`uv run --with matplotlib ...`).
-
-```bash
-uv run python -m fmpy.gui
-```
-
-In the GUI, open the `.fmu`, set start values, press play, and tick outputs to plot.
-
-![FMPy GUI example](image.png)
+The tests cover:
+- **Adapter:** the generated adapter's behaviour for every FMI call.
+- **Inference:** `fmugen init` on the examples and on small models.
+- **FMU validity:** `modelDescription.xml` is checked with FMPy's validator.
+- **Real runs:** simulations through UniFMU, including state save/restore and changing a tunable parameter.
 
 ---
 
 ## References
 
 - UniFMU: https://github.com/INTO-CPS-Association/unifmu
+- FMI 2.0 standard: https://fmi-standard.org/
 - FMPy: https://github.com/CATIA-Systems/FMPy
 - Legaard, C. M., Tola, D., Schranz, T., Macedo, H. D., & Larsen, P. G. (2021). *A Universal Mechanism for Implementing Functional Mock-up Units*. SIMULTECH 2021, pp. 121–129. https://doi.org/10.5220/0010577601210129
 
 ## Credits
 
-Original psychrometry model and UniFMU workflow by Lucia Royo-Pascual, Ph.D. (EIUM).
+- Original psychrometry model and UniFMU workflow by Lucia Royo-Pascual, Ph.D. (EIUM).
+- Example models from [simple-pid](https://github.com/m-lundberg/simple-pid) (MIT, Martin Lundberg) and [RC_BuildingSimulator](https://github.com/architecture-building-systems/RC_BuildingSimulator) (MIT, Architecture and Building Systems, ETH Zürich). See each example's README.

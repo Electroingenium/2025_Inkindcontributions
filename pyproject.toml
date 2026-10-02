@@ -25,3 +25,9 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/fmugen"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "simple-pid==2.0.1",
+]

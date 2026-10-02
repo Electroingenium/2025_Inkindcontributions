@@ -1,46 +1,15 @@
 """Simplified mass and energy balance of an air-based drying process."""
 
-# === FMU interface (read by fmugen) ===
-INPUTS = {
-    "regen_target_temp":   {"start": 60.0, "unit": "degC"},
-    "airCond_target_temp": {"start": 22.0, "unit": "degC"},
-    "precool_target_temp": {"start": 18.0, "unit": "degC"},
-    "temp_1":    {"start": 28.0, "unit": "degC"},
-    "hum_rel_1": {"start": 50.0, "unit": "%"},
-    "temp_3":    {"start": 26.0, "unit": "degC"},
-    "hum_rel_3": {"start": 45.0, "unit": "%"},
-    "temp_4":    {"start": 25.0, "unit": "degC"},
-    "vfr_5":     {"start": 1.2,  "unit": "m3/s"},
-    "temp_6":    {"start": 24.0, "unit": "degC"},
-    "hum_rel_6": {"start": 40.0, "unit": "%"},
-    "temp_7":    {"start": 23.0, "unit": "degC"},
-    "vfr_8":     {"start": 0.8,  "unit": "m3/s"},
-    "temp_9":    {"start": 22.0, "unit": "degC"},
-    "hum_rel_9": {"start": 35.0, "unit": "%"},
-    "temp_10":   {"start": 21.0, "unit": "degC"},
-    "temp_11":   {"start": 20.0, "unit": "degC"},
-    "vfr_13":    {"start": 1.7,  "unit": "m3/s"},
-}
 
-OUTPUTS = {
-    "mass_balance":   {"unit": "kg/s"},
-    "energy_balance": {"unit": "W"},
-    "mdot_air_in":    {"unit": "kg/s"},
-    "mdot_air_out":   {"unit": "kg/s"},
-    "Q_in":           {"unit": "W"},
-    "Q_out":          {"unit": "W"},
-}
-
-
-def step(regen_target_temp, airCond_target_temp, precool_target_temp,
-         temp_1, hum_rel_1, temp_3, hum_rel_3, temp_4, vfr_5,
-         temp_6, hum_rel_6, temp_7, vfr_8,
-         temp_9, hum_rel_9, temp_10, temp_11, vfr_13):
+def compute_balances_simplified(regen_target_temp, airCond_target_temp, precool_target_temp,
+                                temp_1, hum_rel_1, temp_3, hum_rel_3, temp_4, vfr_5,
+                                temp_6, hum_rel_6, temp_7, vfr_8,
+                                temp_9, hum_rel_9, temp_10, temp_11, vfr_13):
     """
     Simplified mass and energy balance calculator for an air-based drying process.
 
     Parameters:
-    - 18 temperature, humidity and volumetric flow rate values, named as in INPUTS
+    - 18 temperature [degC], relative humidity [%] and volumetric flow rate [m3/s] values
 
     Returns:
     - Dictionary with mass flow rates, energy terms and balances
@@ -85,7 +54,7 @@ if __name__ == "__main__":
         22, 35, 21, 20, 1.7  # temp/hum 9-11 and vfr_13
     ]
 
-    result = step(*example_inputs)
+    result = compute_balances_simplified(*example_inputs)
     print("Mass balance [kg/s]:", result["mass_balance"])
     print("Energy balance [W]:", result["energy_balance"])
     print("Air mass flow in [kg/s]:", result["mdot_air_in"])
