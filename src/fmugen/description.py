@@ -1,4 +1,4 @@
-"""modelDescription.xml (FMI 2.0 Co-Simulation) from a fmugen interface spec."""
+"""modelDescription.xml (FMI 2.0 or 3.0 Co-Simulation) from a fmugen interface spec."""
 import math
 import uuid
 import xml.etree.ElementTree as ET
@@ -16,6 +16,8 @@ LOG_CATEGORIES = [
      "Messages related to internal UniFMU functionality. "
      "Enabling this category is required for distributed UniFMUs."),
 ]
+
+FLOAT_TYPES = ("Real", "Float32", "Float64")
 
 EXPERIMENT_ATTRIBUTES = {
     "start_time": "startTime", "stop_time": "stopTime",
@@ -150,6 +152,148 @@ def _unknown(var, index_of):
     return attrs
 
 
+LOG_CATEGORIES_FMI3 = [
+    ("logStatusWarning", None),
+    ("logStatusDiscard", None),
+    ("logStatusError", None),
+    ("logStatusFatal", None),
+    ("logEvents", None),
+    ("logUnifmuMessages",
+     "Messages related to internal UniFMU functionality. "
+     "Enabling this category is required for distributed UniFMUs."),
+]
+
+
+def build_model_description_fmi3(interface, model_name=None, author=None):
+    """Return the FMI 3.0 Co-Simulation modelDescription.xml ElementTree for a fmugen interface spec."""
+    variables = interface["variables"]
+    clocks = interface.get("clocks", [])
+    experiment = interface.get("experiment", {})
+    can_state = "true" if interface.get("can_get_and_set_state", True) else "false"
+    vr_of = {v["name"]: v["valueReference"] for v in [*variables, *clocks]}
+
+    root = ET.Element("fmiModelDescription", {
+        "fmiVersion": "3.0",
+        "modelName": model_name or interface["model_name"],
+        "instantiationToken": "{" + str(uuid.uuid4()) + "}",
+        "description": interface.get("description", ""),
+        "author": interface.get("author", "") if author is None else author,
+        "generationTool": "fmugen + unifmu",
+        "generationDateAndTime": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "variableNamingConvention": "flat",
+    })
+
+    ET.SubElement(root, "CoSimulation", {
+        "modelIdentifier": "unifmu",
+        "needsExecutionTool": "true",
+        "canBeInstantiatedOnlyOncePerProcess": "false",
+        "canGetAndSetFMUState": can_state,
+        "canSerializeFMUState": can_state,
+        "canHandleVariableCommunicationStepSize": "false" if experiment.get("fixed_step") else "true",
+        "hasEventMode": "true" if interface.get("has_event_mode") else "false",
+        "canReturnEarlyAfterIntermediateUpdate": "false",
+        "providesIntermediateUpdate": "false",
+    })
+
+    units = sorted({v["unit"] for v in variables if v.get("unit") and v["type"] in FLOAT_TYPES})
+    if units:
+        unit_defs = ET.SubElement(root, "UnitDefinitions")
+        for unit in units:
+            ET.SubElement(unit_defs, "Unit", {"name": unit})
+
+    type_definitions = interface.get("type_definitions", {})
+    if type_definitions:
+        type_defs = ET.SubElement(root, "TypeDefinitions")
+        for name, definition in type_definitions.items():
+            enumeration = ET.SubElement(type_defs, "EnumerationType", {"name": name})
+            for value, item in enumerate(definition["items"], start=1):
+                ET.SubElement(enumeration, "Item", {"name": item, "value": str(value)})
+
+    log_categories = ET.SubElement(root, "LogCategories")
+    for name, description in LOG_CATEGORIES_FMI3:
+        attrs = {"name": name}
+        if description:
+            attrs["description"] = description
+        ET.SubElement(log_categories, "Category", attrs)
+
+    experiment_attrs = {
+        xml_name: _format_value("Real", float(experiment[key]))
+        for key, xml_name in EXPERIMENT_ATTRIBUTES.items() if key in experiment
+    }
+    if experiment_attrs:
+        ET.SubElement(root, "DefaultExperiment", experiment_attrs)
+
+    model_variables = ET.SubElement(root, "ModelVariables")
+    for var in variables:
+        attrs = {
+            "name": var["name"],
+            "valueReference": str(var["valueReference"]),
+            "causality": var["causality"],
+            "variability": var["variability"],
+        }
+        for key, xml_name in (("description", "description"), ("declared_type", "declaredType"),
+                              ("quantity", "quantity")):
+            if var.get(key):
+                attrs[xml_name] = var[key]
+        if var.get("initial") and var["causality"] not in ("parameter", "structuralParameter"):
+            attrs["initial"] = var["initial"]
+        if var.get("unit") and var["type"] in FLOAT_TYPES:
+            attrs["unit"] = var["unit"]
+        for key in ("min", "max", "nominal"):
+            if key in var:
+                attrs[key] = _format_value(var["type"], var[key])
+        if var.get("clocks"):
+            attrs["clocks"] = " ".join(str(vr_of[c]) for c in var["clocks"])
+        start = var.get("start")
+        start_children = []
+        if start is not None:
+            values = start if isinstance(start, list) else [start]
+            if var["type"] in ("String", "Binary"):
+                start_children = values
+            else:
+                attrs["start"] = " ".join(_format_value(var["type"], v) for v in values)
+        element = ET.SubElement(model_variables, "Float64" if var["type"] == "Real" else var["type"], attrs)
+        for value in start_children:
+            ET.SubElement(element, "Start", {"value": str(value)})
+        for d in var.get("dimensions", []):
+            ET.SubElement(element, "Dimension",
+                          {"valueReference": str(vr_of[d])} if isinstance(d, str) else {"start": str(d)})
+
+    for clock in clocks:
+        attrs = {
+            "name": clock["name"],
+            "valueReference": str(clock["valueReference"]),
+            "causality": clock["causality"],
+            "variability": "discrete",
+            "intervalVariability": clock["interval_variability"],
+        }
+        if clock.get("description"):
+            attrs["description"] = clock["description"]
+        if "interval" in clock:
+            attrs["intervalDecimal"] = _format_value("Real", clock["interval"])
+        if clock.get("shift"):
+            attrs["shiftDecimal"] = _format_value("Real", clock["shift"])
+        ET.SubElement(model_variables, "Clock", attrs)
+
+    structure = ET.SubElement(root, "ModelStructure")
+    outputs = [v for v in [*variables, *clocks] if v["causality"] == "output"]
+    for var in sorted(outputs, key=lambda v: v["valueReference"]):
+        attrs = {"valueReference": str(var["valueReference"])}
+        if "depends_on" in var:
+            attrs["dependencies"] = " ".join(str(vr_of[name]) for name in var["depends_on"])
+        ET.SubElement(structure, "Output", attrs)
+    for var in variables:
+        if var.get("clocks"):
+            continue  # clocked variables only get values when their clock ticks
+        if (var["causality"] == "output" and var.get("initial") != "exact") or var["causality"] == "calculatedParameter":
+            ET.SubElement(structure, "InitialUnknown", {"valueReference": str(var["valueReference"])})
+
+    tree = ET.ElementTree(root)
+    ET.indent(tree, space="  ")
+    return tree
+
+
 def write_model_description(interface, path, **kwargs):
-    tree = build_model_description(interface, **kwargs)
+    build = build_model_description_fmi3 if interface.get("fmi_version", 2) == 3 else build_model_description
+    tree = build(interface, **kwargs)
     tree.write(Path(path), encoding="utf-8", xml_declaration=True)

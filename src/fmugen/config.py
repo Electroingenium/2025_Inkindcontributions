@@ -7,25 +7,40 @@ settings such as the default experiment. See docs/config.md for the full referen
 `load_config()` only reads and validates the file. `normalize()` needs the imported
 entry object (to tell a function from a class and to check argument names) and
 returns the interface spec that is written to resources/interface.json and read by
-the runtime adapter (templates/model.py) and the XML writer (description.py).
+the runtime engine (templates/fmugen_runtime.py) and the XML writer (description.py).
+The spec has the same shape for FMI 2 and FMI 3, except for the type names and the
+FMI 3-only parts (arrays, structural parameters, clocks, events).
 """
 import inspect
 import keyword
 import tomllib
 from pathlib import Path, PurePosixPath
 
-FMI_TYPES = ("Real", "Integer", "Boolean", "String", "Enumeration")
-DEFAULT_START = {"Real": 0.0, "Integer": 0, "Boolean": False, "String": "", "Enumeration": 1}
+FMI_VERSIONS = (2, 3)
+FLOAT_TYPES = ("Real", "Float32", "Float64")
+INT_TYPES = ("Integer", "Int8", "UInt8", "Int16", "UInt16", "Int32", "UInt32", "Int64", "UInt64")
+FMI_TYPES = (*FLOAT_TYPES, *INT_TYPES, "Boolean", "String", "Binary", "Enumeration")
+# Config type name -> type name in the spec, per FMI version (missing: not available)
+TYPE_NAMES = {
+    2: {"Real": "Real", "Float64": "Real", "Integer": "Integer", "Int32": "Integer",
+        "Boolean": "Boolean", "String": "String", "Enumeration": "Enumeration"},
+    3: {"Real": "Float64", "Integer": "Int32", **{t: t for t in FMI_TYPES if t not in ("Real", "Integer")}},
+}
+DEFAULT_START = {
+    **{t: 0.0 for t in FLOAT_TYPES}, **{t: 0 for t in INT_TYPES},
+    "Boolean": False, "String": "", "Binary": "", "Enumeration": 1,
+}
 
 # Directories inside the FMU's resources/ folder
 MODEL_DIR = "fmugen_model"   # the user's code
 SITE_DIR = "site"            # vendored requirements
 
-# Module names already used by the UniFMU backend in resources/
-RESERVED_MODULES = {"model", "backend", "main", "abstract_backend", "schemas"}
+# Module names already used by the UniFMU backend and fmugen in resources/
+RESERVED_MODULES = {"model", "backend", "main", "abstract_backend", "schemas", "fmugen_runtime"}
 
 # Config section -> FMI causality, in valueReference order
 SECTIONS = {
+    "structural_parameters": "structuralParameter",
     "parameters": "parameter",
     "calculated_parameters": "calculatedParameter",
     "inputs": "input",
@@ -36,25 +51,31 @@ SECTIONS = {
 
 MODEL_KEYS = {
     "entry", "call", "name", "description", "author", "sources", "requirements",
-    "constants", "call_constants", "init_call", "terminate",
+    "constants", "call_constants", "init_call", "terminate", "fmi_version",
 }
 EXPERIMENT_KEYS = {"start_time", "stop_time", "step_size", "tolerance", "fixed_step"}
 TIME_SOURCES = ("time", "step_size", "end_time")
 COMMON_VAR_KEYS = {
     "type", "start", "unit", "description", "variability", "initial",
-    "min", "max", "nominal", "quantity", "items", "enum",
+    "min", "max", "nominal", "quantity", "items", "enum", "dimensions", "numpy",
 }
 VAR_KEYS = {
+    "structural_parameters": COMMON_VAR_KEYS | {"to", "attr"},
     "parameters": COMMON_VAR_KEYS | {"to", "attr"},
     "calculated_parameters": COMMON_VAR_KEYS | {"from"},
-    "inputs": COMMON_VAR_KEYS | {"to"},
+    "inputs": COMMON_VAR_KEYS | {"to", "clocks"},
     "states": COMMON_VAR_KEYS | {"to", "next"},
-    "outputs": COMMON_VAR_KEYS | {"from", "depends_on"},
-    "locals": COMMON_VAR_KEYS | {"from"},
+    "outputs": COMMON_VAR_KEYS | {"from", "depends_on", "clocks"},
+    "locals": COMMON_VAR_KEYS | {"from", "clocks"},
 }
-TOP_KEYS = {"model", "experiment", "time", *SECTIONS}
+CLOCK_KEYS = {"causality", "interval_variability", "interval", "shift", "interval_from", "call", "from", "description"}
+INTERVAL_VARIABILITIES = ("constant", "fixed", "tunable", "changing", "countdown", "triggered")
+EVENT_KEYS = {"terminate", "next_event_time"}
+TOP_KEYS = {"model", "experiment", "time", "clocks", "events", *SECTIONS}
+FMI3_ONLY = "requires FMI 3 ([model] fmi_version = 3 or fmugen build --fmi 3)"
 
 VARIABILITIES = {
+    "structuralParameter": ("fixed", "tunable"),
     "parameter": ("fixed", "tunable"),
     "calculatedParameter": ("fixed", "tunable"),
     "input": ("discrete", "continuous"),
@@ -62,6 +83,7 @@ VARIABILITIES = {
     "local": ("constant", "discrete", "continuous"),
 }
 INITIALS = {
+    "structuralParameter": ("exact",),
     "parameter": ("exact",),
     "calculatedParameter": ("approx", "calculated"),
     "input": (),
@@ -85,6 +107,8 @@ class Config:
         _check_keys(self.model, MODEL_KEYS, "[model]")
         if "entry" not in self.model:
             raise InterfaceError("[model] entry is required, e.g. entry = \"model.py:simulate\"")
+        if self.model.get("fmi_version", 2) not in FMI_VERSIONS:
+            raise InterfaceError(f"[model] fmi_version must be one of {FMI_VERSIONS}")
         self.experiment = data.get("experiment", {})
         _check_keys(self.experiment, EXPERIMENT_KEYS, "[experiment]")
         for section, keys in VAR_KEYS.items():
@@ -92,10 +116,16 @@ class Config:
                 if not isinstance(info, dict):
                     raise InterfaceError(f"[{section}] {name} must be a table, e.g. {name} = {{ start = 0.0 }}")
                 _check_keys(info, keys, f"[{section}] {name}")
+        for name, info in data.get("clocks", {}).items():
+            _check_keys(info, CLOCK_KEYS, f"[clocks.{name}]")
+        _check_keys(data.get("events", {}), EVENT_KEYS, "[events]")
 
         self.entry_target, self.entry_name = parse_entry(self.model["entry"])
         self.entry_is_file = self.entry_target.endswith(".py")
         self.requirements = list(self.model.get("requirements", []))
+
+    def fmi_version(self, override=None):
+        return override or self.model.get("fmi_version", 2)
 
     # ---- files ----
 
@@ -172,16 +202,27 @@ def parse_binding(text, kinds, what):
     return {"kind": kind, "name": name or None}
 
 
-def normalize(config, entry_obj, module_name, sys_path, model_name=None, author=None):
+def normalize(config, entry_obj, module_name, sys_path, model_name=None, author=None, fmi_version=None):
     """Return the interface spec for a validated Config and its imported entry object."""
     model = config.model
+    version = config.fmi_version(fmi_version)
+    if version not in FMI_VERSIONS:
+        raise InterfaceError(f"unknown FMI version {version!r}, expected one of {FMI_VERSIONS}")
+    notes = []
     is_class = inspect.isclass(entry_obj)
     if not is_class and not callable(entry_obj):
         raise InterfaceError(f"{config.model['entry']} is neither a function nor a class")
     kind = "class" if is_class else "function"
 
     call = model.get("call")
-    if is_class:
+    step_call = call is not False   # call = false: nothing runs on doStep, only clocks run code
+    if not step_call and not config.data.get("clocks"):
+        raise InterfaceError("[model] call = false needs [clocks] (otherwise the model never runs)")
+    if is_class and not step_call:
+        call = None
+        init_sig = _signature(entry_obj.__init__)
+        call_sig = None
+    elif is_class:
         if call is None:
             if not any("__call__" in vars(k) for k in entry_obj.__mro__[:-1]):
                 raise InterfaceError(f"{entry_obj.__name__} is a class: set [model] call to the method run on each step")
@@ -192,10 +233,10 @@ def normalize(config, entry_obj, module_name, sys_path, model_name=None, author=
         call_sig = _signature(getattr(entry_obj, call))
     else:
         for key in ("call", "terminate", "call_constants"):
-            if key in model:
+            if key in model and not (key == "call" and call is False):
                 raise InterfaceError(f"[model] {key} only applies to classes; {model['entry']} is a function")
         init_sig = None
-        call_sig = _signature(entry_obj)
+        call_sig = _signature(entry_obj) if step_call else None
 
     def check_arg(sig, arg, what):
         if sig is not None and not _accepts(sig, arg):
@@ -214,27 +255,60 @@ def normalize(config, entry_obj, module_name, sys_path, model_name=None, author=
             raise InterfaceError(f"[time] {arg} = {source!r}: expected one of {TIME_SOURCES}")
         check_arg(call_sig, arg, f"[time] {arg}")
 
+    clock_names = set(config.data.get("clocks", {}))
+    structural = set(config.data.get("structural_parameters", {}))
+    if version == 2:
+        for key in ("structural_parameters", "clocks"):
+            if config.data.get(key):
+                raise InterfaceError(f"[{key}] {FMI3_ONLY}")
+        if config.data.get("events"):
+            notes.append("[events] is ignored for FMI 2: an FMI 2 FMU cannot signal events or ask to stop")
+
+    clocks = [_clock(name, info, entry_obj, is_class, time_args)
+              for name, info in config.data.get("clocks", {}).items()]
+    clock_sigs = {c["name"]: c.pop("_signature") for c in clocks}
+
     variables, type_definitions = [], {}
     for section, causality in SECTIONS.items():
         for name, info in config.data.get(section, {}).items():
-            var = _variable(section, causality, name, info, is_class, type_definitions)
+            var = _variable(section, causality, name, info, is_class, type_definitions,
+                            version, structural, clock_names)
             to = var.get("to")
             if to and to["kind"] in ("init", "arg"):
-                check_arg(init_sig if to["kind"] == "init" else call_sig, to["name"], f"[{section}] {name}")
+                clock = (var.get("clocks") or [None])[0]
+                sig = init_sig if to["kind"] == "init" else (clock_sigs[clock] if clock else call_sig)
+                check_arg(sig, to["name"], f"[{section}] {name}")
             variables.append(var)
 
     names = [v["name"] for v in variables]
-    duplicates = sorted({n for n in names if names.count(n) > 1})
+    duplicates = sorted({n for n in names if names.count(n) > 1} | (set(names) & clock_names))
     if duplicates:
-        raise InterfaceError(f"duplicate variable names: {duplicates}")
+        raise InterfaceError(f"duplicate variable or clock names: {duplicates}")
+    for clock in clocks:
+        clocked_inputs = [v["name"] for v in variables if v.get("clocks") == [clock["name"]] and "to" in v]
+        if clocked_inputs and clock["causality"] == "input" and not clock.get("call"):
+            raise InterfaceError(f"[clocks.{clock['name']}] has clocked inputs {clocked_inputs} but no call")
+    if version == 3:
+        if "time" in names:
+            raise InterfaceError("FMI 3 reserves the variable name 'time' for the independent variable; rename it")
+        variables.append({"name": "time", "causality": "independent", "variability": "continuous",
+                          "type": "Float64", "description": "Simulation time"})
     for vr, var in enumerate(variables):
         var["valueReference"] = vr
+    for vr, clock in enumerate(clocks, start=len(variables)):
+        clock["valueReference"] = vr
 
     inputs = {v["name"] for v in variables if v["causality"] == "input"}
     for var in variables:
         for dep in var.get("depends_on", []):
             if dep not in inputs:
                 raise InterfaceError(f"[outputs] {var['name']}: depends_on {dep!r} is not an input")
+
+    events = {}
+    if version == 3:
+        kinds = ("return", "attr") if is_class else ("return",)
+        for key, text in config.data.get("events", {}).items():
+            events[key] = parse_binding(text, kinds, f"[events] {key}")
 
     experiment = dict(config.experiment)
     if experiment.get("fixed_step") and "step_size" not in experiment:
@@ -243,6 +317,7 @@ def normalize(config, entry_obj, module_name, sys_path, model_name=None, author=
     doc = inspect.getdoc(entry_obj) or inspect.getdoc(inspect.getmodule(entry_obj)) or ""
     return {
         "spec_version": 1,
+        "fmi_version": version,
         "model_name": model_name or model.get("name") or config.entry_name,
         "description": model.get("description", doc.strip().splitlines()[0] if doc.strip() else ""),
         "author": author if author is not None else model.get("author", ""),
@@ -250,8 +325,9 @@ def normalize(config, entry_obj, module_name, sys_path, model_name=None, author=
             "module": module_name,
             "name": config.entry_name,
             "kind": kind,
-            "call": call if is_class else None,
-            "init_call": model.get("init_call", not is_class),
+            "call": call if is_class and step_call else None,
+            "step": step_call,
+            "init_call": model.get("init_call", not is_class and step_call),
             "terminate": model.get("terminate"),
         },
         "sys_path": sys_path,
@@ -261,17 +337,115 @@ def normalize(config, entry_obj, module_name, sys_path, model_name=None, author=
         "experiment": experiment,
         "type_definitions": type_definitions,
         "variables": variables,
+        "clocks": clocks,
+        "events": events,
+        "has_event_mode": bool(clocks or events),
         "can_get_and_set_state": True,
+        "notes": notes,
     }
 
 
-def _variable(section, causality, name, info, is_class, type_definitions):
+def _clock(name, info, entry_obj, is_class, time_args):
+    where = f"[clocks.{name}]"
+    if not name.isidentifier() or keyword.iskeyword(name):
+        raise InterfaceError(f"{where}: clock names must be valid Python identifiers")
+    causality = info.get("causality", "input")
+    if causality not in ("input", "output"):
+        raise InterfaceError(f"{where}: causality must be \"input\" or \"output\"")
+    variability = info.get("interval_variability", "constant" if "interval" in info else "triggered")
+    if variability not in INTERVAL_VARIABILITIES:
+        raise InterfaceError(f"{where}: interval_variability must be one of {INTERVAL_VARIABILITIES}")
+    clock = {"name": name, "causality": causality, "interval_variability": variability, "_signature": None}
+    if info.get("description"):
+        clock["description"] = str(info["description"])
+    kinds = ("return", "attr") if is_class else ("return",)
+
+    if causality == "output":
+        if variability != "triggered":
+            raise InterfaceError(f"{where}: output clocks are ticked by the model, so they must be \"triggered\"")
+        if "from" not in info:
+            raise InterfaceError(f"{where}: output clocks need from = \"...\" (a value that is true when it ticks)")
+        for key in ("call", "interval", "shift", "interval_from"):
+            if key in info:
+                raise InterfaceError(f"{where}: {key} only applies to input clocks")
+        clock["from"] = parse_binding(info["from"], kinds, where)
+        return clock
+
+    if "from" in info:
+        raise InterfaceError(f"{where}: from only applies to output clocks")
+    if variability in ("constant", "fixed", "tunable"):
+        if "interval" not in info:
+            raise InterfaceError(f"{where}: a {variability} clock needs interval = <seconds>")
+        clock["interval"] = float(info["interval"])
+        clock["shift"] = float(info.get("shift", 0.0))
+    elif "interval" in info or "shift" in info:
+        raise InterfaceError(f"{where}: interval and shift only apply to constant, fixed and tunable clocks")
+    if variability in ("changing", "countdown"):
+        if "interval_from" not in info:
+            raise InterfaceError(f"{where}: a {variability} clock needs interval_from = \"...\" (the next interval)")
+        clock["interval_from"] = parse_binding(info["interval_from"], kinds, where)
+    elif "interval_from" in info:
+        raise InterfaceError(f"{where}: interval_from only applies to changing and countdown clocks")
+
+    if info.get("call"):
+        call = info["call"]
+        if ":" in call:
+            from fmugen.templates.fmugen_runtime import resolve_reference
+            try:
+                target = resolve_reference(call)
+            except Exception as e:
+                raise InterfaceError(f"{where}: cannot import {call!r}: {e!r}") from e
+        elif is_class:
+            target = getattr(entry_obj, call, None)
+        else:
+            target = getattr(inspect.getmodule(entry_obj), call, None)
+        if not callable(target):
+            raise InterfaceError(f"{where}: call {call!r} is not a method or function of the model")
+        clock["call"] = call
+        clock["_signature"] = signature = _signature(target)
+        clock["time_args"] = [arg for arg in time_args if signature is None or _accepts(signature, arg)]
+    return clock
+
+
+def _variable(section, causality, name, info, is_class, type_definitions, version=2, structural=(), clocks=()):
     where = f"[{section}] {name}"
     if not name.isidentifier() or keyword.iskeyword(name):
         raise InterfaceError(f"{where}: variable names must be valid Python identifiers")
 
-    fmi_type = _type(where, info)
+    config_type = _type(where, info, section)
+    fmi_type = TYPE_NAMES[version].get(config_type)
+    if fmi_type is None:
+        raise InterfaceError(f"{where}: type {config_type} {FMI3_ONLY}")
     var = {"name": name, "causality": causality, "type": fmi_type}
+    is_float = fmi_type in FLOAT_TYPES
+
+    if "dimensions" in info:
+        if version == 2:
+            raise InterfaceError(f"{where}: arrays (dimensions) {FMI3_ONLY}")
+        dims = info["dimensions"]
+        if section == "structural_parameters":
+            raise InterfaceError(f"{where}: structural parameters are scalars")
+        if not isinstance(dims, list) or not dims:
+            raise InterfaceError(f"{where}: dimensions must be a list like [3] or [\"n\", 2]")
+        for d in dims:
+            if isinstance(d, str):
+                if d not in structural:
+                    raise InterfaceError(f"{where}: dimension {d!r} is not a structural parameter")
+            elif not isinstance(d, int) or isinstance(d, bool) or d < 1:
+                raise InterfaceError(f"{where}: dimension {d!r} must be a positive integer or a structural parameter")
+        var["dimensions"] = list(dims)
+        if info.get("numpy"):
+            var["numpy"] = True
+    elif "numpy" in info:
+        raise InterfaceError(f"{where}: numpy only applies to arrays (set dimensions)")
+
+    if "clocks" in info:
+        if version == 2:
+            raise InterfaceError(f"{where}: clocked variables {FMI3_ONLY}")
+        names = [info["clocks"]] if isinstance(info["clocks"], str) else list(info["clocks"])
+        if len(names) != 1 or names[0] not in clocks:
+            raise InterfaceError(f"{where}: clocks must name exactly one clock from [clocks]")
+        var["clocks"] = names
 
     if fmi_type == "Enumeration":
         type_name, items = _enumeration(where, name, info)
@@ -284,18 +458,18 @@ def _variable(section, causality, name, info, is_class, type_definitions):
 
     # variability
     default_variability = {
-        "parameter": "fixed", "calculatedParameter": "fixed",
-    }.get(causality, "continuous" if fmi_type == "Real" else "discrete")
+        "parameter": "fixed", "calculatedParameter": "fixed", "structuralParameter": "fixed",
+    }.get(causality, "continuous" if is_float and "clocks" not in var else "discrete")
     variability = info.get("variability", default_variability)
     if variability not in VARIABILITIES[causality]:
         raise InterfaceError(f"{where}: variability must be one of {VARIABILITIES[causality]}")
-    if variability == "continuous" and fmi_type != "Real":
-        raise InterfaceError(f"{where}: only Real variables can be continuous")
+    if variability == "continuous" and not is_float:
+        raise InterfaceError(f"{where}: only floating-point variables can be continuous")
     var["variability"] = variability
 
     # start / initial
     has_start = "start" in info
-    if section in ("parameters", "inputs", "states"):
+    if section in ("structural_parameters", "parameters", "inputs", "states"):
         initial = "exact" if section != "inputs" else None
         var["start"] = info.get("start", DEFAULT_START[fmi_type])
     elif section == "outputs":
@@ -314,22 +488,30 @@ def _variable(section, causality, name, info, is_class, type_definitions):
     if initial is not None:
         var["initial"] = initial
     if "start" in var:
-        var["start"] = _check_value(where, fmi_type, var["start"])
+        start = var["start"]
+        if isinstance(start, list):
+            if "dimensions" not in var:
+                raise InterfaceError(f"{where}: a list start needs dimensions")
+            var["start"] = [_check_value(where, fmi_type, x) for x in start]
+        else:
+            var["start"] = _check_value(where, fmi_type, start)
 
     for key in ("unit", "description", "quantity"):
         if info.get(key):
             var[key] = str(info[key])
     for key in ("min", "max", "nominal"):
         if key in info:
-            if fmi_type not in ("Real", "Integer", "Enumeration") or (key == "nominal" and fmi_type != "Real"):
+            if fmi_type not in (*FLOAT_TYPES, *INT_TYPES, "Enumeration") or (key == "nominal" and not is_float):
                 raise InterfaceError(f"{where}: {key} is not allowed for {fmi_type} variables")
             var[key] = info[key]
 
     # bindings to the user's code
-    if section in ("parameters", "inputs", "states"):
-        default = "init" if (section == "parameters" and is_class) else "arg"
+    if section in ("structural_parameters", "parameters", "inputs", "states"):
+        default = "init" if (section in ("parameters", "structural_parameters") and is_class) else "arg"
         kinds = ("init", "arg", "attr") if is_class else ("arg",)
         var["to"] = parse_binding(info.get("to", f"{default}:{name}"), kinds, where)
+        if "clocks" in var and var["to"]["kind"] == "init":
+            raise InterfaceError(f"{where}: a clocked input is passed to its clock's call, not the constructor")
         if section == "states":
             if "next" not in info:
                 raise InterfaceError(f"{where}: states need next = \"...\" (where the next value comes from)")
@@ -340,7 +522,7 @@ def _variable(section, causality, name, info, is_class, type_definitions):
         if section == "calculated_parameters" and var["from"]["kind"] != "attr":
             raise InterfaceError(f"{where}: calculated parameters are read from an attribute (from = \"attr:...\")")
 
-    if section == "parameters":
+    if section in ("parameters", "structural_parameters"):
         attr = info.get("attr")
         if attr is not None and not is_class:
             raise InterfaceError(f"{where}: attr only applies to classes")
@@ -357,14 +539,18 @@ def _variable(section, causality, name, info, is_class, type_definitions):
     return var
 
 
-def _type(where, info):
+def _type(where, info, section=None):
     if "type" in info:
         if info["type"] not in FMI_TYPES:
             raise InterfaceError(f"{where}: unknown type {info['type']!r}, expected one of {FMI_TYPES}")
         return info["type"]
     if "items" in info or "enum" in info:
         return "Enumeration"
+    if section == "structural_parameters":
+        return "UInt64"
     start = info.get("start")
+    if isinstance(start, list) and start:
+        start = start[0]
     # bool before int: bool is a subclass of int
     if isinstance(start, bool):
         return "Boolean"
@@ -377,7 +563,7 @@ def _type(where, info):
 
 def _enumeration(where, name, info):
     if "enum" in info:
-        from fmugen.templates.model import resolve_reference  # same resolution as at runtime
+        from fmugen.templates.fmugen_runtime import resolve_reference  # same resolution as at runtime
         try:
             enum = resolve_reference(info["enum"])
         except Exception as e:
@@ -389,10 +575,18 @@ def _enumeration(where, name, info):
 
 
 def _check_value(where, fmi_type, value):
-    expected = {"Real": (int, float), "Integer": (int,), "Enumeration": (int,), "Boolean": (bool,), "String": (str,)}
-    if isinstance(value, bool) and fmi_type != "Boolean" or not isinstance(value, expected[fmi_type]):
+    from fmugen.templates.fmugen_runtime import coerce
+    if fmi_type in FLOAT_TYPES:
+        expected = (int, float)
+    else:
+        expected = {"Boolean": (bool,), "String": (str,), "Binary": (str,)}.get(fmi_type, (int,))
+    if isinstance(value, bool) and fmi_type != "Boolean" or not isinstance(value, expected):
         raise InterfaceError(f"{where}: start {value!r} is not a valid {fmi_type}")
-    return float(value) if fmi_type == "Real" else value
+    try:
+        coerce(fmi_type, value)  # integer ranges, hex for Binary
+    except ValueError as e:
+        raise InterfaceError(f"{where}: start {value!r}: {e}") from e
+    return float(value) if fmi_type in FLOAT_TYPES else value
 
 
 def _signature(fn):
