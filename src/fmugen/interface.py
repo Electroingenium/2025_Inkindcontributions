@@ -49,8 +49,12 @@ def parse_target(target):
     return None, path, name
 
 
-def infer_config(target, call=None, config_dir=None):
-    """Return (config dict, {(section, name): comment}) for a model target."""
+def infer_config(target, call=None, config_dir=None, fmi_version=None):
+    """Return (config dict, {(section, name): comment}) for a model target.
+
+    With fmi_version=3, list/tuple/numpy values become array variables and bytes become Binary.
+    """
+    arrays = fmi_version == 3
     path, module_name, name = parse_target(target)
     module = load_module(path) if path else importlib.import_module(module_name)
     entry = _pick_entry(module, name)
@@ -63,17 +67,19 @@ def infer_config(target, call=None, config_dir=None):
         entry_ref = f"{module_name}:{entry.__name__}"
 
     data = {"model": {"entry": entry_ref}}
+    if fmi_version:
+        data["model"]["fmi_version"] = fmi_version
     if path:
         sources = _local_sources(Path(path).resolve(), config_dir)
         if sources:
             data["model"]["sources"] = sources
     comments = {}
     if inspect.isclass(entry):
-        _infer_class(entry, call, data, comments)
+        _infer_class(entry, call, data, comments, arrays)
     else:
         if call:
             raise InterfaceError("--call only applies to classes")
-        _infer_function(entry, data, comments)
+        _infer_function(entry, data, comments, arrays)
     return data, comments
 
 
@@ -122,22 +128,22 @@ def _pick_entry(module, name):
 
 # ---------------- functions ----------------
 
-def _infer_function(fn, data, comments):
-    _arguments(fn, "inputs", data, comments)
+def _infer_function(fn, data, comments, arrays=False):
+    _arguments(fn, "inputs", data, comments, arrays=arrays)
     kwargs = {**_probe_kwargs(data, ("inputs",)), **_time_kwargs(data.get("time", {}))}
     try:
         result = fn(**kwargs)
     except Exception as e:
         comments[("outputs", None)] = f"probe call failed ({e!r}); add the outputs by hand"
         return
-    _outputs_from_return(result, data, comments, default_name="y", is_class=False)
+    _outputs_from_return(result, data, comments, default_name="y", is_class=False, arrays=arrays)
     _detect_states(data, comments, returned=result if isinstance(result, Mapping) else None, obj=None)
 
 
 # ---------------- classes ----------------
 
-def _infer_class(cls, call, data, comments):
-    _arguments(cls.__init__, "parameters", data, comments, skip_self=True, allow_time=False)
+def _infer_class(cls, call, data, comments, arrays=False):
+    _arguments(cls.__init__, "parameters", data, comments, skip_self=True, allow_time=False, arrays=arrays)
 
     method_name = call or _pick_method(cls)
     if method_name != "__call__" or call:
@@ -158,27 +164,27 @@ def _infer_class(cls, call, data, comments):
         if _writable_attribute(obj, name) and _same(getattr(obj, name), data["parameters"][name].get("start")):
             comments.setdefault(("parameters", name), "kept as an attribute: add variability = \"tunable\" if the step reads it")
 
-    _arguments(method, "inputs", data, comments, skip_self=True, constants_key="call_constants")
-    before = _numeric_attributes(obj)
+    _arguments(method, "inputs", data, comments, skip_self=True, constants_key="call_constants", arrays=arrays)
+    before = _numeric_attributes(obj, arrays)
     kwargs = {**_probe_kwargs(data, ("inputs",)), **_time_kwargs(data.get("time", {}))}
     try:
         result = getattr(obj, method_name)(**kwargs)
     except Exception as e:
         comments[("outputs", None)] = f"probe call failed ({e!r}); add the outputs by hand"
         return
-    after = _numeric_attributes(obj)
+    after = _numeric_attributes(obj, arrays)
 
     if result is not None and result is not obj:
-        _outputs_from_return(result, data, comments, default_name="y", is_class=True)
+        _outputs_from_return(result, data, comments, default_name="y", is_class=True, arrays=arrays)
     taken = {*data.get("parameters", {}), *data.get("inputs", {}), *data.get("outputs", {})}
     for attr, value in after.items():
         if attr in taken:
             continue
         if attr not in before:
-            data.setdefault("outputs", {})[attr] = _typed({}, value)
+            data.setdefault("outputs", {})[attr] = _typed({}, value, arrays)
             comments[("outputs", attr)] = f"set by {method_name}()"
         elif not _same(before[attr], value):
-            data.setdefault("locals", {})[attr] = _typed({}, value)
+            data.setdefault("locals", {})[attr] = _typed({}, value, arrays)
             comments[("locals", attr)] = f"changed by {method_name}()"
     _detect_states(data, comments, returned=result if isinstance(result, Mapping) else None, obj=obj)
 
@@ -201,7 +207,8 @@ def _pick_method(cls):
 
 # ---------------- shared ----------------
 
-def _arguments(fn, section, data, comments, skip_self=False, allow_time=True, constants_key="constants"):
+def _arguments(fn, section, data, comments, skip_self=False, allow_time=True, constants_key="constants",
+               arrays=False):
     """Sort the arguments of fn into variables of `section` and time arguments.
 
     Arguments whose default is not an FMI value (None, tuples, objects) keep their code
@@ -231,6 +238,10 @@ def _arguments(fn, section, data, comments, skip_self=False, allow_time=True, co
                 "enum": f"{type(default).__module__}:{type(default).__qualname__}",
                 "start": default.name,
             }
+        elif arrays and isinstance(default, bytes):
+            variables[p.name] = {"type": "Binary", "start": default.hex()}
+        elif arrays and _array_info(default):
+            variables[p.name] = _array_info(default, with_start=True)
         else:
             comments[("model", f"{constants_key}.{p.name}")] = _constant(default)
     if time_args and allow_time:
@@ -265,12 +276,20 @@ def _constant(value):
 
 
 def _probe_kwargs(data, sections):
+    from fmugen.templates.fmugen_runtime import reshape, resolve_reference
     kwargs = {}
     for section in sections:
         for name, info in data.get(section, {}).items():
             if "enum" in info:
-                from fmugen.templates.model import resolve_reference
                 kwargs[name] = getattr(resolve_reference(info["enum"]), info["start"])
+            elif "dimensions" in info:
+                value = reshape(info["start"], info["dimensions"])
+                if info.get("numpy"):
+                    import numpy
+                    value = numpy.array(value)
+                kwargs[name] = value
+            elif info.get("type") == "Binary":
+                kwargs[name] = bytes.fromhex(info["start"])
             else:
                 kwargs[name] = info.get("start", 0.0)
     return kwargs
@@ -280,19 +299,28 @@ def _time_kwargs(time_args):
     return {arg: (PROBE_STEP_SIZE if source == "step_size" else 0.0) for arg, source in time_args.items()}
 
 
-def _typed(info, value):
+def _typed(info, value, arrays=False):
     """Type of an output seen in the probe; ints become Real (a probe often just returns 0)."""
-    if isinstance(value, enum.Enum):
+    if arrays and isinstance(value, bytes):
+        info["type"] = "Binary"
+    elif arrays and _array_info(value):
+        # numpy = true only matters for values passed *into* the model
+        info.update({k: v for k, v in _array_info(value).items() if k != "numpy"})
+    elif type(value).__name__ == "float32":
+        info["type"] = "Float32" if arrays else "Real"
+    elif isinstance(value, enum.Enum):
         info["enum"] = f"{type(value).__module__}:{type(value).__qualname__}"
     elif isinstance(value, (bool, str)):
         info["type"] = _type_name(value)
     return info
 
 
-def _outputs_from_return(result, data, comments, default_name, is_class):
+def _outputs_from_return(result, data, comments, default_name, is_class, arrays=False):
     outputs = data.setdefault("outputs", {})
     if isinstance(result, Mapping):
         items = [(str(k), v, f"return:{k}") for k, v in result.items()]
+    elif arrays and _array_info(result):
+        items = [(default_name, result, "return")]
     elif isinstance(result, (tuple, list)):
         items = [(f"{default_name}{i}", v, f"return:{i}") for i, v in enumerate(result)]
     elif _fmi_value(result):
@@ -302,11 +330,12 @@ def _outputs_from_return(result, data, comments, default_name, is_class):
     else:
         items = []
     for name, value, source in items:
-        if not name.isidentifier() or not _fmi_value(value):
+        if not name.isidentifier() or not _fmi_value(value, arrays):
             comments[("outputs", None)] = f"skipped {name!r}: not an FMI value or not a valid name"
             continue
         # from = "return:<name>" is the default for functions
-        outputs[name] = _typed({} if source == f"return:{name}" and not is_class else {"from": source}, value)
+        info = {} if source == f"return:{name}" and not is_class else {"from": source}
+        outputs[name] = _typed(info, value, arrays)
     if not outputs:
         data.pop("outputs")
 
@@ -333,12 +362,17 @@ def _detect_states(data, comments, returned, obj):
         data.pop("inputs", None)
 
 
-def _numeric_attributes(obj):
+def _numeric_attributes(obj, arrays=False):
     try:
         attrs = vars(obj)
     except TypeError:
         return {}
-    return {k: v for k, v in attrs.items() if not k.startswith("_") and _fmi_value(v)}
+    return {k: _snapshot(v) for k, v in attrs.items() if not k.startswith("_") and _fmi_value(v, arrays)}
+
+
+def _snapshot(value):
+    """A copy that later in-place changes (e.g. numpy `+=`) don't affect."""
+    return value.copy() if hasattr(value, "copy") and not isinstance(value, (str, bytes)) else value
 
 
 def _writable_attribute(obj, name):
@@ -348,11 +382,65 @@ def _writable_attribute(obj, name):
     return True
 
 
-def _fmi_value(value):
-    return isinstance(value, (*SCALARS, enum.Enum)) or type(value).__name__ in ("float64", "float32", "int64", "int32", "bool_")
+NUMPY_SCALARS = ("float64", "float32", "int64", "int32", "int16", "int8", "uint64", "uint32", "uint16",
+                 "uint8", "bool_")
+NUMPY_TYPES = {"float32": "Float32", "float64": "Real", "int8": "Int8", "uint8": "UInt8", "int16": "Int16",
+               "uint16": "UInt16", "int32": "Int32", "uint32": "UInt32", "int64": "Int64", "uint64": "UInt64",
+               "bool": "Boolean"}
+
+
+def _fmi_value(value, arrays=False):
+    if isinstance(value, (*SCALARS, enum.Enum)) or type(value).__name__ in NUMPY_SCALARS:
+        return True
+    return arrays and (isinstance(value, bytes) or _array_info(value) is not None)
+
+
+def _array_info(value, with_start=False):
+    """{dimensions, type?, numpy?, start?} for a rectangular list/tuple/numpy array of numbers, else None."""
+    if hasattr(value, "shape") and hasattr(value, "tolist") and getattr(value, "ndim", 0) > 0:
+        shape, flat = list(value.shape), value.ravel().tolist()
+        fmi_type = NUMPY_TYPES.get(str(value.dtype))
+        if fmi_type is None:
+            return None
+        info = {"dimensions": shape, "numpy": True}
+    elif isinstance(value, (list, tuple)) and value:
+        shape = _shape(value)
+        if shape is None:
+            return None
+        from fmugen.templates.fmugen_runtime import flatten
+        flat = flatten(value)
+        if all(isinstance(x, bool) for x in flat):
+            fmi_type = "Boolean"
+        elif all(isinstance(x, (int, float)) and not isinstance(x, bool) for x in flat):
+            fmi_type = "Real"
+        else:
+            return None
+        info = {"dimensions": shape}
+    else:
+        return None
+    if 0 in shape:
+        return None
+    if fmi_type != "Real":
+        info["type"] = fmi_type
+    if with_start:
+        info["start"] = [float(x) for x in flat] if fmi_type in ("Real", "Float32") else flat
+    return info
+
+
+def _shape(value):
+    if not isinstance(value, (list, tuple)):
+        return []
+    shapes = [_shape(item) for item in value]
+    if not shapes or any(s is None or s != shapes[0] for s in shapes):
+        return None
+    return [len(value), *shapes[0]]
 
 
 def _same(a, b):
+    if hasattr(a, "tolist"):
+        a = a.tolist()
+    if hasattr(b, "tolist"):
+        b = b.tolist()
     try:
         return a == b or (isinstance(a, float) and isinstance(b, float) and math.isnan(a) and math.isnan(b))
     except Exception:
@@ -371,7 +459,16 @@ def _type_name(value):
 
 # ---------------- TOML output ----------------
 
-SECTION_ORDER = ("experiment", "time", "parameters", "calculated_parameters", "inputs", "states", "outputs", "locals")
+SECTION_ORDER = ("experiment", "time", "structural_parameters", "parameters", "calculated_parameters",
+                 "inputs", "states", "outputs", "locals")
+CLOCKS_EXAMPLE = """
+# FMI 3 clocks run model code on events; they can't be inferred. Example (docs/models.md#clocks):
+# [clocks.sample]
+# interval = 0.1            # a periodic input clock, ticked by the importer
+# call = "sample"           # method (or function) run when it ticks
+# [inputs]
+# measurement = { start = 0.0, clocks = ["sample"] }   # passed to sample()
+"""
 HEADER = """\
 # fmugen.toml: how this Python model becomes an FMU. Reference: docs/config.md
 # Generated by `fmugen init`; check the start values, add units, and remove what you don't need.
@@ -408,6 +505,8 @@ def render_toml(data, comments=None):
             lines.append(f"# {note}")
         for name, value in (table or {}).items():
             lines.append(_with_comment(f"{_key(name)} = {_value(value)}", comments.get((section, name))))
+    if data["model"].get("fmi_version") == 3:
+        lines.append(CLOCKS_EXAMPLE.rstrip("\n"))
     return "\n".join(lines) + "\n"
 
 
