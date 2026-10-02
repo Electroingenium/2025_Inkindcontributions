@@ -37,7 +37,7 @@ docker/
 From the repository root, build the FMU into `docker/model/`:
 
 ```bash
-uv run fmugen build src/fmu_psycrometry.py -o docker/model/model.fmu
+uv run fmugen build examples/psychrometry -o docker/model/model.fmu
 ```
 
 Don't pass `--python` here. The FMU runs inside a Linux container, where it uses the image's `python3`.
