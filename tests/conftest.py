@@ -5,38 +5,55 @@ from pathlib import Path
 import pytest
 
 from fmugen.__main__ import build, isolated_imports
-from fmugen.templates import model as runtime
+from fmugen.templates import model_fmi2, model_fmi3
+from fmugen.templates.fmugen_runtime import Status
 
 ROOT = Path(__file__).resolve().parents[1]
 EXAMPLES = ROOT / "examples"
 
 
 class Adapter:
-    """Drives the generated adapter (resources/model.py) directly, without UniFMU or zmq."""
+    """Drives a generated FMI 2 adapter (resources/model.py) directly, without UniFMU or zmq."""
 
     def __init__(self, resources):
         self.logs = []
-        self.model = runtime.Model(lambda status, category, message: self.logs.append((status, category, message)),
-                                   resources_dir=resources)
-        self.vr = {v["name"]: v["valueReference"] for v in self.model.variables}
+        self.model = model_fmi2.Model(self._log, resources_dir=resources)
+        self.engine = self.model.engine
+        self.vr = {v["name"]: v["valueReference"] for v in [*self.engine.variables, *self.engine.clocks.values()]}
+
+    def _log(self, status, category, message):
+        self.logs.append((status, category, message))
 
     def __getattr__(self, name):
         return getattr(self.model, name)
 
     def get(self, *names):
-        status, values = self.model.fmi2GetReal([self.vr[n] for n in names])
-        assert status == runtime.Fmi2Status.ok
+        status, values = self.engine.get_values([self.vr[n] for n in names])
+        assert status == Status.ok, self.logs
         return values[0] if len(names) == 1 else values
 
     def set(self, name, value):
-        setter = {bool: self.model.fmi2SetBoolean, int: self.model.fmi2SetInteger,
-                  str: self.model.fmi2SetString}.get(type(value), self.model.fmi2SetReal)
-        return setter([self.vr[name]], [value])
+        return self.engine.set_values([self.vr[name]], value if isinstance(value, list) else [value])
 
     def initialize(self, start=0.0):
-        assert self.model.fmi2SetupExperiment(start, None, None) == runtime.Fmi2Status.ok
-        assert self.model.fmi2EnterInitializationMode() == runtime.Fmi2Status.ok
-        assert self.model.fmi2ExitInitializationMode() == runtime.Fmi2Status.ok, self.logs
+        assert self.model.fmi2SetupExperiment(start, None, None) == Status.ok
+        assert self.model.fmi2EnterInitializationMode() == Status.ok
+        assert self.model.fmi2ExitInitializationMode() == Status.ok, self.logs
+
+
+class Adapter3(Adapter):
+    """Drives a generated FMI 3 adapter directly."""
+
+    def __init__(self, resources, event_mode_used=False):
+        self.logs = []
+        self.model = model_fmi3.Model("test", "", str(resources), False, True, event_mode_used, False, [],
+                                      self._log, resources_dir=resources)
+        self.engine = self.model.engine
+        self.vr = {v["name"]: v["valueReference"] for v in [*self.engine.variables, *self.engine.clocks.values()]}
+
+    def initialize(self, start=0.0):
+        assert self.model.fmi3EnterInitializationMode(False, 0.0, start, False, 0.0) == Status.ok
+        assert self.model.fmi3ExitInitializationMode() == Status.ok, self.logs
 
 
 @pytest.fixture
@@ -55,7 +72,8 @@ def make_fmu(tmp_path):
 def adapter():
     """Open the adapter of a built FMU folder; imports are undone afterwards."""
     with contextlib.ExitStack() as stack:
-        def open_(fmu_dir):
+        def open_(fmu_dir, fmi=2, **kwargs):
             stack.enter_context(isolated_imports())
-            return Adapter(Path(fmu_dir) / "resources")
+            resources = Path(fmu_dir) / "resources"
+            return Adapter3(resources, **kwargs) if fmi == 3 else Adapter(resources)
         yield open_

@@ -28,6 +28,7 @@ packages = ["src/fmugen"]
 
 [dependency-groups]
 dev = [
+    "filterpy==1.4.5",
     "pytest>=9.1.1",
     "simple-pid==2.0.1",
 ]

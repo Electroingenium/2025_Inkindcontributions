@@ -2,7 +2,7 @@
 
 fmugen packages Python code **as it is**. Nothing in your model has to import fmugen, follow a naming convention, or declare its interface. All of that lives in `fmugen.toml` (see [config.md](config.md)), and `fmugen init` writes a first version of it for you.
 
-This page shows the shapes of code fmugen understands, how each maps onto an FMU, and what to check after `fmugen init`.
+This page shows the shapes of code fmugen understands, how each maps onto an FMU, and what to check after `fmugen init`. Everything works for FMI 2 and FMI 3; the sections marked **FMI 3** need `[model] fmi_version = 3` (or `fmugen build --fmi 3`).
 
 - [How a model runs inside the FMU](#how-a-model-runs-inside-the-fmu)
 - [A function](#a-function)
@@ -14,6 +14,9 @@ This page shows the shapes of code fmugen understands, how each maps onto an FMU
 - [Enumerations](#enumerations)
 - [Several files](#several-files)
 - [Models from PyPI](#models-from-pypi)
+- [Arrays and structural parameters (FMI 3)](#arrays-and-structural-parameters-fmi-3)
+- [Clocks (FMI 3)](#clocks-fmi-3)
+- [Stopping the simulation from the model (FMI 3)](#stopping-the-simulation-from-the-model-fmi-3)
 - [Logging and errors](#logging-and-errors)
 - [What `fmugen init` infers](#what-fmugen-init-infers)
 - [Limits](#limits)
@@ -233,7 +236,7 @@ Both import styles work:
 
 `fmugen init` fills `sources` from the local modules the model actually imported.
 
-Some module names are already taken by UniFMU's backend: `model`, `backend`, `main`, `abstract_backend` and `schemas`. Your entry module can't use them; rename the file.
+Some module names are already taken by UniFMU's backend and fmugen: `model`, `backend`, `main`, `abstract_backend`, `schemas` and `fmugen_runtime`. Your entry module can't use them; rename the file.
 
 ---
 
@@ -251,17 +254,125 @@ requirements = ["simple-pid==2.0.1"]
 
 ---
 
+## Arrays and structural parameters (FMI 3)
+
+FMI 3 variables can be arrays. Give a variable `dimensions`, and your code exchanges lists or numpy arrays with the FMU:
+
+```python
+class KalmanFilter:                       # filterpy, unchanged
+    def __init__(self, dim_x, dim_z): ...
+    def predict(self): ...                # uses self.F, self.Q
+    def update(self, z): ...
+```
+
+```toml
+[structural_parameters]                   # sizes, set before initialization
+dim_x = { start = 2 }
+dim_z = { start = 1 }
+
+[parameters]
+F = { dimensions = ["dim_x", "dim_x"], numpy = true, to = "attr:F", start = [1.0, 0.1, 0.0, 1.0] }
+
+[outputs]
+x = { dimensions = ["dim_x"] }            # self.x, shape (2, 1) or (2,): any shape with 2 values
+```
+
+- **Sizes:** a dimension is a number (`[3]`) or a structural parameter (`["dim_x"]`). Structural parameters are FMU variables an importer can change in configuration mode, before initialization. Arrays that use them are resized to their start values.
+- **Values:** arrays travel flattened in row-major order. `start` is a flat list, or one value for every element.
+- **What your code sees:** nested lists, or a `numpy.ndarray` with `numpy = true`. Your code can return lists, tuples or numpy arrays of any shape with the right number of values.
+- **Attribute bindings:** `to = "attr:F"` writes the array onto the object after construction and before every step. Use it for matrices the model reads, not for state the model updates itself.
+
+`fmugen init --fmi 3` infers arrays from list, tuple and numpy defaults and results, and `Binary` from `bytes`.
+
+Full example: [examples/kalman](../examples/kalman).
+
+---
+
+## Clocks (FMI 3)
+
+FMI 3 clocks run code **on events** instead of on every step: sampled-data controllers, sensors that report when they have data, models that raise alarms. Your code stays the same; the config says which method a clock calls.
+
+**A periodic input clock**, ticked by the importer every 0.1 s:
+
+```toml
+[model]
+entry = "simple_pid:PID"
+call = false                         # nothing runs on doStep: only the clock runs the PID
+
+[clocks.sample]
+interval = 0.1
+call = "__call__"                    # pid(input_, dt) on every tick
+
+[time]
+dt = "step_size"                     # in a clock call: time since the last tick
+
+[inputs]
+measurement = { to = "arg:input_", clocks = ["sample"] }   # passed to the clock's call
+
+[outputs]
+output = { from = "return", clocks = ["sample"] }         # read after each tick, held in between
+```
+
+**A triggered input clock**, ticked whenever the importer has a measurement:
+
+```toml
+[clocks.measurement]                 # no interval: triggered
+call = "update"                      # kf.update(z)
+
+[inputs]
+z = { dimensions = ["dim_z"], numpy = true, clocks = ["measurement"] }
+```
+
+**An output clock**, ticked by the model when a value it computes becomes true:
+
+```python
+class Tank:
+    def fill(self, inflow, dt):
+        self.level += inflow * dt
+        self.overflowed = self.level > self.capacity
+```
+
+```toml
+[clocks.overflow]
+causality = "output"
+from = "attr:overflowed"             # true after a step -> the clock ticks
+
+[outputs]
+spill = { from = "attr:level", clocks = ["overflow"] }
+```
+
+After a step that ticks an output clock, `doStep` returns `eventHandlingNeeded`. The importer enters event mode and sees the clock active.
+
+What each interval variability means, and the exact rules for activation and reset: [fmi.md](fmi.md#clocks-fmi-3). Clocks can't be inferred; `fmugen init --fmi 3` writes a commented example.
+
+Full examples: [examples/sampled_pid](../examples/sampled_pid), [examples/kalman](../examples/kalman).
+
+---
+
+## Stopping the simulation from the model (FMI 3)
+
+If your model knows when the simulation should end, point `[events] terminate` at that value:
+
+```toml
+[events]
+terminate = "attr:done"          # or "return:done" for a returned dict
+```
+
+When it is true after a step or a clock tick, the FMU returns `terminateSimulation = true` and the importer stops. `next_event_time = "attr:..."` reports when the model's next event is due.
+
+---
+
 ## Logging and errors
 
 - **Logging:** use Python's `logging` as usual. While your code runs inside the FMU, its records are forwarded to the importer:
 
   | Python level | FMI status | Log category |
   |---|---|---|
-  | `WARNING` | `fmi2Warning` | `logStatusWarning` |
-  | `ERROR` and above | `fmi2Error` | `logStatusError` |
-  | everything else | `fmi2OK` | `logAll` |
+  | `WARNING` | warning | `logStatusWarning` |
+  | `ERROR` and above | error | `logStatusError` |
+  | everything else | OK | `logAll` (FMI 2) / `logEvents` (FMI 3) |
 
-- **Errors:** an exception in your code makes that FMI call return `fmi2Error`. The full traceback is logged under `logStatusError`.
+- **Errors:** an exception in your code makes that FMI call return an error status. The full traceback is logged under `logStatusError`.
 - **`print`:** output goes to the backend process's console, not to the importer.
 
 ---
@@ -269,7 +380,7 @@ requirements = ["simple-pid==2.0.1"]
 ## What `fmugen init` infers
 
 ```bash
-uv run fmugen init path/to/model.py[:Name] [--call METHOD] [-o fmugen.toml | -o -] [--force]
+uv run fmugen init path/to/model.py[:Name] [--call METHOD] [--fmi 3] [-o fmugen.toml | -o -] [--force]
 ```
 
 It imports the module, picks the entry, makes one probe call with the start values, and writes a commented config:
@@ -285,6 +396,7 @@ It imports the module, picks the entry, makes one probe call with the start valu
 | **States** | An input `x_prev` whose next value is returned or stored as `x_next` or `x` |
 | **Sources** | Local modules under the config's folder that the model imported |
 | **Constants** | Non-FMI defaults, written as commented-out examples |
+| **Arrays and Binary** (`--fmi 3`) | List, tuple and numpy defaults and results become `dimensions` (`numpy = true` for numpy inputs); `bytes` becomes Binary; numpy `float32` becomes Float32 |
 
 Check afterwards:
 
@@ -300,6 +412,7 @@ Check afterwards:
 
 ## Limits
 
-- **Values:** one value per FMI variable. Arrays have to be split into scalar variables, and callables or objects can't be variables (use `constants`).
+- **Values:** FMI 2 has one value per variable, so arrays have to be split into scalar variables. FMI 3 has arrays. In both versions, callables and objects can't be variables (use `constants`).
+- **Clocks:** each clocked variable belongs to exactly one clock.
 - **FMU state:** saving and restoring FMU state pickles your object. If it holds something that can't be pickled (an open file, a generator, a socket), the build detects it and turns `canGetAndSetFMUstate` off.
-- **Derivatives:** the FMU can't provide them (directional derivatives, input/output derivatives). See [fmi.md](fmi.md#unsupported-fmi-2-functions).
+- **Derivatives:** the FMU can't provide them (directional derivatives, input/output derivatives). See [fmi.md](fmi.md#unsupported-functions).

@@ -1,0 +1,3 @@
+linux = ["sh", "-c", "chmod +x dist/main/main && ./dist/main/main"]
+macos = ["sh", "-c", "chmod +x dist/main/main && ./dist/main/main"]
+windows = ["powershell","-command","./dist/main/main.exe"]

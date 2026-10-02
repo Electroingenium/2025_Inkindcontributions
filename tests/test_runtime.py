@@ -5,7 +5,7 @@ import textwrap
 import pytest
 
 from conftest import EXAMPLES
-from fmugen.templates.model import Fmi2Status
+from fmugen.templates.model_fmi2 import Fmi2Status
 
 OK, ERROR = Fmi2Status.ok, Fmi2Status.error
 
@@ -23,7 +23,7 @@ def test_function_outputs_match_the_model(make_fmu, adapter):
     spec = importlib.util.spec_from_file_location("psy", EXAMPLES / "psychrometry" / "psychrometry.py")
     psy = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(psy)
-    inputs = {v["name"]: v["start"] for v in fmu.variables if v["causality"] == "input"}
+    inputs = {v["name"]: v["start"] for v in fmu.engine.variables if v["causality"] == "input"}
     expected = psy.compute_balances_simplified(**inputs)
     assert fmu.get("Q_in", "mass_balance") == [expected["Q_in"], expected["mass_balance"]]
 
@@ -40,7 +40,7 @@ def test_class_time_argument_and_tunable_parameter(make_fmu, adapter):
     assert fmu.get("integral") == pytest.approx(0.05)
 
     assert fmu.set("Kp", 4.0) == OK                     # tunable: written onto the PID object
-    assert fmu.model.obj.Kp == 4.0
+    assert fmu.engine.obj.Kp == 4.0
     assert fmu.fmi2DoStep(0.1, 0.1, False) == OK
     assert fmu.get("output") == pytest.approx(4.0 + 0.1)
 
@@ -59,7 +59,7 @@ def test_state_feedback_fixed_step_and_rollback(make_fmu, adapter):
 
     assert fmu.set("t_out", -5.0) == OK
     assert fmu.fmi2DoStep(0.0, 3600.0, False) == OK
-    assert fmu.get("t_m_prev") == fmu.model.obj.t_m_next   # fed back for the next step
+    assert fmu.get("t_m_prev") == fmu.engine.obj.t_m_next   # fed back for the next step
 
     status, saved = fmu.fmi2SerializeFmuState()
     assert status == OK
@@ -70,18 +70,18 @@ def test_state_feedback_fixed_step_and_rollback(make_fmu, adapter):
     assert fmu.get("t_air", "heating_demand", "t_m_prev") == first
 
     assert fmu.fmi2Reset() == OK
-    assert fmu.get("t_m_prev") == 20.0 and fmu.model.obj is None
+    assert fmu.get("t_m_prev") == 20.0 and fmu.engine.obj is None
 
 
 def test_parameters_reach_the_constructor(make_fmu, adapter):
     fmu = adapter(make_fmu(EXAMPLES / "rc_building"))
     assert fmu.set("floor_area", 100.0) == OK            # before initialization
     fmu.initialize()
-    assert fmu.model.obj.floor_area == 100.0
+    assert fmu.engine.obj.floor_area == 100.0
     assert fmu.get("c_m") == 165000.0 * 100.0
     assert fmu.set("floor_area", 50.0) == ERROR          # fixed after initialization
     assert fmu.set("t_set_heating", 22.0) == OK          # tunable
-    assert fmu.model.obj.t_set_heating == 22.0
+    assert fmu.engine.obj.t_set_heating == 22.0
 
 
 def test_function_with_state_time_and_logging(tmp_path, make_fmu, adapter):
@@ -145,7 +145,7 @@ def test_enumeration(tmp_path, make_fmu, adapter):
             return {"out": flow if mode is Mode.OPEN else 0.0, "mode_echo": mode}
     ''')
     fmu = adapter(make_fmu(tmp_path / "valve.py:valve"))
-    td = fmu.interface["type_definitions"]["Mode"]
+    td = fmu.engine.interface["type_definitions"]["Mode"]
     assert td["items"] == ["CLOSED", "OPEN"]
     fmu.initialize()
     assert fmu.get("out") == 1.0

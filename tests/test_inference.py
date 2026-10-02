@@ -85,3 +85,30 @@ def test_unknown_config_keys_are_rejected(tmp_path):
 def test_render_toml_values():
     text = render_toml({"model": {"entry": "m.py:f"}, "inputs": {"x": {"start": float("-inf"), "unit": "degC"}}})
     assert tomllib.loads(text)["inputs"]["x"]["start"] == float("-inf")
+
+
+def test_fmi3_infers_arrays_binary_and_float32(tmp_path):
+    (tmp_path / "filt.py").write_text(textwrap.dedent('''
+        import numpy as np
+
+        class Filter:
+            def __init__(self, weights=(0.5, 0.25, 0.25), tag=b"\x01"):
+                self.weights = np.array(weights, dtype=np.float32)
+                self.history = np.zeros(3)
+
+            def step(self, u=0.0):
+                self.history = np.roll(self.history, 1)
+                self.history[0] = u
+                self.out = np.float32(self.weights @ self.history)
+                return self.history.copy()
+    '''))
+    data, comments = infer(tmp_path / "filt.py", fmi_version=3)
+    assert data["model"]["fmi_version"] == 3
+    assert data["parameters"]["weights"] == {"dimensions": [3], "start": [0.5, 0.25, 0.25]}
+    assert data["parameters"]["tag"] == {"type": "Binary", "start": "01"}
+    assert data["outputs"]["y"] == {"from": "return", "dimensions": [3]}
+    assert data["outputs"]["out"] == {"type": "Float32"}
+    assert "[clocks.sample]" in render_toml(data, comments)
+
+    data2, _ = infer(tmp_path / "filt.py")                     # FMI 2: no arrays
+    assert "weights" not in data2.get("parameters", {})

@@ -1,0 +1,3 @@
+linux = ["python3", "main.py"]
+macos = ["python3", "main.py"]
+windows = ["python", "main.py"]
