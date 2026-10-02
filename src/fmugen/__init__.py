@@ -1,8 +1,7 @@
-"""Generate UniFMU-style FMUs from plain Python models.
+"""Turn ordinary Python models into UniFMU (FMI 2.0 Co-Simulation) FMUs.
 
-A model module must define:
-    INPUTS     = {name: {"start": value, "unit": str?, "type": str?}, ...}
-    OUTPUTS    = {name: {"unit": str?, "type": str?}, ...}
-    PARAMETERS = {...}                 # optional, same shape as INPUTS
-    def step(**inputs) -> dict         # returns {output_name: value}
+The model code is not changed. A sidecar fmugen.toml (written by `fmugen init`, or
+inferred by `fmugen build model.py`) says which function or class to call and how
+its arguments, return value and attributes map to FMU variables.
+See README.md and docs/.
 """
