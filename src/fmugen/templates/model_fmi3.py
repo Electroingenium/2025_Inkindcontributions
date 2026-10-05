@@ -4,6 +4,7 @@ This file is identical for every model. It translates the FMI 3 calls forwarded 
 UniFMU's backend (backend.py) into the fmugen runtime engine (fmugen_runtime.py),
 which runs the user's unmodified code as described by interface.json.
 """
+import sys
 from pathlib import Path
 
 try:
@@ -11,7 +12,9 @@ try:
 except ImportError:  # imported from the fmugen package (build probe, tests)
     from fmugen.templates.fmugen_runtime import Engine, Status, fraction
 
-RESOURCES_DIR = Path(__file__).resolve().parent
+# Frozen with PyInstaller (fmugen build --compile), data files are in sys._MEIPASS;
+# with Nuitka, next to the compiled modules, as in a normal FMU.
+RESOURCES_DIR = Path(getattr(sys, "_MEIPASS", None) or Path(__file__).resolve().parent)
 
 
 class Model:
