@@ -105,6 +105,7 @@ See [docs/fmi.md](docs/fmi.md) for what each FMI call does, function by function
 
 | Page | Contents |
 |---|---|
+| [docs/manual.md](docs/manual.md) | **The manual**: every command option and every `fmugen.toml` key on one page, with recipes and troubleshooting |
 | [docs/models.md](docs/models.md) | Writing models: the supported shapes with examples, what `fmugen init` infers and what to check |
 | [docs/config.md](docs/config.md) | `fmugen.toml` reference: every key and its default |
 | [docs/tested-models.md](docs/tested-models.md) | The 20 published models fmugen was tried on (FMI 2 and FMI 3), what each needed, and the results |
@@ -125,7 +126,7 @@ uv run fmugen build MODEL -o OUTPUT [--fmi {2,3}] [--format fmu|folder] [--pytho
 - for `build`: a `fmugen.toml`, or a directory containing one
 - for both: `model.py`, `model.py:Name`, or `package.module:Name` for an installed module
 
-Details are in [docs/packaging.md](docs/packaging.md#cli).
+All options are in the [manual](docs/manual.md#4-commands).
 
 ---
 
