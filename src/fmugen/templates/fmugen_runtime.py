@@ -571,12 +571,16 @@ class Engine:
         return [value for _, value in bound]
 
     def _bound(self, kind, clock=None):
-        """{python name: value} of every variable bound to a constructor/call argument."""
-        return {
+        """{python name: value} of every variable bound to a constructor/call argument.
+
+        Variables bound to items (to = "arg:pair[0]", "arg:params[key]") are put together into
+        a tuple or dict argument.
+        """
+        return assemble_items({
             v["to"]["name"]: self._to_python(v, self.values[v["name"]])
             for v in self.variables
             if v.get("to", {}).get("kind") == kind and _clock_of(v) == clock
-        }
+        })
 
     def _apply_attributes(self, clock=None):
         """Write variables bound to attributes (to = "attr:...") or setter methods (to = "call:...")
@@ -710,13 +714,70 @@ def resolve_reference(ref):
     raise ImportError(f"cannot import {ref!r}")
 
 
+def split_item(name):
+    """'pair[0]' -> ('pair', 0); 'params[key]' -> ('params', 'key'); 'x' -> ('x', None)."""
+    if not name.endswith("]") or "[" not in name:
+        return name, None
+    base, _, key = name[:-1].partition("[")
+    key = key.strip().strip("'\"")
+    return base, int(key) if key.isdigit() else key
+
+
+def assemble_items(bound):
+    """Combine {"pair[0]": a, "pair[1]": b, "x": c} into {"pair": (a, b), "x": c}."""
+    result, items = {}, {}
+    for name, value in bound.items():
+        base, key = split_item(name)
+        if key is None:
+            result[name] = value
+        else:
+            items.setdefault(base, {})[key] = value
+    for base, parts in items.items():
+        if all(isinstance(k, int) for k in parts):
+            if sorted(parts) != list(range(len(parts))):
+                raise ValueError(f"{base}: tuple items must be numbered 0, 1, 2, ... without gaps")
+            result[base] = tuple(parts[i] for i in range(len(parts)))
+        else:
+            result[base] = parts
+    return result
+
+
 def resolve_constant(value):
     if isinstance(value, dict) and len(value) == 1:
         if "python" in value:
             return ast.literal_eval(value["python"])
         if "ref" in value:
             return resolve_reference(value["ref"])
+        if "call" in value:
+            return call_reference(value["call"])
     return value
+
+
+def parse_call_text(text):
+    """'module:function(arg, key=arg, ...)' -> (target, [arg nodes], {key: arg node}); no call is made."""
+    target, paren, rest = text.partition("(")
+    if not paren:
+        return target.strip(), [], {}
+    if not rest.rstrip().endswith(")"):
+        raise ValueError(f"{text!r}: missing ')'")
+    node = ast.parse(f"_({rest}", mode="eval").body
+    if any(k.arg is None for k in node.keywords) or any(isinstance(a, ast.Starred) for a in node.args):
+        raise ValueError(f"{text!r}: * and ** arguments are not supported")
+    return target.strip(), list(node.args), {k.arg: k.value for k in node.keywords}
+
+
+def call_reference(text):
+    """Call 'module:function(args)' and return the result. Arguments are Python literals or
+    dotted names of importable objects, e.g. load_from_hub(repo_id="sb3/x", filename="m.zip")."""
+    target, args, kwargs = parse_call_text(text)
+
+    def value(node):
+        try:
+            return ast.literal_eval(node)
+        except ValueError:
+            return resolve_reference(ast.unparse(node))
+
+    return resolve_reference(target)(*[value(a) for a in args], **{k: value(v) for k, v in kwargs.items()})
 
 
 def get_path(obj, path):

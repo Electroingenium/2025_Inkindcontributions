@@ -304,10 +304,17 @@ def _parse_starts(items):
         name, sep, text = item.partition("=")
         if not sep or not name.strip().isidentifier():
             raise InterfaceError(f"--start {item!r}: expected NAME=VALUE")
+        text = text.strip()
+        if text.startswith("call:"):   # a constant computed by a call, e.g. a downloaded file's path
+            starts[name.strip()] = {"call": text[len("call:"):]}
+            continue
+        if text.lower() in ("true", "false"):   # TOML spelling, as in fmugen.toml
+            starts[name.strip()] = text.lower() == "true"
+            continue
         try:
-            starts[name.strip()] = ast.literal_eval(text.strip())
+            starts[name.strip()] = ast.literal_eval(text)
         except (ValueError, SyntaxError):
-            starts[name.strip()] = text.strip()  # a bare word: a string
+            starts[name.strip()] = text  # a bare word: a string
     return starts
 
 

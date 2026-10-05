@@ -213,14 +213,22 @@ def normalize(config, entry_obj, module_name, sys_path, model_name=None, author=
     is_class = inspect.isclass(entry_obj) and model.get("kind") != "function"
     if not is_class and not callable(entry_obj):
         raise InterfaceError(f"{config.model['entry']} is neither a function nor a class")
+    # A function entry with a call method is a factory: called once with the parameters, like a
+    # constructor; `call` runs on what it returns (e.g. silero_vad:load_silero_vad, call = "__call__").
+    factory = not inspect.isclass(entry_obj) and isinstance(model.get("call"), str)
+    if factory and model.get("kind") == "function":
+        raise InterfaceError('[model] kind = "function" and call exclude each other for a function entry')
+    is_class = is_class or factory
     kind = "class" if is_class else "function"
     create = model.get("create")   # a classmethod that builds the object, e.g. "from_pretrained"
     if create is not None:
-        if not is_class:
+        if not is_class or factory:
             raise InterfaceError("[model] create only applies to classes")
         if not isinstance(create, str) or not callable(getattr(entry_obj, create, None)):
             raise InterfaceError(f"[model] create: {entry_obj.__name__} has no classmethod {create!r}")
         constructor = getattr(entry_obj, create)
+    elif factory:
+        constructor = entry_obj
     else:
         constructor = entry_obj.__init__ if is_class else None
 
@@ -232,6 +240,9 @@ def normalize(config, entry_obj, module_name, sys_path, model_name=None, author=
         call = None
         init_sig = _signature(constructor)
         call_sig = None
+    elif factory:
+        init_sig = _signature(constructor)
+        call_sig = None   # the method belongs to the object the factory returns, known only at runtime
     elif is_class:
         if call is None:
             if not any("__call__" in vars(k) for k in entry_obj.__mro__[:-1]):
@@ -258,6 +269,14 @@ def normalize(config, entry_obj, module_name, sys_path, model_name=None, author=
         check_arg(init_sig if is_class else call_sig, name, f"[model] constants.{name}")
     for name in call_constants:
         check_arg(call_sig, name, f"[model] call_constants.{name}")
+    for table, values in (("constants", constants), ("call_constants", call_constants)):
+        for name, value in values.items():
+            if isinstance(value, dict) and "call" in value:   # computed when the FMU initializes
+                from fmugen.templates.fmugen_runtime import parse_call_text
+                try:
+                    parse_call_text(str(value["call"]))
+                except (ValueError, SyntaxError) as e:
+                    raise InterfaceError(f"[model] {table}.{name}: {e}") from e
 
     time_args = config.data.get("time", {})
     for arg, source in time_args.items():
@@ -287,7 +306,8 @@ def normalize(config, entry_obj, module_name, sys_path, model_name=None, author=
             if to and to["kind"] in ("init", "arg"):
                 clock = (var.get("clocks") or [None])[0]
                 sig = init_sig if to["kind"] == "init" else (clock_sigs[clock] if clock else call_sig)
-                check_arg(sig, to["name"], f"[{section}] {name}")
+                from fmugen.templates.fmugen_runtime import split_item
+                check_arg(sig, split_item(to["name"])[0], f"[{section}] {name}")
             variables.append(var)
 
     if not variables:
@@ -348,6 +368,7 @@ def normalize(config, entry_obj, module_name, sys_path, model_name=None, author=
             "name": config.entry_name,
             "kind": kind,
             "create": create,
+            "factory": factory,
             "call": call if is_class and step_call else None,
             "step": step_call,
             "init_call": model.get("init_call", not is_class and step_call),
