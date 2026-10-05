@@ -131,7 +131,7 @@ See [docs/fmi.md](docs/fmi.md) for what each FMI call does, function by function
 ## CLI
 
 ```
-fmugen init MODEL [-o fmugen.toml] [--call METHOD] [--fmi {2,3}] [--start NAME=VALUE ...] [--setup CALL ...] [--kind function] [--force]
+fmugen init MODEL [-o fmugen.toml] [--call METHOD] [--fmi {2,3}] [--start NAME=VALUE ...] [--setup CALL ...] [--kind function] [--create CLASSMETHOD] [--force]
 fmugen build MODEL -o OUTPUT [--fmi {2,3}] [--format fmu|folder] [--name NAME] [--author AUTHOR] [--vendor [--platform TAG] [--python-version X.Y] | --compile {pyinstaller,nuitka}] [--capture-output]
 ```
 
