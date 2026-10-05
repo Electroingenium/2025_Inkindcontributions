@@ -26,7 +26,7 @@ For your own model:
    uv run fmugen init path/to/your_model.py
    ```
 
-2. Review the file. Check the start values, add units, and remove anything you don't want in the FMU.
+2. Review the file. Check the start values, add units, and remove anything you don't want in the FMU. If the model rejects zeros or needs a setup call first, rerun `init` with `--start NAME=VALUE` / `--setup CALL` (see [docs/models.md](docs/models.md#what-fmugen-init-infers)).
 3. Build:
 
    ```bash
@@ -72,6 +72,10 @@ uv run fmugen build examples/psychrometry/psychrometry.py -o out/quick.fmu --pyt
 | Code that needs the time or step size (`t`, `dt`) | The FMU passes its communication time / step size | [`examples/simple_pid`](examples/simple_pid) |
 | Several files, flat or package imports | Copied into the FMU with their layout | [`examples/rc_building`](examples/rc_building) |
 | A package from PyPI | Listed as a requirement, optionally vendored into the FMU | [`examples/simple_pid`](examples/simple_pid) |
+| A library that must be set up first (`SetUnitSystem(SI)`, `env.reset()`) | `[model] setup` calls run before the model is used | psychrolib, gymnasium ([tested models](docs/tested-models.md)) |
+| A C extension with positional-only arguments | `to = "pos:N"` bindings | CoolProp ([tested models](docs/tested-models.md)) |
+| Setter methods and properties (`lab.Q1(50)`, `lab.T1`) | `to = "call:Q1"` inputs; properties read like attributes | tclab ([tested models](docs/tested-models.md)) |
+| A class whose constructor does all the work | `kind = "function"`: constructed with the inputs every step | iapws ([tested models](docs/tested-models.md)) |
 | Matrices and vectors (lists, numpy), sized by constructor arguments | FMI 3 arrays and structural parameters | [`examples/kalman`](examples/kalman) |
 | A method that should run on events, not every step | FMI 3 clocks: periodic, triggered, or raised by the model | [`examples/sampled_pid`](examples/sampled_pid), [`examples/kalman`](examples/kalman) |
 
@@ -103,6 +107,7 @@ See [docs/fmi.md](docs/fmi.md) for what each FMI call does, function by function
 |---|---|
 | [docs/models.md](docs/models.md) | Writing models: the supported shapes with examples, what `fmugen init` infers and what to check |
 | [docs/config.md](docs/config.md) | `fmugen.toml` reference: every key and its default |
+| [docs/tested-models.md](docs/tested-models.md) | The 20 published models fmugen was tried on (FMI 2 and FMI 3), what each needed, and the results |
 | [docs/fmi.md](docs/fmi.md) | FMI 2 and FMI 3 behaviour: function-by-function support, initialization, steps, clocks, state, logging |
 | [docs/packaging.md](docs/packaging.md) | CLI, the generated FMU's layout, requirements and `--vendor`, the runtime Python, updating UniFMU |
 | [docker/Readme.md](docker/Readme.md) | Demo stack: the FMU in Docker, exchanging data over OPC UA, with a Streamlit dashboard |
@@ -112,7 +117,7 @@ See [docs/fmi.md](docs/fmi.md) for what each FMI call does, function by function
 ## CLI
 
 ```
-uv run fmugen init MODEL [-o fmugen.toml] [--call METHOD] [--fmi {2,3}] [--force]
+uv run fmugen init MODEL [-o fmugen.toml] [--call METHOD] [--fmi {2,3}] [--start NAME=VALUE ...] [--setup CALL ...] [--kind function] [--force]
 uv run fmugen build MODEL -o OUTPUT [--fmi {2,3}] [--format fmu|folder] [--python [PATH]] [--vendor] [--name NAME] [--author AUTHOR]
 ```
 

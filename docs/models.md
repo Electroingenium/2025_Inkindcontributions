@@ -2,7 +2,7 @@
 
 fmugen packages Python code **as it is**. Nothing in your model has to import fmugen, follow a naming convention, or declare its interface. All of that lives in `fmugen.toml` (see [config.md](config.md)), and `fmugen init` writes a first version of it for you.
 
-This page shows the shapes of code fmugen understands, how each maps onto an FMU, and what to check after `fmugen init`. Everything works for FMI 2 and FMI 3; the sections marked **FMI 3** need `[model] fmi_version = 3` (or `fmugen build --fmi 3`).
+This page shows the shapes of code fmugen understands, how each maps onto an FMU, and what to check after `fmugen init`. [tested-models.md](tested-models.md) lists the published models fmugen has been tried on, and what each needed. Everything works for FMI 2 and FMI 3; the sections marked **FMI 3** need `[model] fmi_version = 3` (or `fmugen build --fmi 3`).
 
 - [How a model runs inside the FMU](#how-a-model-runs-inside-the-fmu)
 - [A function](#a-function)
@@ -14,7 +14,10 @@ This page shows the shapes of code fmugen understands, how each maps onto an FMU
 - [Enumerations](#enumerations)
 - [Several files](#several-files)
 - [Models from PyPI](#models-from-pypi)
-- [Libraries that need setup, C extensions, constructors that do the work](#libraries-that-need-setup-c-extensions-constructors-that-do-the-work)
+- [Libraries that need setup first](#libraries-that-need-setup-first)
+- [Positional-only arguments](#positional-only-arguments)
+- [Setter methods and properties](#setter-methods-and-properties)
+- [Constructors that do the work](#constructors-that-do-the-work)
 - [Arrays and structural parameters (FMI 3)](#arrays-and-structural-parameters-fmi-3)
 - [Clocks (FMI 3)](#clocks-fmi-3)
 - [Stopping the simulation from the model (FMI 3)](#stopping-the-simulation-from-the-model-fmi-3)
@@ -255,36 +258,94 @@ requirements = ["simple-pid==2.0.1"]
 
 ---
 
-## Libraries that need setup, C extensions, constructors that do the work
+## Libraries that need setup first
 
-Three more shapes show up often in published libraries:
+Some libraries must be configured before their functions work: `psychrolib.SetUnitSystem(psychrolib.SI)`, or `env.reset()` before a gym environment can step. List those calls in `[model] setup`:
 
-- **Setup before use.** Some libraries need a call first: `psychrolib.SetUnitSystem(psychrolib.SI)`, or `env.reset()` for a gym environment. List those calls in `[model] setup`. A `"module:function(...)"` runs before the model is constructed; a bare `"method"` runs on the object right after construction:
+```toml
+[model]
+entry = "psychrolib:GetHumRatioFromRelHum"
+setup = ["psychrolib:SetUnitSystem(psychrolib.SI)"]
+```
 
-  ```toml
-  [model]
-  entry = "psychrolib:GetHumRatioFromRelHum"
-  setup = ["psychrolib:SetUnitSystem(psychrolib.SI)"]
-  ```
+```toml
+[model]
+entry = "gymnasium.envs.classic_control.cartpole:CartPoleEnv"
+call = "step"
+setup = ["reset"]
+```
 
-  ```toml
-  [model]
-  entry = "gymnasium.envs.classic_control.cartpole:CartPoleEnv"
-  call = "step"
-  setup = ["reset"]
-  ```
+A `"module:function(...)"` runs before the model is constructed; a bare `"method"` runs on the object right after construction. Arguments are Python literals or dotted names of importable objects (`psychrolib.SI`). The calls run every time the FMU initializes, so a reset FMU is set up again.
 
-- **Positional-only arguments** (common in C extensions, e.g. CoolProp's `PropsSI(output, name1, value1, name2, value2, fluid)`). Bind them by position with `to = "pos:N"`. If the signature can't be inspected at all, `fmugen init` says so and you write the variables by hand:
+---
 
-  ```toml
-  [inputs]
-  output = { start = "T", to = "pos:0" }
-  name1  = { start = "P", to = "pos:1" }
-  ```
+## Positional-only arguments
 
-- **Setter methods and properties** (hardware-style APIs such as `tclab.TCLabModel`: `lab.Q1(50)` sets the heater, `lab.T1` reads a sensor). Bind an input to a setter with `to = "call:Q1"`. Properties are read like attributes, and `fmugen init` lists readable properties as outputs.
+C extensions often accept arguments by position only, e.g. CoolProp's `PropsSI(output, name1, value1, name2, value2, fluid)`. Bind each one with `to = "pos:N"`:
 
-- **The constructor does the work** (e.g. `iapws.IAPWS97(T=400, P=1)` computes every property in `__init__`). `[model] kind = "function"` constructs the class with the inputs on every step and reads outputs from the new object.
+```toml
+[model]
+entry = "CoolProp.CoolProp:PropsSI"
+
+[inputs]
+output = { start = "T",      to = "pos:0" }
+name1  = { start = "P",      to = "pos:1" }
+value1 = { start = 101325.0, to = "pos:2" }
+name2  = { start = "Q",      to = "pos:3" }
+value2 = { start = 0.0,      to = "pos:4" }
+fluid  = { start = "Water",  to = "pos:5" }
+
+[outputs]
+value = { from = "return" }    # saturation temperature of water at 1 atm: 373.12 K
+```
+
+`fmugen init` binds positional-only arguments it can see this way. If a signature can't be inspected at all, as with `PropsSI`, `init` says so and you write the variables by hand.
+
+---
+
+## Setter methods and properties
+
+Hardware-style APIs often set inputs through methods and expose readings as properties. For example, `tclab.TCLabModel` sets the heater with `lab.Q1(50)` and reads a sensor with `lab.T1`. Bind an input to a setter method with `to = "call:<method>"`; read a property like any attribute:
+
+```toml
+[model]
+entry = "tclab:TCLabModel"
+call = "update"
+
+[model.constants]
+synced = false                  # don't wait for real time
+
+[time]
+t = "time"
+
+[inputs]
+Q1 = { start = 50.0, unit = "%", to = "call:Q1" }   # lab.Q1(value) before every step
+
+[outputs]
+T1 = { unit = "degC" }                               # the T1 property after every step
+```
+
+`fmugen init` lists readable properties as outputs.
+
+---
+
+## Constructors that do the work
+
+Some classes compute everything in `__init__`. For example, `iapws.IAPWS97(T=400, P=1)` is the water/steam state at those conditions, with every property as an attribute. `[model] kind = "function"` treats such a class like a function: it is constructed with the current inputs on every step, and outputs are read from the new object:
+
+```toml
+[model]
+entry = "iapws:IAPWS97"
+kind = "function"
+
+[inputs]
+T = { start = 400.0, unit = "K" }
+P = { start = 1.0, unit = "MPa" }     # passed to IAPWS97(**kwargs)
+
+[outputs]
+h   = { from = "return:h", unit = "kJ/kg" }
+rho = { from = "return:rho", unit = "kg/m3" }
+```
 
 ---
 
@@ -419,7 +480,13 @@ uv run fmugen init path/to/model.py[:Name] [--call METHOD] [--fmi 3] [--start NA
 
 It imports the module, picks the entry, makes one probe call with the start values, and writes a commented config.
 
-The probe only works if the model accepts the start values. Arguments without a default start at `0`, which many models reject (`Re=0`, `dim=0`, a time step of 0). Give realistic values with `--start` (repeatable; values are Python literals, lists for FMI 3 arrays). Run required calls with `--setup`, and use `--kind function` for constructors that do the work:
+The probe only works if the model accepts the start values. Arguments without a default start at `0`, which many models reject (`Re=0`, `dim=0`, a time step of 0). Three options help `init` get further:
+
+| Option | Use |
+|---|---|
+| `--start NAME=VALUE` | A realistic start/probe value (a Python literal; a list for an FMI 3 array). Repeatable. |
+| `--setup CALL` | A [setup call](#libraries-that-need-setup-first) to run before the probe; it is also written to the config. Repeatable. |
+| `--kind function` | For [constructors that do the work](#constructors-that-do-the-work). |
 
 ```bash
 uv run --with fluids fmugen init fluids.friction:friction_factor --start Re=1e5 -o -
@@ -429,8 +496,7 @@ uv run --with fluids fmugen init fluids.friction:friction_factor --start Re=1e5 
 uv run --with psychrolib fmugen init psychrolib:GetHumRatioFromRelHum --setup "psychrolib:SetUnitSystem(psychrolib.SI)" --start TDryBulb=25.0 --start RelHum=0.5 --start Pressure=101325.0 -o -
 ```
 
-A `--start` name that appears in both the constructor and the step method goes to the one without a default; on a tie, to the step method. Names neither declares are passed through `**kwargs` if one of them accepts it.
-
+A `--start` name that appears in both the constructor and the step method goes to the one without a default; on a tie, to the step method. Names that neither declares are passed through `**kwargs`, if one of them accepts it.
 
 | | Inferred from |
 |---|---|
@@ -443,12 +509,13 @@ A `--start` name that appears in both the constructor and the step method goes t
 | **States** | An input `x_prev` whose next value is returned or stored as `x_next` or `x` |
 | **Sources** | Local modules under the config's folder that the model imported |
 | **Constants** | Non-FMI defaults, written as commented-out examples |
-| **Positional-only arguments** | Bound with `to = "pos:N"` |
+| **Positional-only arguments** | Bound with [`to = "pos:N"`](#positional-only-arguments) |
 | **Arrays and Binary** (`--fmi 3`) | List, tuple and numpy defaults and results become `dimensions` (`numpy = true` for numpy inputs); `bytes` becomes Binary; numpy `float32` becomes Float32 |
 
 Check afterwards:
 
-- **Start values:** arguments without a default get `0.0`, so make sure the model is valid there.
+- **Start values:** arguments without a default get `0.0` unless you pass `--start`; make sure the model is valid there.
+- **States:** only inputs named `x_prev` are detected. A model that takes its own previous result under another name (Madgwick's `updateIMU(q, ...)` returning the new `q`) needs a `[states]` entry: `q = { dimensions = [4], start = [1.0, 0.0, 0.0, 0.0], next = "return" }`.
 - **Integer vs Real:** an `int` default (`setpoint=0`) gives an Integer. Write `0.0` for a Real.
 - **Units and descriptions:** add them; they can't be inferred.
 - **Outputs and locals:** remove the ones you don't need. Attributes that were 0 in the probe show up as Real.
