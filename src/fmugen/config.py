@@ -34,7 +34,7 @@ DEFAULT_START = {
 MODEL_DIR = "fmugen_model"   # the user's code, inside the FMU's resources/ folder
 
 # Module names already used by the UniFMU backend and fmugen in resources/
-RESERVED_MODULES = {"model", "backend", "main", "abstract_backend", "schemas", "fmugen_runtime"}
+RESERVED_MODULES = {"model", "backend", "main", "abstract_backend", "schemas", "fmugen_runtime", "fmugen_launch"}
 
 # Config section -> FMI causality, in valueReference order
 SECTIONS = {

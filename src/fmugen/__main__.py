@@ -5,6 +5,8 @@
     fmugen build path/to/model.py -o out/model.fmu           # same, with the config inferred in memory
     fmugen build path/to/fmugen.toml -o out/model --format folder
     fmugen build path/to/fmugen.toml -o out/model.fmu --fmi 3        # FMI 3.0 instead of 2.0
+    fmugen build path/to/fmugen.toml -o out/model.fmu --vendor       # runs on other machines with Python
+    fmugen build path/to/fmugen.toml -o out/model.fmu --compile pyinstaller   # ... without Python, no sources
 """
 import argparse
 import contextlib
@@ -20,6 +22,7 @@ from pathlib import Path
 
 from fmugen.config import MODEL_DIR, Config, InterfaceError, load_config, normalize
 from fmugen.description import write_model_description
+from fmugen.distribute import COMPILERS, compile_fmu, compiled_launch_command, vendor as vendor_wheels
 from fmugen.interface import infer_config, parse_target, render_toml
 from fmugen.templates import model_fmi2, model_fmi3
 from fmugen.templates.fmugen_runtime import Status, setup_sys_path
@@ -28,11 +31,13 @@ PACKAGE_DIR = Path(__file__).resolve().parent
 TEMPLATES_DIR = PACKAGE_DIR / "templates"
 ADAPTERS = {2: TEMPLATES_DIR / "model_fmi2.py", 3: TEMPLATES_DIR / "model_fmi3.py"}
 RUNTIME = TEMPLATES_DIR / "fmugen_runtime.py"
+LAUNCHER = TEMPLATES_DIR / "fmugen_launch.py"
 IGNORE = shutil.ignore_patterns("__pycache__", "*.pyc", "venv", ".venv")
 FORMATS = ("fmu", "folder")
 
-# The FMU runs with the Python fmugen is installed in: the model's own virtual environment,
-# which has the model's packages and (as fmugen's dependencies) the UniFMU backend's.
+# By default the FMU runs with the Python fmugen is installed in: the model's own virtual
+# environment, which has the model's packages and (as fmugen's dependencies) the UniFMU
+# backend's. --vendor and --compile make FMUs for other machines (see distribute.py).
 OSES = ("linux", "macos", "windows")
 DEFAULT_PYTHON = {"linux": "python3", "macos": "python3", "windows": "python"}
 CURRENT_OS = {"win32": "windows", "darwin": "macos"}.get(sys.platform, "linux")
@@ -78,11 +83,21 @@ def generate_boilerplate(fmi_version, dest):
                              f"{result.stdout}{result.stderr}")
 
 
-def _write_launch_toml(resources_dir):
-    """Run the backend with this interpreter on this OS (other OSes keep UniFMU's defaults)."""
-    pythons = {**DEFAULT_PYTHON, CURRENT_OS: sys.executable}
+def _write_launch_toml(resources_dir, mode=None):
+    """How UniFMU starts the backend on each OS.
+
+    mode None: this interpreter on this OS (other OSes keep UniFMU's defaults);
+    "vendor": the system Python runs fmugen_launch.py; "compile": the frozen executable.
+    """
+    if mode == "compile":
+        commands = {system: compiled_launch_command(system) for system in OSES}
+    elif mode == "vendor":
+        commands = {system: [DEFAULT_PYTHON[system], "fmugen_launch.py"] for system in OSES}
+    else:
+        pythons = {**DEFAULT_PYTHON, CURRENT_OS: sys.executable}
+        commands = {system: [pythons[system], "main.py"] for system in OSES}
     (resources_dir / "launch.toml").write_text(
-        "".join(f'{system} = [{json.dumps(pythons[system])}, "main.py"]\n' for system in OSES)
+        "".join(f"{system} = {json.dumps(commands[system])}\n" for system in OSES)
     )
 
 
@@ -182,7 +197,16 @@ def _probe(resources, interface):
     return True
 
 
-def build(target, output, model_name=None, author=None, output_format="fmu", call=None, fmi_version=None):
+def build(target, output, model_name=None, author=None, output_format="fmu", call=None, fmi_version=None,
+          vendor=False, platforms=(), python_versions=(), compiler=None):
+    """Build an FMU. `vendor` (with `platforms`/`python_versions`) or `compiler` ("pyinstaller"
+    or "nuitka") make it run on other machines; see distribute.py."""
+    if vendor and compiler:
+        raise InterfaceError("--vendor and --compile exclude each other: a compiled FMU already contains its packages")
+    if (platforms or python_versions) and not vendor:
+        raise InterfaceError("--platform and --python-version only apply with --vendor")
+    if compiler is not None and compiler not in COMPILERS:
+        raise InterfaceError(f"unknown compiler {compiler!r}, expected one of {sorted(COMPILERS)}")
     if output_format not in FORMATS:
         raise ValueError(f"unknown output format {output_format!r}, expected one of {FORMATS}")
     output = Path(output)
@@ -226,7 +250,13 @@ def build(target, output, model_name=None, author=None, output_format="fmu", cal
         write_interface(interface, resources / "interface.json")
 
         write_model_description(interface, fmu_dir / "modelDescription.xml")
-        _write_launch_toml(resources)
+        if vendor:
+            shutil.copy2(LAUNCHER, resources / "fmugen_launch.py")
+            vendor_wheels([*BACKEND_REQUIREMENTS, *config.requirements], resources / "wheels",
+                          platforms, python_versions)
+        if compiler:
+            compile_fmu(compiler, resources, interface, Path(tmp) / "compile")
+        _write_launch_toml(resources, "vendor" if vendor else "compile" if compiler else None)
 
         output.parent.mkdir(parents=True, exist_ok=True)
         if output_format == "fmu":
@@ -310,6 +340,17 @@ def main(argv=None):
     b.add_argument("--name", help="modelName in modelDescription.xml (default: [model] name, else the entry name)")
     b.add_argument("--author", default=None, help="author in modelDescription.xml (default: [model] author)")
     b.add_argument("--call", help="method run on each step when MODEL is a .py file with a class")
+    b.add_argument("--vendor", action="store_true",
+                   help="put wheels of every requirement into the FMU; it installs them offline on its first "
+                        "run on a machine (the target needs Python, not this environment)")
+    b.add_argument("--platform", action="append", default=[], metavar="TAG",
+                   help="with --vendor: also vendor wheels for this platform, e.g. win_amd64, "
+                        "manylinux2014_x86_64, macosx_11_0_arm64; repeatable (default: this machine)")
+    b.add_argument("--python-version", action="append", default=[], metavar="X.Y",
+                   help="with --vendor: vendor wheels for this Python version; repeatable (default: this one)")
+    b.add_argument("--compile", choices=sorted(COMPILERS),
+                   help="freeze the model, its packages and Python into an executable: the FMU contains no "
+                        "source code and needs no Python, but only runs on this OS")
     b.add_argument("--fmi", type=int, choices=(2, 3), help="FMI version (default: [model] fmi_version, else 2)")
 
     args = parser.parse_args(argv)
@@ -321,7 +362,8 @@ def main(argv=None):
                 print(f"Wrote {output.resolve()}; review it, then run: fmugen build {output}")
             return
         output, interface = build(args.model, args.output, args.name, args.author,
-                                  args.format, args.call, args.fmi)
+                                  args.format, args.call, args.fmi, args.vendor, args.platform,
+                                  args.python_version, args.compile)
     except (FileExistsError, InterfaceError) as e:
         parser.exit(2, f"fmugen: error: {e}\n")
 

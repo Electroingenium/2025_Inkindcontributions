@@ -4,6 +4,7 @@
 - [What `fmugen build` does](#what-fmugen-build-does)
 - [Generated FMU layout](#generated-fmu-layout)
 - [The FMU's Python environment](#the-fmus-python-environment)
+- [FMUs for other machines](#fmus-for-other-machines)
 - [Simulating](#simulating)
 - [Project layout](#project-layout)
 - [UniFMU version](#unifmu-version)
@@ -48,6 +49,10 @@ fmugen build MODEL -o OUTPUT [options]
 | `--name` | `modelName` in `modelDescription.xml`; overrides `[model] name`. |
 | `--author` | `author` in `modelDescription.xml`; overrides `[model] author`. |
 | `--call` | Like `init --call`, when `MODEL` is a `.py` file with a class. |
+| `--vendor` | Put wheels of every requirement into the FMU; it installs them offline on its first run. See [FMUs for other machines](#fmus-for-other-machines). |
+| `--platform TAG` | With `--vendor`: also vendor wheels for this platform. Repeatable. |
+| `--python-version X.Y` | With `--vendor`: vendor wheels for this Python version. Repeatable. |
+| `--compile {pyinstaller,nuitka}` | Freeze everything into an executable: no sources in the FMU, no Python needed, this OS only. |
 
 ---
 
@@ -80,7 +85,10 @@ model.fmu
     ├── interface.json                   # variables, value references, bindings
     ├── fmugen_model/                    # your files, unchanged
     │   └── ...
+    └── fmugen_launch.py, wheels/        # only with --vendor
 ```
+
+With `--compile`, `resources/` holds only `launch.toml` and `dist/main/`, the frozen executable that contains all of the above.
 
 Your code is never rewritten.
 
@@ -104,6 +112,64 @@ That environment has everything the FMU needs:
 - `protobuf==5.27.3` and `pyzmq`, the UniFMU backend's packages, installed as fmugen's dependencies
 
 The FMU therefore runs on the machine where it was built, as long as that environment exists and keeps those packages. `resources/requirements.txt` records what it must contain: the backend's packages and `[model] requirements`.
+
+---
+
+## FMUs for other machines
+
+An FMU built by default points at your virtual environment, so it doesn't run anywhere else. Two options make FMUs to hand to someone else:
+
+| | `--vendor` | `--compile pyinstaller` / `--compile nuitka` |
+|---|---|---|
+| **The target needs** | a Python interpreter (`python3` on Linux and macOS, `python` on Windows) | nothing |
+| **Source code in the FMU** | yes, readable | no |
+| **Runs on** | every platform and Python version whose wheels were vendored | only the OS (and CPU architecture) it was built on |
+| **First run on a machine** | installs the wheels into a cached environment, offline | starts immediately |
+| **Size** | the wheels | the interpreter and every package, typically 20–100 MB |
+
+### `--vendor`
+
+`fmugen build --vendor` puts wheels of the backend's packages and `[model] requirements`, with their dependencies, into `resources/wheels/`. `launch.toml` then runs `fmugen_launch.py` with the system Python:
+
+```toml
+linux = ["python3", "fmugen_launch.py"]
+macos = ["python3", "fmugen_launch.py"]
+windows = ["python", "fmugen_launch.py"]
+```
+
+On the FMU's first run on a machine, `fmugen_launch.py` creates a virtual environment, installs the wheels into it without a network connection (`--no-index`), and caches it. Then it starts UniFMU's `main.py` with that environment. Later runs, and other FMUs with the same wheels, reuse it. The cache is in `FMUGEN_ENV_DIR` if set, else `%LOCALAPPDATA%\fmugen\envs` (Windows), `~/Library/Caches/fmugen/envs` (macOS) or `~/.cache/fmugen/envs` (Linux). FMU instances starting at the same time are safe.
+
+`[model] requirements` must list every package the model needs from PyPI: only those are vendored, not everything in your environment.
+
+By default, wheels are made for this machine and Python (`pip wheel`; packages published only as source are built here). For other targets, list them. Only published wheels can be used for those:
+
+```bash
+fmugen build examples/simple_pid -o out/pid.fmu --vendor --platform win_amd64 --platform manylinux2014_x86_64 --platform macosx_11_0_arm64 --python-version 3.11 --python-version 3.12 --python-version 3.13
+```
+
+Vendoring uses the environment's `pip`, or `uvx pip` when the environment has none (uv venvs).
+
+### `--compile`
+
+`fmugen build --compile pyinstaller` (or `nuitka`) freezes UniFMU's backend, fmugen's adapter and runtime, your model and every package it imports, together with the Python interpreter, into `resources/dist/main/`. All `.py` files, `fmugen_model/`, `interface.json` and `requirements.txt` are removed from the FMU; `resources/` keeps only `dist/` and `launch.toml`:
+
+```toml
+linux = ["sh", "-c", "chmod +x dist/main/main && ./dist/main/main"]
+macos = ["sh", "-c", "chmod +x dist/main/main && ./dist/main/main"]
+windows = ["powershell", "-command", "./dist/main/main.exe"]
+```
+
+Install the compiler in your environment first: `pip install fmugen[pyinstaller]` or `pip install fmugen[nuitka]`.
+
+| | PyInstaller | Nuitka |
+|---|---|---|
+| **How the code ships** | Python bytecode inside the bundle | compiled to C, then machine code |
+| **Hiding the source** | light: bytecode can be decompiled to readable Python | strong: as hard to reverse as other compiled FMUs |
+| **Build time** | about a minute | several minutes or more; needs a C compiler (on Windows, Nuitka downloads one) |
+
+Neither can cross-compile: the executable runs only on the OS and CPU architecture of the machine that built it. To ship for several OSes, build on each one.
+
+fmugen tells the compiler about the modules the runtime imports by name (the model's entry, `setup` calls, enums, references in constants, clock calls) and bundles the model's non-Python files next to its modules. A package that imports parts of itself dynamically may still be missed; the build's error, or the FMU's log, then names the missing module.
 
 ---
 
@@ -143,6 +209,8 @@ In the GUI, open the `.fmu`, set start values, press play, and tick outputs to p
 | `src/fmugen/templates/fmugen_runtime.py` | The engine copied into every FMU: runs the user's code, values, clocks, state |
 | `src/fmugen/templates/model_fmi2.py`, `model_fmi3.py` | The adapters copied into the FMU as `resources/model.py`: FMI calls → engine |
 | `src/fmugen/__main__.py` | CLI, packaging, build probe, UniFMU version check |
+| `src/fmugen/distribute.py` | `--vendor` and `--compile` |
+| `src/fmugen/templates/fmugen_launch.py` | The launcher of vendored FMUs: offline install into a cached environment |
 | `examples/` | Example models with their `fmugen.toml` |
 | `tests/` | `uv run pytest` |
 | `docker/` | FMU + OPC UA + Streamlit demo stack (see [docker/Readme.md](../docker/Readme.md)) |
