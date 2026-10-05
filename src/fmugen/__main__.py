@@ -228,6 +228,7 @@ def init(target, output=None, call=None, force=False, fmi_version=None, starts=N
     if to_stdout:
         sys.stdout.write(text)
         return None, data
+    output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(text, encoding="utf-8")
     return output, data
 
@@ -269,7 +270,7 @@ def main(argv=None):
                    help="function: treat a class whose constructor does the work as a function called every step")
 
     b = sub.add_parser("build", help="build a UniFMU from a fmugen.toml or a model file",
-                       description="Build an FMI 2.0 Co-Simulation FMU. MODEL is a fmugen.toml, a directory "
+                       description="Build an FMI 2.0 or 3.0 Co-Simulation FMU. MODEL is a fmugen.toml, a directory "
                                    "containing one, or a model file whose config is inferred in memory. "
                                    "See docs/config.md and docs/packaging.md.")
     b.add_argument("model", help="fmugen.toml, a directory containing one, or model.py[:Name]")
