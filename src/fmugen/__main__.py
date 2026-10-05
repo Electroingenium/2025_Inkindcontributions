@@ -120,8 +120,9 @@ def isolated_imports():
         added = [Path(p).resolve() for p in sys.path if p and p not in saved_path]
         sys.path[:] = saved_path
         for name in set(sys.modules) - saved_modules:
-            module = sys.modules[name]
-            locations = [getattr(module, "__file__", None), *(getattr(module, "__path__", None) or [])]
+            # Read __dict__, not getattr: lazy modules (e.g. transformers) import on attribute access
+            attrs = getattr(sys.modules[name], "__dict__", {})
+            locations = [attrs.get("__file__"), *(attrs.get("__path__") or [])]
             if any(loc and Path(loc).resolve().is_relative_to(p) for loc in locations for p in added):
                 del sys.modules[name]
 
@@ -273,7 +274,8 @@ def build(target, output, model_name=None, author=None, output_format="fmu", cal
     return output, interface
 
 
-def init(target, output=None, call=None, force=False, fmi_version=None, starts=None, setup=None, kind=None):
+def init(target, output=None, call=None, force=False, fmi_version=None, starts=None, setup=None, kind=None,
+         create=None):
     """Write the inferred config to `output` (default: fmugen.toml next to the model; "-": stdout)."""
     model_path, _, _ = parse_target(target)
     default_dir = model_path.parent if model_path else Path.cwd()
@@ -283,7 +285,7 @@ def init(target, output=None, call=None, force=False, fmi_version=None, starts=N
         raise FileExistsError(f"{output} already exists; pass --force to overwrite it, or -o - to print it")
     with isolated_imports():
         data, comments = infer_config(target, call=call, config_dir=output.parent, fmi_version=fmi_version,
-                                      starts=starts, setup=setup, kind=kind)
+                                      starts=starts, setup=setup, kind=kind, create=create)
     text = render_toml(data, comments)
     if to_stdout:
         sys.stdout.write(text)
@@ -326,6 +328,9 @@ def main(argv=None):
     i.add_argument("--setup", action="append", default=[], metavar="CALL",
                    help="run before the model is used, e.g. 'psychrolib:SetUnitSystem(psychrolib.SI)' "
                         "or 'reset' (a method, after construction); repeatable")
+    i.add_argument("--create", metavar="CLASSMETHOD",
+                   help="classes built by a factory: the classmethod that creates the object, "
+                        "e.g. from_pretrained; its arguments become parameters")
     i.add_argument("--kind", choices=("function",),
                    help="function: treat a class whose constructor does the work as a function called every step")
 
@@ -357,7 +362,7 @@ def main(argv=None):
     try:
         if args.command == "init":
             output, data = init(args.model, args.output, args.call, args.force, args.fmi,
-                                _parse_starts(args.start), args.setup, args.kind)
+                                _parse_starts(args.start), args.setup, args.kind, args.create)
             if output:
                 print(f"Wrote {output.resolve()}; review it, then run: fmugen build {output}")
             return

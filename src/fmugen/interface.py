@@ -49,12 +49,14 @@ def parse_target(target):
     return None, path, name
 
 
-def infer_config(target, call=None, config_dir=None, fmi_version=None, starts=None, setup=None, kind=None):
+def infer_config(target, call=None, config_dir=None, fmi_version=None, starts=None, setup=None, kind=None,
+                 create=None):
     """Return (config dict, {(section, name): comment}) for a model target.
 
     With fmi_version=3, list/tuple/numpy values become array variables and bytes become Binary.
     `starts` ({argument: value}) gives probe/start values for arguments, e.g. ones without a
     default; `setup` (list of "module:function(args)" / "method") is run before the probe.
+    `create` names a classmethod that builds the object (e.g. "from_pretrained").
     """
     arrays = fmi_version == 3
     starts = dict(starts or {})
@@ -85,10 +87,10 @@ def infer_config(target, call=None, config_dir=None, fmi_version=None, starts=No
         data["model"]["kind"] = "function"
     comments = {}
     if inspect.isclass(entry) and kind != "function":
-        _infer_class(entry, call, data, comments, arrays, starts)
+        _infer_class(entry, call, data, comments, arrays, starts, create)
     else:
-        if call:
-            raise InterfaceError("--call only applies to classes")
+        if call or create:
+            raise InterfaceError("--call and --create only apply to classes")
         _infer_function(entry, data, comments, arrays, starts)
     unused = set(starts) - {n for sec in ("parameters", "inputs", "states") for n in data.get(sec, {})}
     if unused:
@@ -117,7 +119,7 @@ def _local_sources(entry_file, config_dir):
     """
     sources = set()
     for module in list(sys.modules.values()):
-        file = getattr(module, "__file__", None)
+        file = getattr(module, "__dict__", {}).get("__file__")  # no getattr: lazy modules import on access
         if not file:
             continue
         file = Path(file).resolve()
@@ -170,10 +172,15 @@ def _infer_function(fn, data, comments, arrays=False, starts=None):
 
 # ---------------- classes ----------------
 
-def _infer_class(cls, call, data, comments, arrays=False, starts=None):
+def _infer_class(cls, call, data, comments, arrays=False, starts=None, create=None):
     method_name = call or _pick_method(cls)
-    init_starts, call_starts = _assign_starts(cls.__init__, getattr(cls, method_name, None), starts or {})
-    _arguments(cls.__init__, "parameters", data, comments, skip_self=True, allow_time=False, arrays=arrays,
+    if create:
+        if not callable(getattr(cls, create, None)):
+            raise InterfaceError(f"{cls.__name__} has no classmethod {create!r}")
+        data["model"]["create"] = create
+    constructor = getattr(cls, create) if create else cls.__init__   # a bound classmethod has no cls argument
+    init_starts, call_starts = _assign_starts(constructor, getattr(cls, method_name, None), starts or {})
+    _arguments(constructor, "parameters", data, comments, skip_self=not create, allow_time=False, arrays=arrays,
                starts=init_starts, positional=False)
 
     if method_name != "__call__" or call:
@@ -184,7 +191,7 @@ def _infer_class(cls, call, data, comments, arrays=False, starts=None):
 
     try:
         _run_setup(data)
-        obj = cls(**_probe_args(data, ("parameters",))[1])
+        obj = (getattr(cls, create) if create else cls)(**_probe_args(data, ("parameters",))[1])
         _run_setup(data, obj)
     except Exception as e:
         comments[("outputs", None)] = f"probe construction failed ({e!r}); add the outputs by hand"
@@ -329,6 +336,13 @@ def _arguments(fn, section, data, comments, skip_self=False, allow_time=True, co
             variables[p.name] = _array_info(default, with_start=True)
         else:
             comments[("model", f"{constants_key}.{p.name}")] = _constant(default)
+        if len(variables) > before and "dimensions" in variables[p.name]:
+            converter = _converter(p.annotation)
+            if converter == "numpy":
+                variables[p.name]["numpy"] = True
+            elif converter:
+                variables[p.name]["convert"] = converter
+                comments.setdefault((section, p.name), f"passed as {converter.replace(':', '.')}(...)")
         if p.kind is p.POSITIONAL_ONLY and len(variables) > before:
             variables[p.name]["to"] = f"pos:{position}"
             position += 1
@@ -349,6 +363,18 @@ def _arguments(fn, section, data, comments, skip_self=False, allow_time=True, co
         data["time"] = time_args
     if not variables:
         data.pop(section)
+
+
+ARRAY_CONVERTERS = {"torch.Tensor": "torch:tensor", "ndarray": "numpy", "jax.Array": "jax.numpy:asarray",
+                    "tf.Tensor": "tensorflow:constant"}
+
+
+def _converter(annotation):
+    """How an array argument must be passed, from its annotation: "numpy", "module:function", or None."""
+    if annotation is inspect.Parameter.empty:
+        return None
+    text = annotation if isinstance(annotation, str) else repr(annotation)
+    return next((conv for name, conv in ARRAY_CONVERTERS.items() if name in text), None)
 
 
 def _type_info(value, annotation=inspect.Parameter.empty):
@@ -405,6 +431,8 @@ def _probe_kwargs(data, sections):
                 kwargs[name] = bytes.fromhex(info["start"])
             else:
                 kwargs[name] = info.get("start", 0.0)
+            if info.get("convert"):
+                kwargs[name] = resolve_reference(info["convert"])(kwargs[name])
     return kwargs
 
 
@@ -418,7 +446,7 @@ def _typed(info, value, arrays=False):
         info["type"] = "Binary"
     elif arrays and _array_info(value):
         # numpy = true only matters for values passed *into* the model
-        info.update({k: v for k, v in _array_info(value).items() if k != "numpy"})
+        info.update({k: v for k, v in _array_info(value).items() if k not in ("numpy", "convert")})
     elif type(value).__name__ == "float32":
         info["type"] = "Float32" if arrays else "Real"
     elif isinstance(value, enum.Enum):
@@ -529,11 +557,17 @@ def _fmi_value(value, arrays=False):
 def _array_info(value, with_start=False):
     """{dimensions, type?, numpy?, start?} for a rectangular list/tuple/numpy array of numbers, else None."""
     if hasattr(value, "shape") and hasattr(value, "tolist") and getattr(value, "ndim", 0) > 0:
-        shape, flat = list(value.shape), value.ravel().tolist()
-        fmi_type = NUMPY_TYPES.get(str(value.dtype))
+        from fmugen.templates.fmugen_runtime import flatten
+        shape, flat = [int(n) for n in value.shape], flatten(value.tolist())
+        fmi_type = NUMPY_TYPES.get(str(value.dtype).rpartition(".")[2])   # "float32", "torch.float32", ...
         if fmi_type is None:
             return None
-        info = {"dimensions": shape, "numpy": True}
+        info = {"dimensions": shape}
+        library = type(value).__module__.split(".")[0]
+        if library == "numpy":
+            info["numpy"] = True
+        elif library == "torch":
+            info["convert"] = "torch:tensor"
     elif isinstance(value, (list, tuple)) and value:
         shape = _shape(value)
         if shape is None:

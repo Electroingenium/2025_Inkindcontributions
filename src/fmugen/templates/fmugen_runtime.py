@@ -74,6 +74,7 @@ class Engine:
         }
         self.constants = {k: resolve_constant(v) for k, v in self.interface.get("constants", {}).items()}
         self.call_constants = {k: resolve_constant(v) for k, v in self.interface.get("call_constants", {}).items()}
+        self.converters = {v["name"]: resolve_reference(v["convert"]) for v in self.variables if v.get("convert")}
         self.reset()
 
     # ================= life cycle =================
@@ -115,7 +116,8 @@ class Engine:
             if self.is_class:
                 kwargs = dict(self.constants)
                 kwargs.update(self._bound("init"))
-                self.obj = self.entry(**kwargs)
+                create = self.interface["entry"].get("create")
+                self.obj = (getattr(self.entry, create) if create else self.entry)(**kwargs)
                 self._run_setup(after_construction=True)
                 self._apply_attributes(clock=None)
                 for name in self.clocks:
@@ -494,6 +496,11 @@ class Engine:
             root.removeHandler(handler)
 
     def _to_python(self, var, value):
+        value = self._to_python_value(var, value)
+        converter = self.converters.get(var["name"])
+        return converter(value) if converter is not None else value
+
+    def _to_python_value(self, var, value):
         enum = self.enums.get(var.get("declared_type"))
         if var.get("dimensions"):
             if enum is not None:
