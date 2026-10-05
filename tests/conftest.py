@@ -63,7 +63,7 @@ def make_fmu(tmp_path):
 
     def make(target, **kwargs):
         out = tmp_path / f"fmu{next(counter)}"
-        build(target, out, output_format="folder", python_exec=sys.executable, **kwargs)
+        build(target, out, output_format="folder", **kwargs)
         return out
     return make
 

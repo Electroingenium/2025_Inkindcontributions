@@ -72,7 +72,7 @@ fmi2Instantiate ─► [set parameters, inputs, state starts] ─► fmi2SetupEx
 
 | FMI call | What the adapter does |
 |---|---|
-| `fmi2Instantiate` | Adds the model's directories (and `resources/site`) to `sys.path`, imports the entry, and sets every variable to its start value. A class is **not** constructed yet, because parameters may still change. |
+| `fmi2Instantiate` | Adds the model's directories to `sys.path`, imports the entry, and sets every variable to its start value. A class is **not** constructed yet, because parameters may still change. |
 | `fmi2SetupExperiment(start, stop, tol)` | Stores them; the FMU's time becomes `start`. |
 | `fmi2EnterInitializationMode` | Nothing to do. |
 | `fmi2ExitInitializationMode` | **Class:** constructs the object with the parameters and `[model.constants]`, then writes `attr:`-bound variables onto it. **Function** (or `init_call = true`): calls the model once at the start time to compute initial outputs. States are not advanced. Then reads outputs, locals and calculated parameters; attributes that don't exist yet keep their start values. |
@@ -204,7 +204,7 @@ Any exception raised by your code makes the call return an error status. The tra
 
 | Attribute | Value |
 |---|---|
-| `needsExecutionTool` | `true`: a Python interpreter is needed (see [packaging.md](packaging.md#runtime-python)) |
+| `needsExecutionTool` | `true`: a Python interpreter is needed (see [packaging.md](packaging.md#the-fmus-python-environment)) |
 | `canHandleVariableCommunicationStepSize` | `true`, or `false` with `[experiment] fixed_step` |
 | `canGetAndSetFMUstate`/`FMUState`, `canSerializeFMUstate`/`FMUState` | from the build probe |
 | `canNotUseMemoryManagementFunctions` (FMI 2) | `true` |

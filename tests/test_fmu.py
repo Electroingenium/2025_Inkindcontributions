@@ -17,7 +17,7 @@ EXAMPLE_NAMES = ["psychrometry", "simple_pid", "rc_building"]
 def fmus(tmp_path_factory):
     out = tmp_path_factory.mktemp("fmus")
     return {
-        name: build(EXAMPLES / name, out / f"{name}.fmu", python_exec=sys.executable)[0]
+        name: build(EXAMPLES / name, out / f"{name}.fmu")[0]
         for name in EXAMPLE_NAMES
     }
 

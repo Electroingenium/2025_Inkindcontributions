@@ -212,7 +212,7 @@ def test_fmi3_only_features_are_rejected_for_fmi2(tmp_path):
 @pytest.fixture(scope="module")
 def fmus(tmp_path_factory):
     out = tmp_path_factory.mktemp("fmus3")
-    return {name: build(EXAMPLES / name, out / f"{name}.fmu", python_exec=sys.executable, fmi_version=3)[0]
+    return {name: build(EXAMPLES / name, out / f"{name}.fmu", fmi_version=3)[0]
             for name in ("sampled_pid", "kalman", "simple_pid")}
 
 
@@ -315,7 +315,7 @@ interval = 2.0
 [outputs]
 {outputs}
 ''')
-    out = build(tmp_path, tmp_path / "echo.fmu", python_exec=sys.executable)[0]
+    out = build(tmp_path, tmp_path / "echo.fmu")[0]
     assert validate_fmu(str(out)) == []
     unzipdir = tmp_path / "echo"
     shutil.unpack_archive(out, unzipdir, "zip")
@@ -372,7 +372,7 @@ def test_fmi2_examples_build_as_fmi3_with_the_same_results(tmp_path, name):
     kwargs = dict(stop_time=7200 if name == "rc_building" else 1.0, output_interval=3600 if name == "rc_building" else 0.1)
     results = {}
     for version in (2, 3):
-        out = build(EXAMPLES / name, tmp_path / f"{name}{version}.fmu", python_exec=sys.executable, fmi_version=version)[0]
+        out = build(EXAMPLES / name, tmp_path / f"{name}{version}.fmu", fmi_version=version)[0]
         assert validate_fmu(str(out)) == []
         results[version] = simulate_fmu(str(out), **kwargs)
     assert results[2].dtype.names == results[3].dtype.names

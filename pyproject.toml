@@ -1,19 +1,26 @@
 [project]
-name = "2025-inkindcontributions"
+name = "fmugen"
 version = "0.1.0"
-description = "Add your description here"
+description = "Turn ordinary Python models into FMI 2.0 / 3.0 Co-Simulation FMUs (UniFMU), without changing their code"
 readme = "README.md"
 requires-python = ">=3.13"
+authors = [{ name = "Tomas Robino" }]
+keywords = ["fmi", "fmu", "co-simulation", "unifmu", "simulation", "digital twin", "modelica"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Software Development :: Code Generators",
+]
+# The FMU runs with the Python fmugen is installed in (the model's virtual environment),
+# so that environment needs what UniFMU 0.14's Python backend imports.
 dependencies = [
-    "colorama>=0.4.6",
-    "coloredlogs>=15.0.1",
-    "fmpy>=0.3.32",
-    "plotly>=7.1.0",
     "protobuf==5.27.3",
-    "pyside6>=6.11.2",
     "pyzmq>=27.2.0",
-    "toml>=0.10.2",
-    "typing-extensions>=4.16.0",
 ]
 
 [project.scripts]
@@ -28,7 +35,10 @@ packages = ["src/fmugen"]
 
 [dependency-groups]
 dev = [
-    "filterpy==1.4.5",
     "pytest>=9.1.1",
+    # tests validate and simulate the FMUs with FMPy
+    "fmpy>=0.3.32",
+    # example models
+    "filterpy==1.4.5",
     "simple-pid==2.0.1",
 ]

@@ -10,7 +10,7 @@ kf.update(z)                    # whenever a measurement arrives
 kf.x, kf.P                      # estimate and covariance
 ```
 
-- **Source:** `filterpy==1.4.5` from PyPI. MIT License, © 2015 Roger R. Labbe Jr. There is no copy in this repository. FilterPy needs numpy and scipy, so it isn't vendored here; install it in the runtime Python. In this project, `uv sync` installs it as a dev dependency.
+- **Source:** `filterpy==1.4.5` from PyPI. MIT License, © 2015 Roger R. Labbe Jr. There is no copy in this repository. It must be installed in the environment fmugen runs in; in this repository, `uv sync` installs it as a dev dependency.
 - **What the config shows:**
   - **Structural parameters:** `dim_x` and `dim_z` are the constructor's sizes, as `UInt64` structural parameters. An importer can change them in configuration mode.
   - **Arrays:** `F`, `H`, `Q` and `R` are parameters with `dimensions = ["dim_x", "dim_x"]` and so on. They are passed as numpy arrays (`numpy = true`) and written onto the filter (`to = "attr:F"`). The outputs `x` (2 values) and `P` (2×2) are read from the filter's attributes.
@@ -20,11 +20,11 @@ kf.x, kf.P                      # estimate and covariance
 Build, validate, and run it with the small importer in `run.py`. It steps every 0.1 s and ticks `measurement` every 0.3 s with a noisy position:
 
 ```bash
-uv run fmugen build examples/kalman -o out/kalman.fmu --python
+fmugen build examples/kalman -o out/kalman.fmu
 ```
 
 ```bash
-uv run fmpy validate out/kalman.fmu
+fmpy validate out/kalman.fmu
 ```
 
 ```bash
