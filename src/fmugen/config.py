@@ -49,13 +49,13 @@ SECTIONS = {
 
 MODEL_KEYS = {
     "entry", "call", "name", "description", "author", "sources", "requirements",
-    "constants", "call_constants", "init_call", "terminate", "fmi_version", "setup", "kind",
+    "constants", "call_constants", "init_call", "terminate", "fmi_version", "setup", "kind", "create",
 }
 EXPERIMENT_KEYS = {"start_time", "stop_time", "step_size", "tolerance", "fixed_step"}
 TIME_SOURCES = ("time", "step_size", "end_time")
 COMMON_VAR_KEYS = {
     "type", "start", "unit", "description", "variability", "initial",
-    "min", "max", "nominal", "quantity", "items", "enum", "dimensions", "numpy",
+    "min", "max", "nominal", "quantity", "items", "enum", "dimensions", "numpy", "convert",
 }
 VAR_KEYS = {
     "structural_parameters": COMMON_VAR_KEYS | {"to", "attr"},
@@ -214,6 +214,15 @@ def normalize(config, entry_obj, module_name, sys_path, model_name=None, author=
     if not is_class and not callable(entry_obj):
         raise InterfaceError(f"{config.model['entry']} is neither a function nor a class")
     kind = "class" if is_class else "function"
+    create = model.get("create")   # a classmethod that builds the object, e.g. "from_pretrained"
+    if create is not None:
+        if not is_class:
+            raise InterfaceError("[model] create only applies to classes")
+        if not isinstance(create, str) or not callable(getattr(entry_obj, create, None)):
+            raise InterfaceError(f"[model] create: {entry_obj.__name__} has no classmethod {create!r}")
+        constructor = getattr(entry_obj, create)
+    else:
+        constructor = entry_obj.__init__ if is_class else None
 
     call = model.get("call")
     step_call = call is not False   # call = false: nothing runs on doStep, only clocks run code
@@ -221,7 +230,7 @@ def normalize(config, entry_obj, module_name, sys_path, model_name=None, author=
         raise InterfaceError("[model] call = false needs [clocks] (otherwise the model never runs)")
     if is_class and not step_call:
         call = None
-        init_sig = _signature(entry_obj.__init__)
+        init_sig = _signature(constructor)
         call_sig = None
     elif is_class:
         if call is None:
@@ -230,7 +239,7 @@ def normalize(config, entry_obj, module_name, sys_path, model_name=None, author=
             call = "__call__"
         if not callable(getattr(entry_obj, call, None)):
             raise InterfaceError(f"{entry_obj.__name__} has no method {call!r}")
-        init_sig = _signature(entry_obj.__init__)
+        init_sig = _signature(constructor)
         call_sig = _signature(getattr(entry_obj, call))
     else:
         for key in ("call", "terminate", "call_constants"):
@@ -338,6 +347,7 @@ def normalize(config, entry_obj, module_name, sys_path, model_name=None, author=
             "module": module_name,
             "name": config.entry_name,
             "kind": kind,
+            "create": create,
             "call": call if is_class and step_call else None,
             "step": step_call,
             "init_call": model.get("init_call", not is_class and step_call),
@@ -498,6 +508,18 @@ def _variable(section, causality, name, info, is_class, type_definitions, versio
             var["numpy"] = True
     elif "numpy" in info:
         raise InterfaceError(f"{where}: numpy only applies to arrays (set dimensions)")
+    if "convert" in info:
+        # a function applied to the value before the model gets it, e.g. "torch:tensor"
+        if section not in ("structural_parameters", "parameters", "inputs", "states"):
+            raise InterfaceError(f"{where}: convert only applies to values passed to the model")
+        from fmugen.templates.fmugen_runtime import resolve_reference  # same resolution as at runtime
+        try:
+            converter = resolve_reference(str(info["convert"]))
+        except Exception as e:
+            raise InterfaceError(f"{where}: cannot import convert {info['convert']!r}: {e!r}") from e
+        if not callable(converter):
+            raise InterfaceError(f"{where}: convert {info['convert']!r} is not callable")
+        var["convert"] = str(info["convert"])
 
     if "clocks" in info:
         if version == 2:
