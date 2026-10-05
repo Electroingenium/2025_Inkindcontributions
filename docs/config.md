@@ -35,6 +35,8 @@ Unknown keys are rejected with an error, so typos don't go unnoticed. Keys marke
 | `author` | string | `""` | `author` in `modelDescription.xml`. `fmugen build --author` overrides it. |
 | `sources` | list of strings | `[]` | Extra files and directories to copy into the FMU, keeping their paths. A file entry is always copied. |
 | `requirements` | list of strings | `[]` | pip requirement specifiers the model needs at runtime. See [packaging.md](packaging.md#requirements-and---vendor). |
+| `kind` | `"function"` | none | Treat a class as a function: construct it with the inputs on every step and read outputs from the new object (`return:<attr>`). For classes whose constructor does all the work. |
+| `setup` | list | `[]` | Calls run when the FMU initializes, before the model is used. `"module:function"` or `"module:function(args)"` runs before the class is constructed (e.g. `"psychrolib:SetUnitSystem(psychrolib.SI)"`). A bare `"method"` or `"method(args)"` runs on the object right after construction (e.g. `"reset"`). Arguments are Python literals or dotted names of importable objects. The table form `{ call = "...", args = [...], kwargs = {...} }` takes the same values as `[model.constants]`. |
 | `init_call` | bool | `true` for functions with a step, `false` otherwise | Call the function or step method when leaving initialization mode, to compute the initial outputs. States are not advanced by this call. |
 | `terminate` | string | none | Classes only: a method called on `fmi2Terminate`/`fmi3Terminate` (for example `"close"`). |
 
@@ -48,7 +50,7 @@ These are fixed keyword arguments that are not FMU variables, typically values t
 |---|---|
 | a TOML string, number, bool, array or table | that value (an array becomes a list) |
 | `{ python = "<literal>" }` | `ast.literal_eval(literal)`, e.g. `"None"`, `"(0, 100)"`, `"{'a': 1}"` |
-| `{ ref = "module:attr.path" }` | the imported object, e.g. a class or function |
+| `{ ref = "module:attr.path" }` or `{ ref = "module.attr" }` | the imported object, e.g. a class or function |
 
 Every key must be an argument of the constructor, function or method (unless it accepts `**kwargs`).
 
@@ -146,6 +148,8 @@ Without `type`, it comes from `start`: `bool` → Boolean, `int` → Integer, `s
 |---|---|---|---|
 | `to` | structural parameters, parameters, inputs, states | `"init:<arg>"` | Constructor argument (classes). |
 | | | `"arg:<arg>"` | Argument of the function or step method; for a clocked input, of the clock's `call`. |
+| | | `"call:<method>"` | A setter method called with the value after construction and before every step (classes), e.g. tclab's `Q1(value)`. |
+| | | `"pos:<N>"` | Positional argument number N (0, 1, … without gaps) of the function or step method, for positional-only arguments such as those of C extensions. |
 | | | `"attr:<name>"` | Attribute set on the object after construction and before every step (classes); clocked: before every tick. Dotted paths allowed. |
 | `from` | outputs, locals, calculated_parameters | `"return"` | The whole return value. |
 | | | `"return:<key>"` | `result[key]` for a dict, `result[int(key)]` for a tuple or list, else `result.key`. |
