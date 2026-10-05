@@ -4,12 +4,14 @@ fmugen has been tried on published, unmodified Python models: the examples in th
 
 - **Repository examples:** the 5 examples build, validate and simulate. The 3 that use no FMI 3-only features give identical results under FMI 2 and FMI 3.
 - **PyPI models:** **37 of 40 runs pass** (20 models × 2 FMI versions). The 3 that fail are FMI 2 builds of models whose inputs are arrays, which only FMI 3 has. `init` stops them with a clear message.
+- **A neural network:** Amazon's [Chronos-Bolt Tiny](#a-neural-network-chronos-bolt) forecaster (PyTorch, weights from Hugging Face) builds, validates and simulates under FMI 3. Its forecasts are identical to calling the model directly.
 
-These runs are how the [`[model] setup`](models.md#libraries-that-need-setup-first), [`to = "pos:N"`](models.md#positional-only-arguments), [`to = "call:…"`](models.md#setter-methods-and-properties) and [`kind = "function"`](models.md#constructors-that-do-the-work) features, and `init --start/--setup/--kind`, came about.
+These runs are how the [`[model] setup`](models.md#libraries-that-need-setup-first), [`to = "pos:N"`](models.md#positional-only-arguments), [`to = "call:…"`](models.md#setter-methods-and-properties) and [`kind = "function"`](models.md#constructors-that-do-the-work) features, and `init --start/--setup/--kind`, came about. Chronos-Bolt led to `[model] create` / `init --create`, `convert`, tensor outputs and `build --capture-output`.
 
 - [Projects](#projects)
 - [Repository examples](#repository-examples)
 - [Models from PyPI](#models-from-pypi)
+- [A neural network: Chronos-Bolt](#a-neural-network-chronos-bolt)
 - [What was checked](#what-was-checked)
 - [Reproducing a run](#reproducing-a-run)
 
@@ -33,6 +35,7 @@ These runs are how the [`[model] setup`](models.md#libraries-that-need-setup-fir
 | [AHRS](https://github.com/Mayitzin/ahrs) | 0.4.0 | MIT | `Madgwick`, `Mahony` |
 | [Gymnasium](https://github.com/Farama-Foundation/Gymnasium) | 1.3.0 | MIT | `CartPoleEnv`, `PendulumEnv` |
 | [TCLab](https://github.com/jckantor/TCLab) | 1.0.0 | Apache-2.0 | `TCLabModel` |
+| [Chronos](https://github.com/amazon-science/chronos-forecasting) (`chronos-forecasting`, weights [`amazon/chronos-bolt-tiny`](https://huggingface.co/amazon/chronos-bolt-tiny)) | 2.3.2, with torch 2.14.1, transformers 5.18.0 | Apache-2.0 | `ChronosBoltPipeline` |
 
 Only RC_BuildingSimulator is copied into this repository. The others are installed from PyPI when needed.
 
@@ -80,6 +83,57 @@ Columns:
 | `ahrs.filters:Mahony` | as Madgwick | as Madgwick | ✗ array input | ✓ |
 
 Each `--start` takes one `NAME=VALUE`; the table groups several per row for brevity.
+
+---
+
+## A neural network: Chronos-Bolt
+
+[Chronos-Bolt Tiny](https://huggingface.co/amazon/chronos-bolt-tiny) is a pretrained transformer (about 9 M parameters) that forecasts a time series from its recent history. It is used as published: `pip install chronos-forecasting` into a venv, plus fmugen.
+
+| Model | Shape | `init` options | FMI 2 | FMI 3 |
+|---|---|---|---|---|
+| `chronos:ChronosBoltPipeline` | class built by a factory (`from_pretrained`), `predict(inputs)`, tensor in and out, weights downloaded from Hugging Face | `--fmi 3 --create from_pretrained --call predict --start pretrained_model_name_or_path=amazon/chronos-bolt-tiny --start "inputs=[…24 values…]"`; build with `--capture-output` | — (array input: FMI 3 only) | ✓ |
+
+`init` inferred everything from the code and the start values:
+
+```toml
+[model]
+entry = "chronos:ChronosBoltPipeline"
+fmi_version = 3
+create = "from_pretrained"
+call = "predict"
+
+[parameters]
+pretrained_model_name_or_path = { start = "amazon/chronos-bolt-tiny" }
+
+[inputs]
+inputs = { dimensions = [24], start = [20.0, 21.294, …], convert = "torch:tensor" }   # from the torch.Tensor annotation
+limit_prediction_length = { start = false }
+
+[outputs]
+y = { from = "return", dimensions = [1, 9, 64], type = "Float32" }   # 9 quantiles × 64 steps ahead
+quantiles = { dimensions = [9] }                                     # a property: 0.1 … 0.9
+```
+
+What it took:
+
+- **Factory construction.** The pipeline is created with `ChronosBoltPipeline.from_pretrained(name)`; its constructor takes an already-loaded network. [`[model] create`](config.md#model) names the classmethod, and its arguments become parameters, so the Hugging Face model name is a String parameter.
+- **Tensors.** `predict` takes a `torch.Tensor`. `convert = "torch:tensor"` converts the FMU's array before the call; `init` sets it from the annotation. The returned tensor becomes a Float32 array output.
+- **Console output.** Loading the model prints warnings and a progress bar. UniFMU 0.14 crashes when the FMU's Python prints more than about 4 KB, and the importer hangs. `build --capture-output` sends it to the importer's log instead.
+- **A crash in `init` itself**, when cleaning up after `transformers`, whose modules import on attribute access. Fixed in fmugen.
+
+Checked with FMPy (`FMU3Slave`), feeding 24 hourly values of a daily temperature cycle (20 ± 5 °C):
+
+- `fmpy validate`: no problems.
+- Two forecasts, from the cycle and from the cycle shifted by 6 h: the median forecast follows the cycle, with a mean absolute error over the next 24 h of 0.29 °C and 0.61 °C.
+- The FMU's 128 forecast values are **identical** (difference 0.0) to calling `ChronosBoltPipeline.predict` directly.
+- Saving and restoring the FMU state works.
+- Instantiation and initialization take about 58 s (importing PyTorch and loading the network); each forecast step about 0.05 s.
+
+Limits:
+
+- The weights are downloaded from Hugging Face on first use and cached in the user's Hugging Face cache. They are not inside the FMU: an FMU built with `--vendor` or `--compile` still needs network access (or a filled cache) on the target the first time.
+- `--vendor` and `--compile` were not tried with this model. PyTorch makes either one large (hundreds of MB).
 
 ---
 

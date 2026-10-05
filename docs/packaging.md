@@ -18,7 +18,7 @@ Install fmugen into your model's virtual environment (`pip install fmugen`) and 
 ### `fmugen init`
 
 ```
-fmugen init MODEL [-o OUTPUT] [--call METHOD] [--fmi {2,3}] [--start NAME=VALUE ...] [--setup CALL ...] [--kind function] [--force]
+fmugen init MODEL [-o OUTPUT] [--call METHOD] [--fmi {2,3}] [--start NAME=VALUE ...] [--setup CALL ...] [--kind function] [--create CLASSMETHOD] [--force]
 ```
 
 | Argument | Description |
@@ -30,6 +30,7 @@ fmugen init MODEL [-o OUTPUT] [--call METHOD] [--fmi {2,3}] [--start NAME=VALUE 
 | `--start NAME=VALUE` | Start and probe value for an argument (a Python literal), e.g. one without a default. Repeatable. |
 | `--setup CALL` | A `[model] setup` call to run before the probe, e.g. `'psychrolib:SetUnitSystem(psychrolib.SI)'` or `reset`. Repeatable. |
 | `--kind function` | Treat a class whose constructor does the work as a function called every step. |
+| `--create CLASSMETHOD` | Build the object with this classmethod (e.g. `from_pretrained`) instead of the class. |
 | `--force` | Overwrite an existing config. |
 
 What it infers: [models.md](models.md#what-fmugen-init-infers).

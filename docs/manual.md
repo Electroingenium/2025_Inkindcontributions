@@ -105,7 +105,7 @@ Imports the model, inspects its function or class, makes **one probe call** with
 
 ```
 fmugen init MODEL [-o OUTPUT] [--call METHOD] [--fmi {2,3}]
-                  [--start NAME=VALUE ...] [--setup CALL ...] [--kind function] [--force]
+                  [--start NAME=VALUE ...] [--setup CALL ...] [--kind function] [--create CLASSMETHOD] [--force]
 ```
 
 | Option | Default | Description |
@@ -117,6 +117,7 @@ fmugen init MODEL [-o OUTPUT] [--call METHOD] [--fmi {2,3}]
 | `--start NAME=VALUE` | none | Start and probe value for an argument; repeatable. `VALUE` is a Python literal (`1e5`, `"Water"`, `[1.0, 0.0]`); a bare word is taken as a string. Use it for arguments without a default, or whose default breaks the model. |
 | `--setup CALL` | none | A [setup call](#model) to run before the probe; it is also written to `[model] setup`. Repeatable. E.g. `"psychrolib:SetUnitSystem(psychrolib.SI)"`, `reset`. |
 | `--kind function` | none | Treat a class whose constructor does the work as a function called on every step (writes `[model] kind`). |
+| `--create CLASSMETHOD` | none | Classes built by a factory: the classmethod that creates the object, e.g. `from_pretrained`. Its arguments become parameters (writes `[model] create`). |
 | `--force` | off | Overwrite an existing config. |
 
 **Where `--start` values go.** If a name is an argument of both the constructor and the step method, the value goes to the one that has no default; on a tie, to the step method. A name that neither declares goes to whichever accepts `**kwargs`, the step method first. A name that matches nothing is an error.
@@ -280,6 +281,7 @@ Each error names the section and key, e.g. `[inputs] x: unknown key(s) ['strat']
 | `fmi_version` | `2` / `3` | `2` | FMI version. `build --fmi` overrides it. |
 | `call` | string / `false` | `"__call__"` if the class is callable | Classes: the method run on each step. `false`: nothing runs on a step and only clocks run code (needs `[clocks]`; also allowed for functions). |
 | `kind` | `"function"` | none | Treat a class as a function: construct it with the inputs on every step and read outputs from the new object (`return:<attr>`). |
+| `create` | classmethod name | none | Classes only: build the object with this classmethod instead of calling the class, e.g. `"from_pretrained"`. Parameters bound to `init:` (the default) become its arguments. For models loaded from saved weights or files. |
 | `setup` | list | `[]` | Calls run each time the FMU initializes, before the model is used. See [setup syntax](#value-syntax). |
 | `name` | string | the entry's name | `modelName`. `build --name` overrides it. |
 | `description` | string | first docstring line of the entry, else of its module | FMU description. |
@@ -365,6 +367,7 @@ These keys apply to every section, unless marked.
 | `enum` | string | none | `"module:EnumClass"`; the model receives and returns enum members. |
 | `dimensions` **FMI 3** | list | none | Array: sizes (`[3]`) and/or structural parameter names (`["n", 2]`). |
 | `numpy` **FMI 3** | bool | `false` | Arrays passed into the model are `numpy.ndarray` instead of nested lists. |
+| `convert` | `"module:function"` | none | Values passed to the model (parameters, inputs, states): call this function on the value first, e.g. `"torch:tensor"`, `"jax.numpy:asarray"`. `init` sets it from `torch.Tensor`, JAX and TensorFlow annotations. |
 | `clocks` **FMI 3** | list of one clock name | none | Inputs, outputs and locals: the variable belongs to that clock. |
 | `to` | binding | see table above | Where an input-like value goes. See [Bindings](#bindings-to-from-next). |
 | `from` | binding | see table above | Where an output-like value comes from. |
