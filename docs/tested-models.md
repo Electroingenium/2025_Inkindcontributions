@@ -34,7 +34,7 @@ These runs are how the [`[model] setup`](models.md#libraries-that-need-setup-fir
 | [Gymnasium](https://github.com/Farama-Foundation/Gymnasium) | 1.3.0 | MIT | `CartPoleEnv`, `PendulumEnv` |
 | [TCLab](https://github.com/jckantor/TCLab) | 1.0.0 | Apache-2.0 | `TCLabModel` |
 
-Only RC_BuildingSimulator is copied into this repository. The others are installed from PyPI when needed. PyPI packages can also be put inside the FMU with `fmugen build --vendor` (see [packaging.md](packaging.md#requirements-and---vendor)).
+Only RC_BuildingSimulator is copied into this repository. The others are installed from PyPI when needed.
 
 ---
 
@@ -117,15 +117,15 @@ Passing `fmpy validate` and `fmpy simulate` shows the FMU is well-formed and run
 For example, for `fluids`:
 
 ```bash
-uv run --with fluids fmugen init fluids.friction:friction_factor --start Re=1e5 -o -
+fmugen init fluids.friction:friction_factor --start Re=1e5 -o -
 ```
 
 Write the config with `-o path/to/fmugen.toml` instead of `-o -`, then:
 
 ```bash
-uv run --with fluids fmugen build path/to/fmugen.toml -o out/friction.fmu --python
+fmugen build path/to/fmugen.toml -o out/friction.fmu
 ```
 
 Add `--fmi 3` to `init` or `build` for FMI 3.
 
-With `uv run --with`, `--python` records uv's temporary environment, so the FMU only runs on this machine while that environment exists. For an FMU you keep, install the library in a permanent environment, or use `--vendor` (see [packaging.md](packaging.md#runtime-python)).
+Run these from an environment with fmugen and `fluids` installed (`pip install fmugen fluids`). The FMU runs with that environment (see [packaging.md](packaging.md#the-fmus-python-environment)).

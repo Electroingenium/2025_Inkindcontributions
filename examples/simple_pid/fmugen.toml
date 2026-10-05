@@ -2,7 +2,7 @@
 # Started with `fmugen init simple_pid:PID`, then reviewed by hand.
 #
 # There is no model file here: the model is the PID class from the simple-pid package
-# on PyPI, used exactly as published. Build with --vendor to put it inside the FMU.
+# on PyPI, used exactly as published. It must be installed in the environment fmugen runs in.
 
 [model]
 entry = "simple_pid:PID"         # an installed module, not a file

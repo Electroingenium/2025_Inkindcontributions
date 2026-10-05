@@ -2,7 +2,7 @@
 
 The same `PID` class from [simple-pid](https://github.com/m-lundberg/simple-pid) as [`examples/simple_pid`](../simple_pid), unchanged. This time it is a **sampled-data controller**: it runs when the FMI 3 clock `sample` ticks, every 0.1 s, independently of the importer's communication step.
 
-- **Source:** `simple-pid==2.0.1` from PyPI. MIT License, © 2018-2024 Martin Lundberg. `--vendor` puts it inside the FMU.
+- **Source:** `simple-pid==2.0.1` from PyPI. MIT License, © 2018-2024 Martin Lundberg. It must be installed in the environment fmugen runs in.
 - **What the config shows:**
   - `fmi_version = 3`, because clocks are FMI 3.
   - `call = false`: nothing runs on `doStep`; only the clock runs code.
@@ -13,11 +13,11 @@ The same `PID` class from [simple-pid](https://github.com/m-lundberg/simple-pid)
 Build, validate, and run it with the small importer in `run.py`. `fmpy simulate` doesn't tick input clocks, so `run.py` steps every 0.05 s, ticks the clock every 0.1 s, and closes the loop with a first-order plant:
 
 ```bash
-uv run fmugen build examples/sampled_pid -o out/sampled_pid.fmu --python --vendor
+fmugen build examples/sampled_pid -o out/sampled_pid.fmu
 ```
 
 ```bash
-uv run fmpy validate out/sampled_pid.fmu
+fmpy validate out/sampled_pid.fmu
 ```
 
 ```bash

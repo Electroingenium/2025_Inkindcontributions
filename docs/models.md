@@ -254,7 +254,7 @@ entry = "simple_pid:PID"
 requirements = ["simple-pid==2.0.1"]
 ```
 
-`requirements` go into the FMU's `resources/requirements.txt`. With `fmugen build --vendor`, they are installed inside the FMU so it doesn't depend on what is installed where it runs. See [packaging.md](packaging.md#requirements-and---vendor).
+`requirements` go into the FMU's `resources/requirements.txt`. They must be installed in the environment fmugen runs in, which is also the one the FMU runs with. See [packaging.md](packaging.md#the-fmus-python-environment).
 
 ---
 
@@ -475,7 +475,7 @@ When it is true after a step or a clock tick, the FMU returns `terminateSimulati
 ## What `fmugen init` infers
 
 ```bash
-uv run fmugen init path/to/model.py[:Name] [--call METHOD] [--fmi 3] [--start NAME=VALUE ...] [--setup CALL ...] [--kind function] [-o fmugen.toml | -o -] [--force]
+fmugen init path/to/model.py[:Name] [--call METHOD] [--fmi 3] [--start NAME=VALUE ...] [--setup CALL ...] [--kind function] [-o fmugen.toml | -o -] [--force]
 ```
 
 It imports the module, picks the entry, makes one probe call with the start values, and writes a commented config.
@@ -489,11 +489,11 @@ The probe only works if the model accepts the start values. Arguments without a 
 | `--kind function` | For [constructors that do the work](#constructors-that-do-the-work). |
 
 ```bash
-uv run --with fluids fmugen init fluids.friction:friction_factor --start Re=1e5 -o -
+fmugen init fluids.friction:friction_factor --start Re=1e5 -o -
 ```
 
 ```bash
-uv run --with psychrolib fmugen init psychrolib:GetHumRatioFromRelHum --setup "psychrolib:SetUnitSystem(psychrolib.SI)" --start TDryBulb=25.0 --start RelHum=0.5 --start Pressure=101325.0 -o -
+fmugen init psychrolib:GetHumRatioFromRelHum --setup "psychrolib:SetUnitSystem(psychrolib.SI)" --start TDryBulb=25.0 --start RelHum=0.5 --start Pressure=101325.0 -o -
 ```
 
 A `--start` name that appears in both the constructor and the step method goes to the one without a default; on a tie, to the step method. Names that neither declares are passed through `**kwargs`, if one of them accepts it.

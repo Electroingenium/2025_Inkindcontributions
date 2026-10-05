@@ -31,9 +31,7 @@ DEFAULT_START = {
     "Boolean": False, "String": "", "Binary": "", "Enumeration": 1,
 }
 
-# Directories inside the FMU's resources/ folder
-MODEL_DIR = "fmugen_model"   # the user's code
-SITE_DIR = "site"            # vendored requirements
+MODEL_DIR = "fmugen_model"   # the user's code, inside the FMU's resources/ folder
 
 # Module names already used by the UniFMU backend and fmugen in resources/
 RESERVED_MODULES = {"model", "backend", "main", "abstract_backend", "schemas", "fmugen_runtime"}
@@ -150,9 +148,9 @@ class Config:
             raise InterfaceError(f"{what} {rel!r} must be inside {self.base_dir}")
         return path
 
-    def entry_import(self, vendored=False):
+    def entry_import(self):
         """(module name, sys.path entries relative to resources/) used to import the entry."""
-        sys_path = [SITE_DIR] if vendored else []
+        sys_path = []
         if not self.entry_is_file:
             module = self.entry_target
         else:

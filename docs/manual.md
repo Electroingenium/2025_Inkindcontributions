@@ -45,17 +45,19 @@ The complete reference for the `fmugen` command and the `fmugen.toml` config, on
 
 ## 2. Installation
 
+Install fmugen into your model's virtual environment, the one that already has the model's packages:
+
 ```bash
-uv sync
+pip install fmugen
 ```
 
-This installs Python 3.13, the dependencies and the `fmugen` command. Run it as `uv run fmugen …`, or as `fmugen …` inside the activated `.venv`.
+(or `uv add fmugen`). This also installs `protobuf==5.27.3` and `pyzmq`, which UniFMU's Python backend needs to run the FMU. Run `fmugen` from that environment: `init` and `build` import your model, and the FMU runs with the environment's Python.
 
 You also need [UniFMU](https://github.com/INTO-CPS-Association/unifmu/releases) **0.14.0** (exactly this version) for `fmugen build`. fmugen runs `unifmu generate` to get each FMU's native binaries and Python backend. Put `unifmu` on `PATH`, or set the environment variable `FMUGEN_UNIFMU` to the executable. `fmugen init` works without it.
 
-Libraries your model imports must be installed in the same environment, so that `init` and `build` can import them (`uv add …`, or `uv run --with <package> fmugen …`). They must also be available to the Python that runs the FMU; see [`--python`](#fmugen-build) and [`--vendor`](#fmugen-build).
+To simulate and validate FMUs as in the examples below, install [FMPy](https://github.com/CATIA-Systems/FMPy) (`pip install fmpy`).
 
----
+To work on fmugen itself, clone the repository and run `uv sync`; then use `uv run fmugen …` and `uv run pytest`.
 
 ## 3. Workflow
 
@@ -66,24 +68,24 @@ your model ──► fmugen init ──► fmugen.toml ──► (review & edit)
 1. Infer a config:
 
    ```bash
-   uv run fmugen init path/to/model.py
+   fmugen init path/to/model.py
    ```
 
 2. Review `path/to/fmugen.toml`. Check the start values, add units, and remove what you don't need.
 3. Build:
 
    ```bash
-   uv run fmugen build path/to/fmugen.toml -o out/model.fmu --python
+   fmugen build path/to/fmugen.toml -o out/model.fmu
    ```
 
 4. Check the FMU:
 
    ```bash
-   uv run fmpy validate out/model.fmu
+   fmpy validate out/model.fmu
    ```
 
    ```bash
-   uv run fmpy simulate out/model.fmu --output-file out/result.csv
+   fmpy simulate out/model.fmu --output-file out/result.csv
    ```
 
 For a quick try, `fmugen build path/to/model.py -o out/model.fmu` skips step 2: the config is inferred in memory.
@@ -139,23 +141,23 @@ fmugen init MODEL [-o OUTPUT] [--call METHOD] [--fmi {2,3}]
 **Examples:**
 
 ```bash
-uv run fmugen init examples/psychrometry/psychrometry.py -o -
+fmugen init examples/psychrometry/psychrometry.py -o -
 ```
 
 ```bash
-uv run fmugen init simple_pid:PID -o pid/fmugen.toml
+fmugen init simple_pid:PID -o pid/fmugen.toml
 ```
 
 ```bash
-uv run --with fluids fmugen init fluids.friction:friction_factor --start Re=1e5 -o -
+fmugen init fluids.friction:friction_factor --start Re=1e5 -o -
 ```
 
 ```bash
-uv run --with psychrolib fmugen init psychrolib:GetHumRatioFromRelHum --setup "psychrolib:SetUnitSystem(psychrolib.SI)" --start TDryBulb=25.0 --start RelHum=0.5 --start Pressure=101325.0 -o -
+fmugen init psychrolib:GetHumRatioFromRelHum --setup "psychrolib:SetUnitSystem(psychrolib.SI)" --start TDryBulb=25.0 --start RelHum=0.5 --start Pressure=101325.0 -o -
 ```
 
 ```bash
-uv run fmugen init filterpy.kalman:KalmanFilter --call predict --fmi 3 --start dim_x=2 --start dim_z=1 -o -
+fmugen init filterpy.kalman:KalmanFilter --call predict --fmi 3 --start dim_x=2 --start dim_z=1 -o -
 ```
 
 ### `fmugen build`
@@ -163,8 +165,8 @@ uv run fmugen init filterpy.kalman:KalmanFilter --call predict --fmi 3 --start d
 Packages the model into an FMU. Before writing the FMU, it runs the packaged model once through the real adapter: initialization, one tick of each input clock (FMI 3), one step, and saving and restoring state. A model that fails there fails the build with the model's own error.
 
 ```
-fmugen build MODEL -o OUTPUT [--fmi {2,3}] [--format {fmu,folder}] [--python [PATH]]
-                   [--vendor] [--name NAME] [--author AUTHOR] [--call METHOD]
+fmugen build MODEL -o OUTPUT [--fmi {2,3}] [--format {fmu,folder}]
+                   [--name NAME] [--author AUTHOR] [--call METHOD]
 ```
 
 | Option | Default | Description |
@@ -173,8 +175,6 @@ fmugen build MODEL -o OUTPUT [--fmi {2,3}] [--format {fmu,folder}] [--python [PA
 | `-o`, `--output PATH` | required | Output path, used exactly as given. Parent directories are created. |
 | `--fmi {2,3}` | `[model] fmi_version`, else `2` | FMI version to build. |
 | `--format {fmu,folder}` | `fmu` | `fmu`: zipped `.fmu` archive. `folder`: unzipped UniFMU folder. |
-| `--python [PATH]` | not set: the FMU runs `python` from `PATH` on Windows | Python executable written into `resources/launch.toml` for Windows. The flag alone uses the current interpreter. Handy locally; the FMU then only works on this machine. |
-| `--vendor` | off | Install `[model] requirements` into the FMU (`resources/site/`), so the target Python doesn't need them. |
 | `--name NAME` | `[model] name`, else the entry's name | `modelName` in `modelDescription.xml`. |
 | `--author AUTHOR` | `[model] author`, else empty | `author` in `modelDescription.xml`. |
 | `--call METHOD` | as `init` | Only when `MODEL` is a model target with a class. |
@@ -190,19 +190,19 @@ It may also print `note:` lines, e.g. when FMU state saving was turned off becau
 **Examples:**
 
 ```bash
-uv run fmugen build examples/psychrometry -o out/psychrometry.fmu --python
+fmugen build examples/psychrometry -o out/psychrometry.fmu
 ```
 
 ```bash
-uv run fmugen build examples/simple_pid -o out/simple_pid.fmu --python --vendor
+fmugen build examples/simple_pid -o out/simple_pid.fmu
 ```
 
 ```bash
-uv run fmugen build examples/rc_building -o out/rc_building_fmi3.fmu --python --fmi 3
+fmugen build examples/rc_building -o out/rc_building_fmi3.fmu --fmi 3
 ```
 
 ```bash
-uv run fmugen build examples/psychrometry -o out/psychrometry_folder --format folder
+fmugen build examples/psychrometry -o out/psychrometry_folder --format folder
 ```
 
 ### Model targets
@@ -266,7 +266,7 @@ Each error names the section and key, e.g. `[inputs] x: unknown key(s) ['strat']
 | `description` | string | first docstring line of the entry, else of its module | FMU description. |
 | `author` | string | `""` | `author`. `build --author` overrides it. |
 | `sources` | list of paths | `[]` | Extra files or directories to copy into the FMU, keeping their paths. The entry file is always copied. Their folders go on `sys.path`, so flat and package imports both work. |
-| `requirements` | list of strings | `[]` | pip requirement specifiers, e.g. `"simple-pid==2.0.1"`. Written to `resources/requirements.txt`; installed into the FMU with `build --vendor`. |
+| `requirements` | list of strings | `[]` | pip requirement specifiers, e.g. `"simple-pid==2.0.1"`. Written to `resources/requirements.txt`, as a record of what the FMU's environment must contain. They must be installed in the environment fmugen runs in. |
 | `init_call` | bool | `true` for functions with a step, else `false` | Call the model when leaving initialization mode to compute initial outputs. States are not advanced by this call. |
 | `terminate` | string | none | Classes: a method called on terminate, e.g. `"close"`. |
 
@@ -558,7 +558,7 @@ This config is illustrative: `plant.py` is not part of the repository. Every key
 | Bind a C extension's positional arguments | `to = "pos:N"` |
 | Set an input through a method | `to = "call:method"` |
 | Wrap a class whose constructor does everything | `[model] kind = "function"` |
-| Use a model from PyPI | `entry = "pkg.module:Name"`, `requirements`, `build --vendor` |
+| Use a model from PyPI | install it in the environment, `entry = "pkg.module:Name"`, `requirements` |
 | Use matrices/vectors | FMI 3 `dimensions`, `numpy = true` |
 | Size arrays from a constructor argument | FMI 3 `[structural_parameters]` |
 | Run code on events, not every step | FMI 3 `[clocks.<name>]`, `clocks = [...]`, `call = false` |
@@ -572,7 +572,7 @@ This config is illustrative: `plant.py` is not part of the repository. Every key
 
 | Message | Cause | Fix |
 |---|---|---|
-| `cannot import …: No module named …` | The model's package isn't in the environment running fmugen. | `uv add <pkg>`, or `uv run --with <pkg> fmugen …`. |
+| `cannot import …: No module named …` | The model's package isn't in the environment running fmugen. | `pip install <pkg>` in that environment. |
 | `probe … failed:` followed by a traceback | The model raised an error at the start values (division by zero, `log(0)`, out of range…). | Give realistic `start` values, or `init --start`. |
 | `… must be called first` / `has not been defined` (raised by the model) | The library needs setup. | `[model] setup` / `init --setup`. |
 | `--start NAME: arrays and bytes need --fmi 3` | An array or Binary value in an FMI 2 build. | Use `--fmi 3`. |
@@ -583,5 +583,5 @@ This config is illustrative: `plant.py` is not part of the repository. Every key
 | `unknown key(s) [...]` | A typo in a key. | The message lists the allowed keys. |
 | `duplicate variable or clock names` | The same name in two sections, or a variable named like a clock. | Rename one; bind it with `to`/`from`. |
 | `note: the model object cannot be pickled …` | The object holds a file, socket or generator. | Fine for most uses; FMU state saving and restoring is disabled. |
-| The FMU fails at runtime with `ModuleNotFoundError` | The Python running the FMU lacks a requirement. | `build --vendor`, `build --python`, or install it there. |
+| The FMU fails at runtime with `ModuleNotFoundError` | The environment the FMU was built in has changed or was deleted. | Reinstall the package there, or rebuild the FMU from the environment that has it. |
 | The simulation hangs or the importer reports an unknown command | The importer called an FMI function the UniFMU backend lacks. | See [fmi.md](fmi.md#unsupported-functions). |

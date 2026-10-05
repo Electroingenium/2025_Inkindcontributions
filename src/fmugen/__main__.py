@@ -18,7 +18,7 @@ import tempfile
 import zipfile
 from pathlib import Path
 
-from fmugen.config import MODEL_DIR, SITE_DIR, Config, InterfaceError, load_config, normalize
+from fmugen.config import MODEL_DIR, Config, InterfaceError, load_config, normalize
 from fmugen.description import write_model_description
 from fmugen.interface import infer_config, parse_target, render_toml
 from fmugen.templates import model_fmi2, model_fmi3
@@ -30,6 +30,14 @@ ADAPTERS = {2: TEMPLATES_DIR / "model_fmi2.py", 3: TEMPLATES_DIR / "model_fmi3.p
 RUNTIME = TEMPLATES_DIR / "fmugen_runtime.py"
 IGNORE = shutil.ignore_patterns("__pycache__", "*.pyc", "venv", ".venv")
 FORMATS = ("fmu", "folder")
+
+# The FMU runs with the Python fmugen is installed in: the model's own virtual environment,
+# which has the model's packages and (as fmugen's dependencies) the UniFMU backend's.
+OSES = ("linux", "macos", "windows")
+DEFAULT_PYTHON = {"linux": "python3", "macos": "python3", "windows": "python"}
+CURRENT_OS = {"win32": "windows", "darwin": "macos"}.get(sys.platform, "linux")
+# What UniFMU 0.14's Python backend imports (its own requirements.txt lists more)
+BACKEND_REQUIREMENTS = ["protobuf==5.27.3", "pyzmq"]
 
 # The FMU boilerplate (native binaries + Python backend) comes from `unifmu generate`.
 # The adapters are written against this exact UniFMU version's backend.
@@ -70,12 +78,11 @@ def generate_boilerplate(fmi_version, dest):
                              f"{result.stdout}{result.stderr}")
 
 
-def _write_launch_toml(resources_dir, python_exec):
-    python_exec = python_exec.replace("\\", "/")
+def _write_launch_toml(resources_dir):
+    """Run the backend with this interpreter on this OS (other OSes keep UniFMU's defaults)."""
+    pythons = {**DEFAULT_PYTHON, CURRENT_OS: sys.executable}
     (resources_dir / "launch.toml").write_text(
-        'linux = ["python3", "main.py"]\n'
-        'macos = ["python3", "main.py"]\n'
-        f'windows = ["{python_exec}", "main.py"]\n'
+        "".join(f'{system} = [{json.dumps(pythons[system])}, "main.py"]\n' for system in OSES)
     )
 
 
@@ -129,18 +136,6 @@ def _copy_sources(config, model_dir):
             shutil.copy2(src, dest)
 
 
-def _vendor(requirements, target):
-    uv = shutil.which("uv")
-    if uv:
-        cmd = [uv, "pip", "install", "--quiet", "--python", sys.executable, "--target", str(target), *requirements]
-    else:
-        cmd = [sys.executable, "-m", "pip", "install", "--quiet", "--target", str(target), *requirements]
-    try:
-        subprocess.run(cmd, check=True)
-    except (OSError, subprocess.CalledProcessError) as e:
-        raise InterfaceError(f"installing {requirements} into the FMU failed: {e}") from e
-
-
 def _probe(resources, interface):
     """Run the packaged model once through the real adapter; return whether its state can be saved."""
     logs = []
@@ -187,8 +182,7 @@ def _probe(resources, interface):
     return True
 
 
-def build(target, output, model_name=None, author=None, python_exec=None, output_format="fmu",
-          vendor=False, call=None, fmi_version=None):
+def build(target, output, model_name=None, author=None, output_format="fmu", call=None, fmi_version=None):
     if output_format not in FORMATS:
         raise ValueError(f"unknown output format {output_format!r}, expected one of {FORMATS}")
     output = Path(output)
@@ -210,19 +204,18 @@ def build(target, output, model_name=None, author=None, python_exec=None, output
         shutil.copy2(RUNTIME, resources / "fmugen_runtime.py")
         _copy_sources(config, resources / MODEL_DIR)
 
-        if config.requirements:
-            with (resources / "requirements.txt").open("a") as f:
-                f.write("\n# model requirements\n" + "\n".join(config.requirements) + "\n")
-            if vendor:
-                _vendor(config.requirements, resources / SITE_DIR)
-        module, sys_path = config.entry_import(vendored=vendor and bool(config.requirements))
+        (resources / "requirements.txt").write_text(
+            "# UniFMU backend\n" + "\n".join(BACKEND_REQUIREMENTS) + "\n"
+            + ("# model requirements\n" + "\n".join(config.requirements) + "\n" if config.requirements else "")
+        )
+        module, sys_path = config.entry_import()
 
         with isolated_imports():
             setup_sys_path({"sys_path": sys_path}, resources)
             try:
                 entry_obj = getattr(importlib.import_module(module), config.entry_name)
             except (ImportError, AttributeError) as e:
-                hint = " (install the model's requirements in this environment, or pass --vendor)" \
+                hint = " (install the model's requirements in the environment fmugen runs in)" \
                     if config.requirements else ""
                 raise InterfaceError(f"cannot import {config.model['entry']}: {e!r}{hint}") from e
             interface = normalize(config, entry_obj, module, sys_path, model_name, author, version)
@@ -233,8 +226,7 @@ def build(target, output, model_name=None, author=None, python_exec=None, output
         write_interface(interface, resources / "interface.json")
 
         write_model_description(interface, fmu_dir / "modelDescription.xml")
-        if python_exec:
-            _write_launch_toml(resources, python_exec)
+        _write_launch_toml(resources)
 
         output.parent.mkdir(parents=True, exist_ok=True)
         if output_format == "fmu":
@@ -317,11 +309,6 @@ def main(argv=None):
                    help="fmu: zipped .fmu archive (default); folder: unzipped UniFMU folder")
     b.add_argument("--name", help="modelName in modelDescription.xml (default: [model] name, else the entry name)")
     b.add_argument("--author", default=None, help="author in modelDescription.xml (default: [model] author)")
-    b.add_argument("--python", nargs="?", const=sys.executable, default=None,
-                   help="python executable written into launch.toml for Windows "
-                        "(flag alone = the current interpreter; omitted = keep boilerplate 'python')")
-    b.add_argument("--vendor", action="store_true",
-                   help="install [model] requirements into the FMU (resources/site)")
     b.add_argument("--call", help="method run on each step when MODEL is a .py file with a class")
     b.add_argument("--fmi", type=int, choices=(2, 3), help="FMI version (default: [model] fmi_version, else 2)")
 
@@ -333,8 +320,8 @@ def main(argv=None):
             if output:
                 print(f"Wrote {output.resolve()}; review it, then run: fmugen build {output}")
             return
-        output, interface = build(args.model, args.output, args.name, args.author, args.python,
-                                  args.format, args.vendor, args.call, args.fmi)
+        output, interface = build(args.model, args.output, args.name, args.author,
+                                  args.format, args.call, args.fmi)
     except (FileExistsError, InterfaceError) as e:
         parser.exit(2, f"fmugen: error: {e}\n")
 

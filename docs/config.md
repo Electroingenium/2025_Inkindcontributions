@@ -34,7 +34,7 @@ Unknown keys are rejected with an error, so typos don't go unnoticed. Keys marke
 | `description` | string | first line of the entry's docstring, else the module's | `description` in `modelDescription.xml`. |
 | `author` | string | `""` | `author` in `modelDescription.xml`. `fmugen build --author` overrides it. |
 | `sources` | list of strings | `[]` | Extra files and directories to copy into the FMU, keeping their paths. A file entry is always copied. |
-| `requirements` | list of strings | `[]` | pip requirement specifiers the model needs at runtime. See [packaging.md](packaging.md#requirements-and---vendor). |
+| `requirements` | list of strings | `[]` | pip requirement specifiers the model needs at runtime. See [packaging.md](packaging.md#the-fmus-python-environment). |
 | `kind` | `"function"` | none | Treat a class as a function: construct it with the inputs on every step and read outputs from the new object (`return:<attr>`). For classes whose constructor does all the work. |
 | `setup` | list | `[]` | Calls run when the FMU initializes, before the model is used. `"module:function"` or `"module:function(args)"` runs before the class is constructed (e.g. `"psychrolib:SetUnitSystem(psychrolib.SI)"`). A bare `"method"` or `"method(args)"` runs on the object right after construction (e.g. `"reset"`). Arguments are Python literals or dotted names of importable objects. The table form `{ call = "...", args = [...], kwargs = {...} }` takes the same values as `[model.constants]`. |
 | `init_call` | bool | `true` for functions with a step, `false` otherwise | Call the function or step method when leaving initialization mode, to compute the initial outputs. States are not advanced by this call. |
