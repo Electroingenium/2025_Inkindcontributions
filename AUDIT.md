@@ -115,19 +115,20 @@ What is already supported is broad:
 - clocks
 - models built by a factory (`[model] create`, e.g. `from_pretrained`)
 - inputs converted before the call (`convert = "torch:tensor"`) and array outputs from any library (torch tensors)
-- 20 tested PyPI models and one neural network (Chronos-Bolt; see `docs/tested-models.md`)
+- factory functions (a function entry with `call`), constants computed by a call (`{ call = "…" }`), and tuple/dict arguments built from several variables (`to = "arg:NAME[i]"`)
+- 20 tested PyPI models and 6 small neural networks (Chronos-Bolt, Silero VAD, Granite TTM, an SB3 PPO controller, a surfaces ONNX surrogate, TorchANI), all giving results identical to calling them directly; see `docs/tested-models.md`
 
 These are the gaps found:
 
 | Gap | Effect | Suggestion |
 |---|---|---|
-| **NamedTuple returns** are named `y0, y1` instead of their field names [verified: a `namedtuple("R", "power temp")` gives `y0`/`y1`] | Poor names. The user must rename them by hand | Check `hasattr(result, "_fields")` before the tuple branch and use `return:<field>` |
+| ✅ **NamedTuple returns** were named `y0, y1` instead of their field names | Fixed: field names, `from = "return:<field>"` (found with TorchANI's `SpeciesEnergies`) | — |
 | **Nested dicts / objects** (`{"zone": {"T": 21}}`, `result.state.T`) | Skipped during inference. The runtime `pick()` only goes one level deep for dicts | Flatten as `zone.T` (FMI `structured` naming), with `from = "return:zone.T"` resolved through mappings *and* attributes |
 | ✅ **ML models: factories and tensors** (found with Chronos-Bolt) | Was: a model created by `from_pretrained` couldn't be described; `torch.Tensor` inputs and outputs weren't handled | Fixed: `[model] create` / `init --create`, `convert` (set by `init` from torch/JAX/TensorFlow annotations), tensor outputs. Still open: weights downloaded from Hugging Face are not put inside the FMU, so `--vendor`/`--compile` FMUs need network access on first use |
-| **0-d numpy arrays**, `numpy.float16`, `decimal`, `Fraction`, `pint` quantities | Not seen as FMI values (`_fmi_value`), so they are silently left out | Accept anything that defines `__float__` / `__index__` (and `.magnitude` for pint, using its units for `unit`) |
+| **0-d numpy arrays** (✅ fixed: 0-d arrays and tensors are their scalar, found with SB3's action), `numpy.float16`, `decimal`, `Fraction`, `pint` quantities | The others are still not seen as FMI values (`_fmi_value`), so they are silently left out | Accept anything that defines `__float__` / `__index__` (and `.magnitude` for pint, using its units for `unit`) |
 | **Lists in FMI 2** | Dropped entirely | Offer `expand_arrays = true`, which turns `x[3]` into the scalars `x_1, x_2, x_3` (FMI 2 `structured` naming) |
 | **pandas Series / DataFrame / xarray** returns | Skipped | Series becomes named outputs (index → names). DataFrame row becomes outputs |
-| **dataclass / pydantic / attrs inputs** (`step(self, u: Inputs)`) | Not inferred | Build the argument object from flat variables: `to = "arg:u.temp"` |
+| **dataclass / pydantic / attrs inputs** (`step(self, u: Inputs)`) | Not inferred. ✅ Tuple and dict arguments are now supported (`to = "arg:NAME[i]"` / `"arg:NAME[key]"`, split by `init`; found with TorchANI) | Extend item bindings to objects: `to = "arg:u.temp"` builds `Inputs(temp=…)` |
 | **Generators / coroutines** (`yield`-based models, `async def step`) | Unsupported | Drive with `next()`/`send()`, or `asyncio.run` per step |
 | **`Optional[float]` / `float \| None` annotations** without a default | `_type_info` gets `annotation=Optional[...]` and falls back to Real 0.0. Probably fine, but int/bool unions are lost | Unwrap `typing.get_args` |
 | **Multiple entry points / composite models** | One entry per FMU | Allow several `[model.<name>]` blocks wired together, or document using an importer for that |
@@ -136,7 +137,7 @@ These are the gaps found:
 | **`Boolean` coercion from strings** (`coerce("Boolean", "false")` gives `True`) | Wrong value if a model returns `"false"` | Parse common string forms, or raise |
 | **Very large arrays** | `set_values` uses `values.pop(0)`, which is O(n²) | Use an index or iterator |
 | **Stateful module-level globals** (functions with `global` counters) | `fmi2Reset`/`fmi3Reset` don't reload the module, so state survives a reset, and `serialize` doesn't save globals | Document it, or offer `reset = "reload"` that re-imports the model package |
-| **Models without pickling support** | State save/restore is disabled (handled well by the probe) | Try `copy.deepcopy` and `dill`/`cloudpickle` as fallbacks before giving up. Add a `__getstate__` hook option in the config (`state = "attr:a,b,c"` to snapshot only some attributes) |
+| **Models without pickling support** (e.g. anything holding an ONNX Runtime `InferenceSession`: Silero VAD, surfaces) | State save/restore is disabled (handled well by the probe) | Try `copy.deepcopy` and `dill`/`cloudpickle` as fallbacks before giving up. Add a `__getstate__` hook option in the config (`state = "attr:a,b,c"` to snapshot only some attributes) |
 
 ---
 
@@ -256,7 +257,7 @@ Ordered by value to an open-source user base.
 9. **Reproducible builds**: a deterministic GUID, `SOURCE_DATE_EPOCH`, and sorted zip entries with fixed timestamps.
 
 ### Tier 3: model coverage ("handle every model")
-10. NamedTuple field names, nested dict and object outputs flattened with dotted names, pandas Series, pint quantities, 0-d arrays, anything with `__float__` (§4).
+10. ✅ NamedTuple field names and 0-d arrays (done). Still to do: nested dict and object outputs flattened with dotted names, pandas Series, pint quantities, anything with `__float__` (§4).
 11. **FMI 2 array expansion** (`x[3]` becomes `x_1..x_3`) so array models work for FMI 2 importers too.
 12. **Structured inputs**: build dataclass, pydantic or attrs arguments from flat FMU variables.
 13. **Generator and async model support.**
@@ -267,7 +268,7 @@ Ordered by value to an open-source user base.
 18. **Pickling fallbacks** (`dill`, `cloudpickle`, `deepcopy`, or user-selected attributes) so more models keep rollback support.
 19. **Model Exchange (FMI 2 and 3) for ODE models**: `[model] kind = "ode"` with `derivatives = "return"` and continuous states. UniFMU's Python backend does not support ME today, so this needs an upstream contribution or a different native wrapper. It is the most-requested FMI capability after co-simulation.
 20. **Internal solver helper**: `[model] integrate = "rk4" | "scipy:RK45"` turns an ODE right-hand side `f(t, x, u)` into a co-simulation FMU, with internal sub-steps and the tolerance passed in. It covers ODE models now without needing ME.
-21. **Wrappers for other model formats**: Jupyter notebooks (`.ipynb` entry via `nbformat`), scikit-learn, ONNX, PyTorch or joblib-pickled ML models (`[model] kind = "sklearn"` calls `predict` with inputs as features). This would be a large draw for data-driven and digital-twin users. Partly done: PyTorch models loaded with `from_pretrained` work through `[model] create` and `convert` (Chronos-Bolt). Still to do: bundling model weights into the FMU, and trying scikit-learn and ONNX models.
+21. **Wrappers for other model formats**: Jupyter notebooks (`.ipynb` entry via `nbformat`), scikit-learn, ONNX, PyTorch or joblib-pickled ML models (`[model] kind = "sklearn"` calls `predict` with inputs as features). This would be a large draw for data-driven and digital-twin users. Partly done: six published networks on PyTorch and ONNX Runtime work unmodified (factories, computed constants for downloaded weights, tensor conversion, tuple arguments). Still to do: bundling model weights into the FMU, and trying scikit-learn and ONNX models.
 
 ### Tier 4: developer experience
 22. **`fmugen check fmugen.toml`**: validate the config and run the probe without packaging, with a readable table of the variables.
