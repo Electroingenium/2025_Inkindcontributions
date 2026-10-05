@@ -31,6 +31,7 @@ The main risks for an open-source release are **distribution and portability**, 
 | 7 | 🟡 Medium | Some inference gaps reduce the "works on any model" coverage (see §4) |
 | 8 | 🟡 Medium | An 89 MB `.git` history (the removed `unifmu.exe` and binaries are still in it). `.idea/` is tracked even though `.gitignore` lists it |
 | 9 | 🟢 Low | Builds are not reproducible (random GUID and current timestamp), there is no CI, and a few docstrings are stale |
+| 10 | 🟠 High | **UniFMU 0.14 crashes when the FMU's Python prints more than about 4 KB**, and the importer hangs forever. Worked around with `build --capture-output` (§5.7); still needs an upstream fix |
 
 ---
 
@@ -112,7 +113,9 @@ What is already supported is broad:
 - arrays and numpy
 - enums
 - clocks
-- 20 tested PyPI models
+- models built by a factory (`[model] create`, e.g. `from_pretrained`)
+- inputs converted before the call (`convert = "torch:tensor"`) and array outputs from any library (torch tensors)
+- 20 tested PyPI models and one neural network (Chronos-Bolt; see `docs/tested-models.md`)
 
 These are the gaps found:
 
@@ -120,6 +123,7 @@ These are the gaps found:
 |---|---|---|
 | **NamedTuple returns** are named `y0, y1` instead of their field names [verified: a `namedtuple("R", "power temp")` gives `y0`/`y1`] | Poor names. The user must rename them by hand | Check `hasattr(result, "_fields")` before the tuple branch and use `return:<field>` |
 | **Nested dicts / objects** (`{"zone": {"T": 21}}`, `result.state.T`) | Skipped during inference. The runtime `pick()` only goes one level deep for dicts | Flatten as `zone.T` (FMI `structured` naming), with `from = "return:zone.T"` resolved through mappings *and* attributes |
+| ✅ **ML models: factories and tensors** (found with Chronos-Bolt) | Was: a model created by `from_pretrained` couldn't be described; `torch.Tensor` inputs and outputs weren't handled | Fixed: `[model] create` / `init --create`, `convert` (set by `init` from torch/JAX/TensorFlow annotations), tensor outputs. Still open: weights downloaded from Hugging Face are not put inside the FMU, so `--vendor`/`--compile` FMUs need network access on first use |
 | **0-d numpy arrays**, `numpy.float16`, `decimal`, `Fraction`, `pint` quantities | Not seen as FMI values (`_fmi_value`), so they are silently left out | Accept anything that defines `__float__` / `__index__` (and `.magnitude` for pint, using its units for `unit`) |
 | **Lists in FMI 2** | Dropped entirely | Offer `expand_arrays = true`, which turns `x[3]` into the scalars `x_1, x_2, x_3` (FMI 2 `structured` naming) |
 | **pandas Series / DataFrame / xarray** returns | Skipped | Series becomes named outputs (index → names). DataFrame row becomes outputs |
@@ -157,6 +161,8 @@ These are the gaps found:
 - `_pick_entry` only considers objects defined in the module. A model file that only re-exports (`from .core import Model`) gives "found: none". Fall back to public classes and functions in `__all__`.
 - The `_prev` suffix is the only state convention. Also recognise `x_old`, `x0`/`x`, `last_x`, and a `state` dict that is passed in and returned.
 
+- ✅ Fixed: `init` crashed after importing `transformers`. Cleaning up imports read `__file__` with `getattr`, which makes lazy modules import optional parts (here one needing `torchvision`). It now reads `__dict__`.
+
 ### 5.4 Runtime (`templates/fmugen_runtime.py`)
 - `do_step` doesn't check that `current_time` matches `self.time`. After a rollback that is valid, but a mismatch outside rollback could be logged as a warning.
 - `tolerance` is stored but never forwarded. Allow `[time] tol = "tolerance"` so ODE-based models (scipy `solve_ivp`) can use it.
@@ -165,7 +171,7 @@ These are the gaps found:
 - `Status.discard` is never used. Let models signal "step rejected, retry smaller" (e.g. by raising `fmugen.Discard` or returning a configured flag). Variable-step master algorithms rely on it.
 - `deserialize` uses `pickle.loads` on bytes from the importer. That is normal for FMUs, but document that FMU state blobs must come from trusted sources.
 - `reset()` drops `self.obj` without calling the model's `terminate` method. If the object holds resources (serial ports, files), they leak until garbage collection.
-- `stdout` / `print()` in user code is not forwarded. Many research models `print` instead of `logging`. Optionally redirect `sys.stdout` to the logger during calls (`[model] capture_print = true`).
+- ✅ `stdout` / `print()` in user code can now be forwarded to the importer's log with `build --capture-output` (off by default; see §5.7).
 
 ### 5.5 modelDescription (`description.py`)
 - The GUID or instantiation token comes from `uuid4()` and `generationDateAndTime` from `now()`, so builds are not reproducible. Derive the GUID from a hash of `interface.json` plus the sources, and respect `SOURCE_DATE_EPOCH`. This also gives a stable GUID for unchanged models, which some importers cache on.
@@ -181,6 +187,18 @@ These are limited by UniFMU's Python backend and documented in `docs/fmi.md`:
 - No Scheduled Execution.
 
 They are acceptable for Python co-simulation. For "all models", Model Exchange is the one people will ask for, because it lets ODE right-hand-side functions be used with the importer's own solver. See §8.
+
+### 5.7 🟠 UniFMU 0.14 hangs when the model prints a lot
+Found while testing Chronos-Bolt. When the FMU's Python process writes more than about 4 KB to stdout/stderr, UniFMU's native library panics (`zeromq-0.4.1/src/rep.rs:168:40: not yet implemented`) and the importer waits forever, with no error. [verified]
+- 3,900 characters printed: fine. 4,200: crash. Splitting the output into small flushed writes still crashes, so it is the total amount.
+- Message size is not the cause: a 160 KB array output and a 70,000-character log message sent through the FMI logger both work.
+- Typical triggers: library warnings, progress bars (Hugging Face loading prints both), tracebacks printed by the model, and the backend's root logging handler echoing large log records.
+
+**Workaround (done):** `fmugen build --capture-output`. Inside UniFMU's backend, the runtime redirects file descriptors 1 and 2 to a temporary file and sends what was written to the importer's log as `[output]` messages after each call. It also catches output from C code. Off by default, so prints still go to the console. A regression test runs the FMU in a subprocess with a timeout.
+
+Still open:
+- Report it upstream to UniFMU, with the small reproduction (a function that prints 5 KB).
+- The default is still exposed: a model that prints a lot hangs unless built with the flag. `init` or `build` could suggest the flag when the probe prints a lot.
 
 ---
 
@@ -245,11 +263,11 @@ Ordered by value to an open-source user base.
 14. **`cwd` / data-file support** for models that open relative paths.
 15. **Discard support**, so a model can reject a step.
 16. **Tolerance, start-time and stop-time time sources.**
-17. **Print capture** to the FMI log.
+17. ✅ **Print capture** to the FMI log: `build --capture-output`.
 18. **Pickling fallbacks** (`dill`, `cloudpickle`, `deepcopy`, or user-selected attributes) so more models keep rollback support.
 19. **Model Exchange (FMI 2 and 3) for ODE models**: `[model] kind = "ode"` with `derivatives = "return"` and continuous states. UniFMU's Python backend does not support ME today, so this needs an upstream contribution or a different native wrapper. It is the most-requested FMI capability after co-simulation.
 20. **Internal solver helper**: `[model] integrate = "rk4" | "scipy:RK45"` turns an ODE right-hand side `f(t, x, u)` into a co-simulation FMU, with internal sub-steps and the tolerance passed in. It covers ODE models now without needing ME.
-21. **Wrappers for other model formats**: Jupyter notebooks (`.ipynb` entry via `nbformat`), scikit-learn, ONNX, PyTorch or joblib-pickled ML models (`[model] kind = "sklearn"` calls `predict` with inputs as features). This would be a large draw for data-driven and digital-twin users.
+21. **Wrappers for other model formats**: Jupyter notebooks (`.ipynb` entry via `nbformat`), scikit-learn, ONNX, PyTorch or joblib-pickled ML models (`[model] kind = "sklearn"` calls `predict` with inputs as features). This would be a large draw for data-driven and digital-twin users. Partly done: PyTorch models loaded with `from_pretrained` work through `[model] create` and `convert` (Chronos-Bolt). Still to do: bundling model weights into the FMU, and trying scikit-learn and ONNX models.
 
 ### Tier 4: developer experience
 22. **`fmugen check fmugen.toml`**: validate the config and run the probe without packaging, with a readable table of the variables.
