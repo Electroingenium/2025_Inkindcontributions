@@ -7,13 +7,13 @@
 - [Runtime Python](#runtime-python)
 - [Simulating](#simulating)
 - [Project layout](#project-layout)
-- [Updating the UniFMU boilerplate](#updating-the-unifmu-boilerplate)
+- [UniFMU version](#unifmu-version)
 
 ---
 
 ## CLI
 
-`uv sync` installs this project in editable mode, so the `fmugen` command always runs the code in `src/fmugen/` and finds the UniFMU boilerplate in `src/fmu/fmi2/` and `src/fmu/fmi3/`.
+`uv sync` installs this project in editable mode, so the `fmugen` command always runs the code in `src/fmugen/`. `fmugen build` also needs the UniFMU 0.14.0 CLI (see [UniFMU version](#unifmu-version)).
 
 ### `fmugen init`
 
@@ -57,7 +57,7 @@ uv run fmugen build MODEL -o OUTPUT [options]
 ## What `fmugen build` does
 
 1. Reads and validates `fmugen.toml`, or infers it from a `.py` model.
-2. Copies the UniFMU boilerplate for the FMI version (`src/fmu/fmi2/` or `src/fmu/fmi3/`). Replaces `resources/model.py` with fmugen's adapter for that version (`src/fmugen/templates/model_fmi2.py` or `model_fmi3.py`), and adds the shared engine `resources/fmugen_runtime.py`.
+2. Runs `unifmu generate python <tmp> fmi2` (or `fmi3`) to get the UniFMU boilerplate for the FMI version. Replaces `resources/model.py` with fmugen's adapter for that version (`src/fmugen/templates/model_fmi2.py` or `model_fmi3.py`), and adds the shared engine `resources/fmugen_runtime.py`.
 3. Copies the entry file and `sources` into `resources/fmugen_model/`, keeping their paths. Appends `requirements` to `resources/requirements.txt`, and installs them into `resources/site/` with `--vendor`.
 4. Imports the entry from the copied files, checks the config against it (argument names, function vs class), and writes `resources/interface.json`.
 5. **Probe:** runs the packaged model once through the real adapter: setup, initialization, one tick of every input clock (FMI 3), one `doStep`, then save and restore state. A model that fails here fails the build, with the model's error message. Whether the state could be saved decides `canGetAndSetFMUstate`.
@@ -71,10 +71,10 @@ The probe runs the model in the build's Python. A model with requirements must t
 
 ```
 model.fmu
-├── binaries/                            # UniFMU native libraries (from src/fmu/fmi2 or fmi3)
+├── binaries/                            # UniFMU native libraries (from `unifmu generate`)
 ├── modelDescription.xml                 # generated from fmugen.toml
 └── resources/
-    ├── main.py, backend.py, ...         # UniFMU Python backend (from src/fmu/fmi2 or fmi3)
+    ├── main.py, backend.py, ...         # UniFMU Python backend (from `unifmu generate`)
     ├── schemas/                         # UniFMU protobuf messages
     ├── launch.toml                      # how UniFMU starts the backend per OS
     ├── requirements.txt                 # backend requirements + [model] requirements
@@ -171,27 +171,24 @@ In the GUI, open the `.fmu`, set start values, press play, and tick outputs to p
 | `src/fmugen/description.py` | `modelDescription.xml` writers (FMI 2 and FMI 3) |
 | `src/fmugen/templates/fmugen_runtime.py` | The engine copied into every FMU: runs the user's code, values, clocks, state |
 | `src/fmugen/templates/model_fmi2.py`, `model_fmi3.py` | The adapters copied into the FMU as `resources/model.py`: FMI calls → engine |
-| `src/fmugen/__main__.py` | CLI, packaging, vendoring, build probe |
-| `src/fmu/fmi2/`, `src/fmu/fmi3/` | UniFMU Python boilerplate the FMU is built from, per FMI version |
+| `src/fmugen/__main__.py` | CLI, packaging, vendoring, build probe, UniFMU version check |
 | `examples/` | Example models with their `fmugen.toml` |
 | `tests/` | `uv run pytest` |
-| `tools/unifmu.exe` | UniFMU 0.14 CLI, used to regenerate `src/fmu/` |
 | `docker/` | FMU + OPC UA + Streamlit demo stack (see [docker/Readme.md](../docker/Readme.md)) |
 
 ---
 
-## Updating the UniFMU boilerplate
+## UniFMU version
 
-`src/fmu/fmi2/` and `src/fmu/fmi3/` were created with the UniFMU CLI. To refresh them with a newer UniFMU version, delete the folder and regenerate it:
+fmugen doesn't ship UniFMU. Every `fmugen build` runs the UniFMU CLI to generate the FMU skeleton (native binaries for Windows, Linux and macOS, plus the Python backend), so it must be installed:
 
-```bash
-./tools/unifmu.exe generate python src/fmu/fmi2 fmi2
-```
+- Download UniFMU **0.14.0** from https://github.com/INTO-CPS-Association/unifmu/releases.
+- Put `unifmu` on `PATH`, or set `FMUGEN_UNIFMU` to the executable's path.
 
-```bash
-./tools/unifmu.exe generate python src/fmu/fmi3 fmi3
-```
+fmugen runs `unifmu --version` and refuses any other version, because the adapters (`resources/model.py`) are written against that version's `backend.py` and protobuf messages. The pinned version is `UNIFMU_VERSION` in `src/fmugen/__main__.py`.
 
 UniFMU 0.14 writes `fmiVersion="3.0-beta.4"` into the FMI 3 template's `modelDescription.xml`. That file is replaced on every build, so it doesn't matter.
 
-`fmugen` replaces `resources/model.py` and `modelDescription.xml`, adds `fmugen_runtime.py`, `interface.json`, `fmugen_model/` and `site/`, appends to `requirements.txt` and (with `--python`) rewrites `launch.toml`. The backend and binaries are taken as-is. After updating, run `uv run pytest`, and check the backend's command list in `resources/backend.py` against [fmi.md](fmi.md).
+`fmugen` replaces `resources/model.py` and `modelDescription.xml`, adds `fmugen_runtime.py`, `interface.json`, `fmugen_model/` and `site/`, appends to `requirements.txt` and (with `--python`) rewrites `launch.toml`. The backend and binaries are taken as-is.
+
+To move to a newer UniFMU: change `UNIFMU_VERSION`, check the backend's command list in the generated `resources/backend.py` against [fmi.md](fmi.md) and the adapters, then run `uv run pytest`.

@@ -8,6 +8,7 @@
 
 ## Requirements
 
+- [UniFMU](https://github.com/INTO-CPS-Association/unifmu/releases) **0.14.0**, exactly this version. `fmugen build` runs `unifmu generate` to create each FMU's native binaries and Python backend. Put the `unifmu` executable on `PATH`, or set `FMUGEN_UNIFMU` to its path. `fmugen init` doesn't need it.
 - [uv](https://docs.astral.sh/uv/). It installs Python 3.13, the dependencies from `pyproject.toml`, and the `fmugen` command:
 
 ```bash
