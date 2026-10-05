@@ -18,7 +18,12 @@ pip install fmugen
 
 You also need [UniFMU](https://github.com/INTO-CPS-Association/unifmu/releases) **0.14.0**, exactly this version, for `fmugen build`. fmugen runs `unifmu generate` to create each FMU's native binaries and Python backend. Put the `unifmu` executable on `PATH`, or set `FMUGEN_UNIFMU` to its path.
 
-The FMU runs your model with the Python of that environment, so it works on the machine where you built it, as long as the environment exists. See [docs/packaging.md](docs/packaging.md#the-fmus-python-environment).
+By default the FMU runs your model with the Python of that environment, so it works on the machine where you built it. To run it on other machines:
+
+- `--vendor` puts the packages inside the FMU as wheels. The target needs Python; the FMU installs them offline on its first run.
+- `--compile pyinstaller` or `--compile nuitka` freezes the model, its packages and Python into an executable. The target needs nothing, and the FMU contains no source code, but it only runs on the OS it was built on.
+
+See [docs/packaging.md](docs/packaging.md#fmus-for-other-machines).
 
 To validate and simulate FMUs as below, install [FMPy](https://github.com/CATIA-Systems/FMPy) too (`pip install fmpy`).
 
@@ -127,7 +132,7 @@ See [docs/fmi.md](docs/fmi.md) for what each FMI call does, function by function
 
 ```
 fmugen init MODEL [-o fmugen.toml] [--call METHOD] [--fmi {2,3}] [--start NAME=VALUE ...] [--setup CALL ...] [--kind function] [--force]
-fmugen build MODEL -o OUTPUT [--fmi {2,3}] [--format fmu|folder] [--name NAME] [--author AUTHOR]
+fmugen build MODEL -o OUTPUT [--fmi {2,3}] [--format fmu|folder] [--name NAME] [--author AUTHOR] [--vendor [--platform TAG] [--python-version X.Y] | --compile {pyinstaller,nuitka}]
 ```
 
 `MODEL` can be any of these:

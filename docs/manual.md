@@ -167,6 +167,7 @@ Packages the model into an FMU. Before writing the FMU, it runs the packaged mod
 ```
 fmugen build MODEL -o OUTPUT [--fmi {2,3}] [--format {fmu,folder}]
                    [--name NAME] [--author AUTHOR] [--call METHOD]
+                   [--vendor [--platform TAG ...] [--python-version X.Y ...] | --compile {pyinstaller,nuitka}]
 ```
 
 | Option | Default | Description |
@@ -178,6 +179,10 @@ fmugen build MODEL -o OUTPUT [--fmi {2,3}] [--format {fmu,folder}]
 | `--name NAME` | `[model] name`, else the entry's name | `modelName` in `modelDescription.xml`. |
 | `--author AUTHOR` | `[model] author`, else empty | `author` in `modelDescription.xml`. |
 | `--call METHOD` | as `init` | Only when `MODEL` is a model target with a class. |
+| `--vendor` | off | Put wheels of every requirement (`[model] requirements` and the backend's) into `resources/wheels/`. On its first run on a machine, the FMU installs them into a cached virtual environment, offline. The target needs Python. See [packaging.md](packaging.md#fmus-for-other-machines). |
+| `--platform TAG` | this machine | With `--vendor`: also vendor wheels for this platform, e.g. `win_amd64`, `manylinux2014_x86_64`, `macosx_11_0_arm64`. Repeatable. |
+| `--python-version X.Y` | this Python | With `--vendor`: vendor wheels for this Python version. Repeatable. |
+| `--compile {pyinstaller,nuitka}` | off | Freeze the model, its packages and Python into an executable (`resources/dist/main/`). The FMU contains no source code and needs no Python, but only runs on the OS it was built on. Needs `pip install fmugen[pyinstaller]` or `fmugen[nuitka]`. |
 
 On success it prints the FMU path, the FMI version, and the number of variables per causality (and clocks):
 
@@ -203,6 +208,18 @@ fmugen build examples/rc_building -o out/rc_building_fmi3.fmu --fmi 3
 
 ```bash
 fmugen build examples/psychrometry -o out/psychrometry_folder --format folder
+```
+
+For another machine with Python (offline install from the FMU):
+
+```bash
+fmugen build examples/simple_pid -o out/simple_pid_vendored.fmu --vendor
+```
+
+For another machine without Python, with no source code in the FMU:
+
+```bash
+fmugen build examples/simple_pid -o out/simple_pid_compiled.fmu --compile pyinstaller
 ```
 
 ### Model targets
