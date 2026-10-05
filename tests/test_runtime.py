@@ -160,7 +160,7 @@ def test_unpicklable_model_disables_state(tmp_path, make_fmu, adapter):
         class Counter:
             def __init__(self):
                 self.it = (i for i in range(1000))   # generators cannot be pickled
-                self.count = 0
+                self.count = -1
 
             def step(self):
                 self.count = next(self.it)
@@ -171,3 +171,91 @@ def test_unpicklable_model_disables_state(tmp_path, make_fmu, adapter):
     fmu = adapter(fmu_dir)
     fmu.initialize()
     assert fmu.fmi2SerializeFmuState()[0] == ERROR
+
+
+def test_setup_positional_arguments_and_kind_function(tmp_path, make_fmu, adapter):
+    write(tmp_path, "lib.py", '''
+        UNITS = None
+        SI = "SI"
+
+        def set_units(units):
+            global UNITS
+            UNITS = units
+
+        def prop(name, value, /, scale=1.0):          # positional-only, like many C extensions
+            if UNITS is None:
+                raise ValueError("units not set")
+            return {"T": value * scale, "P": 2 * value}[name]
+
+        class State:                                   # all the work happens in the constructor
+            def __init__(self, **kwargs):
+                self.T, self.P = kwargs["T"], kwargs["P"]
+                self.rho = self.P / self.T
+    ''')
+    (tmp_path / "fmugen.toml").write_text(textwrap.dedent('''
+        [model]
+        entry = "lib.py:prop"
+        setup = ["lib:set_units(lib.SI)"]
+        [inputs]
+        name  = { start = "T", to = "pos:0" }
+        value = { start = 3.0, to = "pos:1" }
+        scale = { start = 2.0 }
+        [outputs]
+        y = { from = "return" }
+    '''))
+    fmu = adapter(make_fmu(tmp_path))
+    fmu.initialize()
+    assert fmu.get("y") == 6.0
+    assert fmu.fmi2SetString([fmu.vr["name"]], ["P"]) == OK
+    assert fmu.fmi2DoStep(0.0, 1.0, False) == OK
+    assert fmu.get("y") == 6.0 and fmu.engine.module.UNITS == "SI"
+
+    (tmp_path / "fmugen.toml").write_text(textwrap.dedent('''
+        [model]
+        entry = "lib.py:State"
+        kind = "function"
+        [inputs]
+        T = { start = 300.0 }
+        P = { start = 600.0 }
+        [outputs]
+        rho = { from = "return:rho" }
+    '''))
+    fmu = adapter(make_fmu(tmp_path))
+    fmu.initialize()
+    assert fmu.get("rho") == 2.0
+
+
+def test_setter_method_inputs_and_property_outputs(tmp_path, make_fmu, adapter):
+    write(tmp_path, "lab.py", '''
+        class Lab:                                     # a hardware-style API
+            def __init__(self):
+                self._power, self._temp = 0.0, 20.0
+
+            def heater(self, value):                   # set through a method
+                self._power = value
+
+            @property
+            def temperature(self):                     # read through a property
+                return self._temp
+
+            def update(self, dt):
+                self._temp += 0.1 * self._power * dt
+    ''')
+    from fmugen.__main__ import init
+    _, data = init(tmp_path / "lab.py", tmp_path / "inferred.toml")
+    assert data["outputs"] == {"temperature": {}}       # the property is found by inference
+    (tmp_path / "fmugen.toml").write_text(textwrap.dedent('''
+        [model]
+        entry = "lab.py:Lab"
+        call = "update"
+        [time]
+        dt = "step_size"
+        [inputs]
+        power = { start = 10.0, to = "call:heater" }
+        [outputs]
+        temperature = {}
+    '''))
+    fmu = adapter(make_fmu(tmp_path))
+    fmu.initialize()
+    assert fmu.fmi2DoStep(0.0, 2.0, False) == OK
+    assert fmu.get("temperature") == 22.0

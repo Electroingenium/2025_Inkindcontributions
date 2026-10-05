@@ -213,7 +213,7 @@ def build(target, output, model_name=None, author=None, python_exec=None, output
     return output, interface
 
 
-def init(target, output=None, call=None, force=False, fmi_version=None):
+def init(target, output=None, call=None, force=False, fmi_version=None, starts=None, setup=None, kind=None):
     """Write the inferred config to `output` (default: fmugen.toml next to the model; "-": stdout)."""
     model_path, _, _ = parse_target(target)
     default_dir = model_path.parent if model_path else Path.cwd()
@@ -222,13 +222,28 @@ def init(target, output=None, call=None, force=False, fmi_version=None):
     if output.exists() and not force and not to_stdout:
         raise FileExistsError(f"{output} already exists; pass --force to overwrite it, or -o - to print it")
     with isolated_imports():
-        data, comments = infer_config(target, call=call, config_dir=output.parent, fmi_version=fmi_version)
+        data, comments = infer_config(target, call=call, config_dir=output.parent, fmi_version=fmi_version,
+                                      starts=starts, setup=setup, kind=kind)
     text = render_toml(data, comments)
     if to_stdout:
         sys.stdout.write(text)
         return None, data
     output.write_text(text, encoding="utf-8")
     return output, data
+
+
+def _parse_starts(items):
+    import ast
+    starts = {}
+    for item in items:
+        name, sep, text = item.partition("=")
+        if not sep or not name.strip().isidentifier():
+            raise InterfaceError(f"--start {item!r}: expected NAME=VALUE")
+        try:
+            starts[name.strip()] = ast.literal_eval(text.strip())
+        except (ValueError, SyntaxError):
+            starts[name.strip()] = text.strip()  # a bare word: a string
+    return starts
 
 
 def main(argv=None):
@@ -244,6 +259,14 @@ def main(argv=None):
     i.add_argument("--call", help="method run on each step, for classes (default: step/do_step/update/__call__)")
     i.add_argument("--force", action="store_true", help="overwrite an existing config")
     i.add_argument("--fmi", type=int, choices=(2, 3), help="target FMI version; 3 also infers arrays and Binary")
+    i.add_argument("--start", action="append", default=[], metavar="NAME=VALUE",
+                   help="start/probe value for an argument (a Python literal), e.g. for arguments "
+                        "without a default; repeatable")
+    i.add_argument("--setup", action="append", default=[], metavar="CALL",
+                   help="run before the model is used, e.g. 'psychrolib:SetUnitSystem(psychrolib.SI)' "
+                        "or 'reset' (a method, after construction); repeatable")
+    i.add_argument("--kind", choices=("function",),
+                   help="function: treat a class whose constructor does the work as a function called every step")
 
     b = sub.add_parser("build", help="build a UniFMU from a fmugen.toml or a model file",
                        description="Build an FMI 2.0 Co-Simulation FMU. MODEL is a fmugen.toml, a directory "
@@ -266,7 +289,8 @@ def main(argv=None):
     args = parser.parse_args(argv)
     try:
         if args.command == "init":
-            output, data = init(args.model, args.output, args.call, args.force, args.fmi)
+            output, data = init(args.model, args.output, args.call, args.force, args.fmi,
+                                _parse_starts(args.start), args.setup, args.kind)
             if output:
                 print(f"Wrote {output.resolve()}; review it, then run: fmugen build {output}")
             return

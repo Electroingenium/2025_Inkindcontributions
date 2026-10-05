@@ -49,14 +49,20 @@ def parse_target(target):
     return None, path, name
 
 
-def infer_config(target, call=None, config_dir=None, fmi_version=None):
+def infer_config(target, call=None, config_dir=None, fmi_version=None, starts=None, setup=None, kind=None):
     """Return (config dict, {(section, name): comment}) for a model target.
 
     With fmi_version=3, list/tuple/numpy values become array variables and bytes become Binary.
+    `starts` ({argument: value}) gives probe/start values for arguments, e.g. ones without a
+    default; `setup` (list of "module:function(args)" / "method") is run before the probe.
     """
     arrays = fmi_version == 3
+    starts = dict(starts or {})
     path, module_name, name = parse_target(target)
-    module = load_module(path) if path else importlib.import_module(module_name)
+    try:
+        module = load_module(path) if path else importlib.import_module(module_name)
+    except ImportError as e:
+        raise InterfaceError(f"cannot import {target}: {e} (is it installed in this environment?)") from e
     entry = _pick_entry(module, name)
     config_dir = Path(config_dir or (path.parent if path else ".")).resolve()
 
@@ -73,14 +79,34 @@ def infer_config(target, call=None, config_dir=None, fmi_version=None):
         sources = _local_sources(Path(path).resolve(), config_dir)
         if sources:
             data["model"]["sources"] = sources
+    if setup:
+        data["model"]["setup"] = list(setup)
+    if kind == "function":
+        data["model"]["kind"] = "function"
     comments = {}
-    if inspect.isclass(entry):
-        _infer_class(entry, call, data, comments, arrays)
+    if inspect.isclass(entry) and kind != "function":
+        _infer_class(entry, call, data, comments, arrays, starts)
     else:
         if call:
             raise InterfaceError("--call only applies to classes")
-        _infer_function(entry, data, comments, arrays)
+        _infer_function(entry, data, comments, arrays, starts)
+    unused = set(starts) - {n for sec in ("parameters", "inputs", "states") for n in data.get(sec, {})}
+    if unused:
+        raise InterfaceError(f"--start names that are not arguments of the model: {sorted(unused)}")
     return data, comments
+
+
+def _run_setup(data, obj=None):
+    """Run [model] setup steps for the probe: functions before construction, methods after."""
+    from fmugen.config import _setup
+    from fmugen.templates.fmugen_runtime import get_path, resolve_constant, resolve_reference
+    for step in _setup(data["model"].get("setup", []), is_class=True):
+        is_method = ":" not in step["call"]
+        if is_method != (obj is not None):
+            continue
+        target = get_path(obj, step["call"]) if is_method else resolve_reference(step["call"])
+        target(*[resolve_constant(a) for a in step["args"]],
+               **{k: resolve_constant(v) for k, v in step["kwargs"].items()})
 
 
 def _local_sources(entry_file, config_dir):
@@ -128,11 +154,13 @@ def _pick_entry(module, name):
 
 # ---------------- functions ----------------
 
-def _infer_function(fn, data, comments, arrays=False):
-    _arguments(fn, "inputs", data, comments, arrays=arrays)
-    kwargs = {**_probe_kwargs(data, ("inputs",)), **_time_kwargs(data.get("time", {}))}
+def _infer_function(fn, data, comments, arrays=False, starts=None):
+    _arguments(fn, "inputs", data, comments, arrays=arrays, starts=starts)
+    args, kwargs = _probe_args(data, ("inputs",))
+    kwargs.update(_time_kwargs(data.get("time", {})))
     try:
-        result = fn(**kwargs)
+        _run_setup(data)
+        result = fn(*args, **kwargs)
     except Exception as e:
         comments[("outputs", None)] = f"probe call failed ({e!r}); add the outputs by hand"
         return
@@ -142,10 +170,12 @@ def _infer_function(fn, data, comments, arrays=False):
 
 # ---------------- classes ----------------
 
-def _infer_class(cls, call, data, comments, arrays=False):
-    _arguments(cls.__init__, "parameters", data, comments, skip_self=True, allow_time=False, arrays=arrays)
-
+def _infer_class(cls, call, data, comments, arrays=False, starts=None):
     method_name = call or _pick_method(cls)
+    init_starts, call_starts = _assign_starts(cls.__init__, getattr(cls, method_name, None), starts or {})
+    _arguments(cls.__init__, "parameters", data, comments, skip_self=True, allow_time=False, arrays=arrays,
+               starts=init_starts, positional=False)
+
     if method_name != "__call__" or call:
         data["model"]["call"] = method_name
     method = getattr(cls, method_name, None)
@@ -153,7 +183,9 @@ def _infer_class(cls, call, data, comments, arrays=False):
         raise InterfaceError(f"{cls.__name__} has no method {method_name!r}")
 
     try:
-        obj = cls(**_probe_kwargs(data, ("parameters",)))
+        _run_setup(data)
+        obj = cls(**_probe_args(data, ("parameters",))[1])
+        _run_setup(data, obj)
     except Exception as e:
         comments[("outputs", None)] = f"probe construction failed ({e!r}); add the outputs by hand"
         return
@@ -164,11 +196,13 @@ def _infer_class(cls, call, data, comments, arrays=False):
         if _writable_attribute(obj, name) and _same(getattr(obj, name), data["parameters"][name].get("start")):
             comments.setdefault(("parameters", name), "kept as an attribute: add variability = \"tunable\" if the step reads it")
 
-    _arguments(method, "inputs", data, comments, skip_self=True, constants_key="call_constants", arrays=arrays)
+    _arguments(method, "inputs", data, comments, skip_self=True, constants_key="call_constants", arrays=arrays,
+               starts=call_starts)
     before = _numeric_attributes(obj, arrays)
-    kwargs = {**_probe_kwargs(data, ("inputs",)), **_time_kwargs(data.get("time", {}))}
+    args, kwargs = _probe_args(data, ("inputs",))
+    kwargs.update(_time_kwargs(data.get("time", {})))
     try:
-        result = getattr(obj, method_name)(**kwargs)
+        result = getattr(obj, method_name)(*args, **kwargs)
     except Exception as e:
         comments[("outputs", None)] = f"probe call failed ({e!r}); add the outputs by hand"
         return
@@ -177,6 +211,11 @@ def _infer_class(cls, call, data, comments, arrays=False):
     if result is not None and result is not obj:
         _outputs_from_return(result, data, comments, default_name="y", is_class=True, arrays=arrays)
     taken = {*data.get("parameters", {}), *data.get("inputs", {}), *data.get("outputs", {})}
+    for attr, value in _property_values(obj, arrays).items():   # read-only views such as T1 = sensor reading
+        if attr not in taken:
+            data.setdefault("outputs", {})[attr] = _typed({}, value, arrays)
+            comments[("outputs", attr)] = "a property of the object"
+    taken |= set(data.get("outputs", {}))
     for attr, value in after.items():
         if attr in taken:
             continue
@@ -187,6 +226,37 @@ def _infer_class(cls, call, data, comments, arrays=False):
             data.setdefault("locals", {})[attr] = _typed({}, value, arrays)
             comments[("locals", attr)] = f"changed by {method_name}()"
     _detect_states(data, comments, returned=result if isinstance(result, Mapping) else None, obj=obj)
+
+
+def _assign_starts(init, method, starts):
+    """Split --start values between constructor and step method arguments.
+
+    A name goes to the argument that has no default (it needs a value); on a tie, to the
+    step method. Names neither declares go to whichever accepts **kwargs (method first).
+    """
+    def params(fn):
+        try:
+            return inspect.signature(fn).parameters if fn is not None else {}
+        except (TypeError, ValueError):
+            return {}
+
+    init_p, call_p = params(init), params(method)
+    init_starts, call_starts = {}, {}
+    for name, value in starts.items():
+        in_init, in_call = init_p.get(name), call_p.get(name)
+        if in_init and in_call:
+            target = init_starts if (in_init.default is in_init.empty and in_call.default is not in_call.empty) \
+                else call_starts
+        elif in_init or in_call:
+            target = init_starts if in_init else call_starts
+        elif any(p.kind is p.VAR_KEYWORD for p in call_p.values()):
+            target = call_starts
+        elif any(p.kind is p.VAR_KEYWORD for p in init_p.values()):
+            target = init_starts
+        else:
+            continue  # reported as unused
+        target[name] = value
+    return init_starts, call_starts
 
 
 def _pick_method(cls):
@@ -208,7 +278,7 @@ def _pick_method(cls):
 # ---------------- shared ----------------
 
 def _arguments(fn, section, data, comments, skip_self=False, allow_time=True, constants_key="constants",
-               arrays=False):
+               arrays=False, starts=None, positional=True):
     """Sort the arguments of fn into variables of `section` and time arguments.
 
     Arguments whose default is not an FMI value (None, tuples, objects) keep their code
@@ -216,19 +286,34 @@ def _arguments(fn, section, data, comments, skip_self=False, allow_time=True, co
     """
     variables = data.setdefault(section, {})
     time_args = data.get("time", {})
-    params = list(inspect.signature(fn).parameters.values())
+    starts = starts or {}
+    try:
+        params = list(inspect.signature(fn).parameters.values())
+    except (TypeError, ValueError):  # e.g. some C extensions
+        comments[(section, None)] = f"cannot inspect the signature of {getattr(fn, '__qualname__', fn)}; " \
+                                    "add the variables by hand (to = \"pos:N\" for positional arguments)"
+        params = []
     if skip_self and params:
         params = params[1:]
+    position = 0
     for p in params:
-        if p.kind in (p.VAR_POSITIONAL, p.VAR_KEYWORD, p.POSITIONAL_ONLY):
+        if p.kind in (p.VAR_POSITIONAL, p.VAR_KEYWORD):
             continue
-        if allow_time and p.name in TIME_NAMES:
+        if p.kind is p.POSITIONAL_ONLY and not positional:
+            continue
+        if allow_time and p.name in TIME_NAMES and p.name not in starts:
             time_args[p.name] = TIME_NAMES[p.name]
             continue
-        default = None if p.default is p.empty else p.default
-        if p.default is p.empty or isinstance(default, SCALARS):
+        if p.name in starts and not arrays and isinstance(starts[p.name], (list, tuple, bytes)):
+            raise InterfaceError(f"--start {p.name}: arrays and bytes need --fmi 3 (FMI 2 has only scalar variables)")
+        has_default = p.default is not p.empty or p.name in starts
+        default = starts.get(p.name, None if p.default is p.empty else p.default)
+        before = len(variables)
+        if not has_default or isinstance(default, SCALARS):
             info = _type_info(default, p.annotation)
-            if p.default is p.empty:
+            if p.name in starts:
+                comments[(section, p.name)] = "start from --start"
+            elif not has_default:
                 comments[(section, p.name)] = "no default in the code: check the start value"
             elif type(default) is int and p.annotation is not int:
                 comments[(section, p.name)] = "Integer because the default is an int; write a float start for Real"
@@ -244,6 +329,22 @@ def _arguments(fn, section, data, comments, skip_self=False, allow_time=True, co
             variables[p.name] = _array_info(default, with_start=True)
         else:
             comments[("model", f"{constants_key}.{p.name}")] = _constant(default)
+        if p.kind is p.POSITIONAL_ONLY and len(variables) > before:
+            variables[p.name]["to"] = f"pos:{position}"
+            position += 1
+    if any(p.kind is p.VAR_KEYWORD for p in params):  # **kwargs: --start values become keyword arguments
+        names = {p.name for p in params}
+        for name, value in starts.items():
+            if name in names:
+                continue
+            if isinstance(value, SCALARS):
+                variables[name] = _type_info(value)
+            elif arrays and _array_info(value):
+                variables[name] = _array_info(value, with_start=True)
+            else:
+                raise InterfaceError(f"--start {name}: {value!r} is not an FMI value"
+                                     + ("" if arrays else " (arrays need --fmi 3)"))
+            comments[(section, name)] = "start from --start (passed through **kwargs)"
     if time_args and allow_time:
         data["time"] = time_args
     if not variables:
@@ -273,6 +374,18 @@ def _constant(value):
     if module and qualname and "<" not in qualname:
         return {"ref": f"{module}:{qualname}"}
     return None
+
+
+def _probe_args(data, sections):
+    """(positional args, keyword args) for a probe call from the inferred start values."""
+    values = _probe_kwargs(data, sections)
+    positional = sorted(
+        (int(info["to"].split(":")[1]), name)
+        for section in sections for name, info in data.get(section, {}).items()
+        if str(info.get("to", "")).startswith("pos:")
+    )
+    args = [values.pop(name) for _, name in positional]
+    return args, values
 
 
 def _probe_kwargs(data, sections):
@@ -329,7 +442,10 @@ def _outputs_from_return(result, data, comments, default_name, is_class, arrays=
         items = [(k, v, f"return:{k}") for k, v in vars(result).items() if not k.startswith("_")]
     else:
         items = []
+    taken = {n for section in ("parameters", "inputs", "states") for n in data.get(section, {})}
     for name, value, source in items:
+        if name in taken:  # e.g. an object that echoes its inputs as attributes
+            continue
         if not name.isidentifier() or not _fmi_value(value, arrays):
             comments[("outputs", None)] = f"skipped {name!r}: not an FMI value or not a valid name"
             continue
@@ -373,6 +489,21 @@ def _numeric_attributes(obj, arrays=False):
 def _snapshot(value):
     """A copy that later in-place changes (e.g. numpy `+=`) don't affect."""
     return value.copy() if hasattr(value, "copy") and not isinstance(value, (str, bytes)) else value
+
+
+def _property_values(obj, arrays=False):
+    """Public properties of the object whose current value is an FMI value."""
+    values = {}
+    for name, prop in inspect.getmembers(type(obj), lambda m: isinstance(m, property)):
+        if name.startswith("_") or prop.fget is None:
+            continue
+        try:
+            value = getattr(obj, name)
+        except Exception:
+            continue
+        if _fmi_value(value, arrays):
+            values[name] = _snapshot(value)
+    return values
 
 
 def _writable_attribute(obj, name):

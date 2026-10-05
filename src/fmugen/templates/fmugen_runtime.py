@@ -112,10 +112,12 @@ class Engine:
 
     def exit_initialization_mode(self, next_mode="step"):
         def initialize():
+            self._run_setup(after_construction=False)
             if self.is_class:
                 kwargs = dict(self.constants)
                 kwargs.update(self._bound("init"))
                 self.obj = self.entry(**kwargs)
+                self._run_setup(after_construction=True)
                 self._apply_attributes(clock=None)
                 for name in self.clocks:
                     self._apply_attributes(clock=name)
@@ -524,6 +526,25 @@ class Engine:
             raise TypeError(f"{var['name']} is None")
         return coerce(var["type"], value)
 
+    def _run_setup(self, after_construction):
+        """[model] setup: "module:function" calls run before construction, method names after it."""
+        for step in self.interface.get("setup", []):
+            is_method = ":" not in step["call"]
+            if is_method != after_construction:
+                continue
+            target = get_path(self.obj, step["call"]) if is_method else resolve_reference(step["call"])
+            target(*[resolve_constant(a) for a in step.get("args", [])],
+                   **{k: resolve_constant(v) for k, v in step.get("kwargs", {}).items()})
+
+    def _positional(self, clock=None):
+        """Values of variables bound to positional arguments (to = "pos:N"), in order."""
+        bound = sorted(
+            (int(v["to"]["name"]), self._to_python(v, self.values[v["name"]]))
+            for v in self.variables
+            if v.get("to", {}).get("kind") == "pos" and _clock_of(v) == clock
+        )
+        return [value for _, value in bound]
+
     def _bound(self, kind, clock=None):
         """{python name: value} of every variable bound to a constructor/call argument."""
         return {
@@ -533,10 +554,16 @@ class Engine:
         }
 
     def _apply_attributes(self, clock=None):
-        """Write variables bound to attributes (to = "attr:...") onto the model object."""
+        """Write variables bound to attributes (to = "attr:...") or setter methods (to = "call:...")
+        onto the model object."""
         for v in self.variables:
-            if v.get("to", {}).get("kind") == "attr" and _clock_of(v) == clock:
-                set_path(self.obj, v["to"]["name"], self._to_python(v, self.values[v["name"]]))
+            kind = v.get("to", {}).get("kind")
+            if kind in ("attr", "call") and _clock_of(v) == clock:
+                value = self._to_python(v, self.values[v["name"]])
+                if kind == "attr":
+                    set_path(self.obj, v["to"]["name"], value)
+                else:
+                    get_path(self.obj, v["to"]["name"])(value)
 
     def _call(self, time, step_size, clock=None):
         if clock is None:
@@ -549,7 +576,7 @@ class Engine:
             if clock is None or arg in self.clocks[clock].get("time_args", ()):
                 kwargs[arg] = sources[source]
         self._apply_attributes(clock=clock)
-        return self._target(clock)(**kwargs)
+        return self._target(clock)(*self._positional(clock), **kwargs)
 
     def _target(self, clock):
         if clock is None:
@@ -582,6 +609,8 @@ class Engine:
                 if missing_ok:
                     continue
                 raise LookupError(f"{v['name']}: cannot read {describe(v['from'])} ({e!r})") from e
+            if found and value is None and missing_ok:
+                continue  # e.g. an attribute the model only sets after its first step
             if found:
                 self.values[v["name"]] = self._from_python(v, value)
         if update_states:
@@ -642,9 +671,18 @@ def load_entry(interface, resources_dir):
 
 
 def resolve_reference(ref):
-    """'package.module:attr.path' -> the object."""
-    module_name, _, attr = ref.partition(":")
-    return get_path(importlib.import_module(module_name), attr)
+    """'package.module:attr.path' (or dotted 'package.module.attr') -> the object."""
+    if ":" in ref:
+        module_name, _, attr = ref.partition(":")
+        return get_path(importlib.import_module(module_name), attr)
+    parts = ref.split(".")
+    for i in range(len(parts), 0, -1):  # longest importable module prefix
+        try:
+            module = importlib.import_module(".".join(parts[:i]))
+        except ImportError:
+            continue
+        return get_path(module, ".".join(parts[i:])) if i < len(parts) else module
+    raise ImportError(f"cannot import {ref!r}")
 
 
 def resolve_constant(value):
