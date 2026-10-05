@@ -6,14 +6,21 @@
 
 ---
 
-## Requirements
+## Installation
 
-- [UniFMU](https://github.com/INTO-CPS-Association/unifmu/releases) **0.14.0**, exactly this version. `fmugen build` runs `unifmu generate` to create each FMU's native binaries and Python backend. Put the `unifmu` executable on `PATH`, or set `FMUGEN_UNIFMU` to its path. `fmugen init` doesn't need it.
-- [uv](https://docs.astral.sh/uv/). It installs Python 3.13, the dependencies from `pyproject.toml`, and the `fmugen` command:
+Install fmugen into the virtual environment of your model, the one that already has the model's packages:
 
 ```bash
-uv sync
+pip install fmugen
 ```
+
+(or `uv add fmugen`). This also installs the two packages UniFMU's Python backend needs, `protobuf==5.27.3` and `pyzmq`. Then run the `fmugen` commands from that environment.
+
+You also need [UniFMU](https://github.com/INTO-CPS-Association/unifmu/releases) **0.14.0**, exactly this version, for `fmugen build`. fmugen runs `unifmu generate` to create each FMU's native binaries and Python backend. Put the `unifmu` executable on `PATH`, or set `FMUGEN_UNIFMU` to its path.
+
+The FMU runs your model with the Python of that environment, so it works on the machine where you built it, as long as the environment exists. See [docs/packaging.md](docs/packaging.md#the-fmus-python-environment).
+
+To validate and simulate FMUs as below, install [FMPy](https://github.com/CATIA-Systems/FMPy) too (`pip install fmpy`).
 
 ---
 
@@ -24,40 +31,40 @@ For your own model:
 1. Let fmugen inspect the model and write `fmugen.toml` next to it:
 
    ```bash
-   uv run fmugen init path/to/your_model.py
+   fmugen init path/to/your_model.py
    ```
 
 2. Review the file. Check the start values, add units, and remove anything you don't want in the FMU. If the model rejects zeros or needs a setup call first, rerun `init` with `--start NAME=VALUE` / `--setup CALL` (see [docs/models.md](docs/models.md#what-fmugen-init-infers)).
 3. Build:
 
    ```bash
-   uv run fmugen build path/to/fmugen.toml -o out/your_model.fmu --python
+   fmugen build path/to/fmugen.toml -o out/your_model.fmu
    ```
 
 The examples already have reviewed configs. To see what `init` would infer for one without overwriting it, print to the terminal:
 
 ```bash
-uv run fmugen init examples/psychrometry/psychrometry.py -o -
+fmugen init examples/psychrometry/psychrometry.py -o -
 ```
 
 Then build it, validate it, and simulate it:
 
 ```bash
-uv run fmugen build examples/psychrometry -o out/psychrometry.fmu --python
+fmugen build examples/psychrometry -o out/psychrometry.fmu
 ```
 
 ```bash
-uv run fmpy validate out/psychrometry.fmu
+fmpy validate out/psychrometry.fmu
 ```
 
 ```bash
-uv run fmpy simulate out/psychrometry.fmu --stop-time 5 --output-file out/psychrometry.csv
+fmpy simulate out/psychrometry.fmu --stop-time 5 --output-file out/psychrometry.csv
 ```
 
 For a quick try you can skip the config and build straight from a `.py` file. fmugen then infers the config in memory, without units:
 
 ```bash
-uv run fmugen build examples/psychrometry/psychrometry.py -o out/quick.fmu --python
+fmugen build examples/psychrometry/psychrometry.py -o out/quick.fmu
 ```
 
 ---
@@ -72,7 +79,7 @@ uv run fmugen build examples/psychrometry/psychrometry.py -o out/quick.fmu --pyt
 | A method that needs last step's value (`x_prev`) | A *state*: fed back from the result after each step | [`examples/rc_building`](examples/rc_building) |
 | Code that needs the time or step size (`t`, `dt`) | The FMU passes its communication time / step size | [`examples/simple_pid`](examples/simple_pid) |
 | Several files, flat or package imports | Copied into the FMU with their layout | [`examples/rc_building`](examples/rc_building) |
-| A package from PyPI | Listed as a requirement, optionally vendored into the FMU | [`examples/simple_pid`](examples/simple_pid) |
+| A package from PyPI | Installed in your environment; listed as a requirement | [`examples/simple_pid`](examples/simple_pid) |
 | A library that must be set up first (`SetUnitSystem(SI)`, `env.reset()`) | `[model] setup` calls run before the model is used | psychrolib, gymnasium ([tested models](docs/tested-models.md)) |
 | A C extension with positional-only arguments | `to = "pos:N"` bindings | CoolProp ([tested models](docs/tested-models.md)) |
 | Setter methods and properties (`lab.Q1(50)`, `lab.T1`) | `to = "call:Q1"` inputs; properties read like attributes | tclab ([tested models](docs/tested-models.md)) |
@@ -111,7 +118,7 @@ See [docs/fmi.md](docs/fmi.md) for what each FMI call does, function by function
 | [docs/config.md](docs/config.md) | `fmugen.toml` reference: every key and its default |
 | [docs/tested-models.md](docs/tested-models.md) | The 20 published models fmugen was tried on (FMI 2 and FMI 3), what each needed, and the results |
 | [docs/fmi.md](docs/fmi.md) | FMI 2 and FMI 3 behaviour: function-by-function support, initialization, steps, clocks, state, logging |
-| [docs/packaging.md](docs/packaging.md) | CLI, the generated FMU's layout, requirements and `--vendor`, the runtime Python, updating UniFMU |
+| [docs/packaging.md](docs/packaging.md) | CLI, the generated FMU's layout, the FMU's Python environment, updating UniFMU |
 | [docker/Readme.md](docker/Readme.md) | Demo stack: the FMU in Docker, exchanging data over OPC UA, with a Streamlit dashboard |
 
 ---
@@ -119,8 +126,8 @@ See [docs/fmi.md](docs/fmi.md) for what each FMI call does, function by function
 ## CLI
 
 ```
-uv run fmugen init MODEL [-o fmugen.toml] [--call METHOD] [--fmi {2,3}] [--start NAME=VALUE ...] [--setup CALL ...] [--kind function] [--force]
-uv run fmugen build MODEL -o OUTPUT [--fmi {2,3}] [--format fmu|folder] [--python [PATH]] [--vendor] [--name NAME] [--author AUTHOR]
+fmugen init MODEL [-o fmugen.toml] [--call METHOD] [--fmi {2,3}] [--start NAME=VALUE ...] [--setup CALL ...] [--kind function] [--force]
+fmugen build MODEL -o OUTPUT [--fmi {2,3}] [--format fmu|folder] [--name NAME] [--author AUTHOR]
 ```
 
 `MODEL` can be any of these:
@@ -131,7 +138,13 @@ All options are in the [manual](docs/manual.md#4-commands).
 
 ---
 
-## Tests
+## Development and tests
+
+From a clone of the repository:
+
+```bash
+uv sync
+```
 
 ```bash
 uv run pytest

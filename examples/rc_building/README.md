@@ -25,15 +25,15 @@ What the config shows:
 Build, validate and simulate:
 
 ```bash
-uv run fmugen build examples/rc_building -o out/rc_building.fmu --python
+fmugen build examples/rc_building -o out/rc_building.fmu
 ```
 
 ```bash
-uv run fmpy validate out/rc_building.fmu
+fmpy validate out/rc_building.fmu
 ```
 
 ```bash
-uv run fmpy simulate out/rc_building.fmu --input-file examples/rc_building/weather.csv --output-interval 3600 --output-file out/rc_building.csv
+fmpy simulate out/rc_building.fmu --input-file examples/rc_building/weather.csv --output-interval 3600 --output-file out/rc_building.csv
 ```
 
 Expected: heating keeps `t_air` at the 20 °C set point. `heating_demand` is about 0.8–1 kW at night, and drops to 0 in the afternoon when solar and internal gains are enough, which lets `t_air` drift slightly above 20 °C.

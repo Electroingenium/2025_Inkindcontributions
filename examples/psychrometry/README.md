@@ -17,15 +17,15 @@ def compute_balances_simplified(regen_target_temp, ..., vfr_13):
 Build, validate and simulate:
 
 ```bash
-uv run fmugen build examples/psychrometry -o out/psychrometry.fmu --python
+fmugen build examples/psychrometry -o out/psychrometry.fmu
 ```
 
 ```bash
-uv run fmpy validate out/psychrometry.fmu
+fmpy validate out/psychrometry.fmu
 ```
 
 ```bash
-uv run fmpy simulate out/psychrometry.fmu --stop-time 5 --start-values temp_1 30 --output-file out/psychrometry.csv
+fmpy simulate out/psychrometry.fmu --stop-time 5 --start-values temp_1 30 --output-file out/psychrometry.csv
 ```
 
 Expected: constant outputs, with `Q_in` = 2.4 kg/s × 1010 J/(kg·K) × 30 = 72720 W.

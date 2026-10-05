@@ -1,8 +1,7 @@
 """fmugen runtime engine, shared by the FMI 2 and FMI 3 adapters (resources/model.py).
 
 This file is identical for every model and every FMI version. It reads
-resources/interface.json, imports the user's code (resources/fmugen_model/, and
-resources/site/ for vendored requirements) and runs it: constructing the model
+resources/interface.json, imports the user's code (resources/fmugen_model/) and runs it: constructing the model
 object, calling it once per step or per clock tick, and moving values between FMU
 variables and the arguments, return values and attributes of the user's code.
 
