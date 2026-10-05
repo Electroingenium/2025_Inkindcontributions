@@ -4,14 +4,14 @@ fmugen has been tried on published, unmodified Python models: the examples in th
 
 - **Repository examples:** the 5 examples build, validate and simulate. The 3 that use no FMI 3-only features give identical results under FMI 2 and FMI 3.
 - **PyPI models:** **37 of 40 runs pass** (20 models × 2 FMI versions). The 3 that fail are FMI 2 builds of models whose inputs are arrays, which only FMI 3 has. `init` stops them with a clear message.
-- **A neural network:** Amazon's [Chronos-Bolt Tiny](#a-neural-network-chronos-bolt) forecaster (PyTorch, weights from Hugging Face) builds, validates and simulates under FMI 3. Its forecasts are identical to calling the model directly.
+- **Neural networks:** [6 small published networks](#neural-networks) (on PyTorch or ONNX Runtime: forecasters, a voice detector, a reinforcement-learning controller, a molecular energy model and a surrogate) build, validate and simulate. **Every result is identical** to calling the model directly.
 
-These runs are how the [`[model] setup`](models.md#libraries-that-need-setup-first), [`to = "pos:N"`](models.md#positional-only-arguments), [`to = "call:…"`](models.md#setter-methods-and-properties) and [`kind = "function"`](models.md#constructors-that-do-the-work) features, and `init --start/--setup/--kind`, came about. Chronos-Bolt led to `[model] create` / `init --create`, `convert`, tensor outputs and `build --capture-output`.
+These runs are how the [`[model] setup`](models.md#libraries-that-need-setup-first), [`to = "pos:N"`](models.md#positional-only-arguments), [`to = "call:…"`](models.md#setter-methods-and-properties) and [`kind = "function"`](models.md#constructors-that-do-the-work) features, and `init --start/--setup/--kind`, came about. The neural networks led to `[model] create` / `init --create`, `convert`, tensor outputs, `build --capture-output`, factory functions (a function entry with `call`), computed constants (`{ call = "…" }`), tuple and dict arguments (`to = "arg:NAME[i]"`), NamedTuple field names, 0-d array results, and `init` retrying array inputs as numpy arrays or tensors.
 
 - [Projects](#projects)
 - [Repository examples](#repository-examples)
 - [Models from PyPI](#models-from-pypi)
-- [A neural network: Chronos-Bolt](#a-neural-network-chronos-bolt)
+- [Neural networks](#neural-networks)
 - [What was checked](#what-was-checked)
 - [Reproducing a run](#reproducing-a-run)
 
@@ -35,6 +35,11 @@ These runs are how the [`[model] setup`](models.md#libraries-that-need-setup-fir
 | [AHRS](https://github.com/Mayitzin/ahrs) | 0.4.0 | MIT | `Madgwick`, `Mahony` |
 | [Gymnasium](https://github.com/Farama-Foundation/Gymnasium) | 1.3.0 | MIT | `CartPoleEnv`, `PendulumEnv` |
 | [TCLab](https://github.com/jckantor/TCLab) | 1.0.0 | Apache-2.0 | `TCLabModel` |
+| [Silero VAD](https://github.com/snakers4/silero-vad) (`silero-vad`) | 6.2.3, with onnxruntime 1.30.0 | MIT | `load_silero_vad` |
+| [Granite TSFM](https://github.com/ibm-granite/granite-tsfm) (`granite-tsfm`, weights [`ibm-granite/granite-timeseries-ttm-r2`](https://huggingface.co/ibm-granite/granite-timeseries-ttm-r2)) | 0.3.10, with torch 2.11.0, transformers 5.18.0 | Apache-2.0 | `get_model` (TinyTimeMixer) |
+| [Stable-Baselines3](https://github.com/DLR-RM/stable-baselines3) + [huggingface_sb3](https://github.com/huggingface/huggingface_sb3) (model [`sb3/demo-hf-CartPole-v1`](https://huggingface.co/sb3/demo-hf-CartPole-v1)) | 2.9.0 / 3.0, with torch 2.14.1, gymnasium 1.4.0 | MIT / Apache-2.0 | `PPO` |
+| [surfaces](https://github.com/SimonBlanke/Surfaces) (`surfaces[surrogates]`) | 0.9.0, with onnxruntime 1.30.0 | MIT | `GradientBoostingRegressorFunction` (ONNX surrogate) |
+| [TorchANI](https://github.com/aiqm/torchani) | 2.9.0, with torch 2.13.0 | MIT | `ANI2x` |
 | [Chronos](https://github.com/amazon-science/chronos-forecasting) (`chronos-forecasting`, weights [`amazon/chronos-bolt-tiny`](https://huggingface.co/amazon/chronos-bolt-tiny)) | 2.3.2, with torch 2.14.1, transformers 5.18.0 | Apache-2.0 | `ChronosBoltPipeline` |
 
 Only RC_BuildingSimulator is copied into this repository. The others are installed from PyPI when needed.
@@ -86,7 +91,37 @@ Each `--start` takes one `NAME=VALUE`; the table groups several per row for brev
 
 ---
 
-## A neural network: Chronos-Bolt
+## Neural networks
+
+Six small, published networks, each installed as published (`pip install <package>`) into its own venv together with fmugen, then run through `init` → `build` → `fmpy validate` → simulation with FMPy (`FMU3Slave` / `FMU2Slave`). Each result was compared with calling the model directly in its own venv.
+
+| Model | Size, runtime | Shape | `init` options | FMI 2 | FMI 3 |
+|---|---|---|---|---|---|
+| `chronos:ChronosBoltPipeline` | ~9 M params, PyTorch | classmethod factory, tensor in/out | [below](#chronos-bolt) | — (array input) | ✓ |
+| `silero_vad:load_silero_vad` | ~2 MB, ONNX Runtime | **factory function**, recurrent state, unannotated tensor input | `--fmi 3 --call __call__ --start onnx=true --start "x=[…512 samples…]" --start sr=16000`; build with `--capture-output` | — (array input) | ✓ |
+| `tsfm_public.toolkit.get_model:get_model` | 805 k params, PyTorch | factory function with `**kwargs`, 3-D tensor input, Hugging Face output object | `--fmi 3 --call forward --start model_path=ibm-granite/granite-timeseries-ttm-r2 --start context_length=512 --start prediction_length=96 --start "past_values=[[[…512 values…]]]"`; build with `--capture-output` | — (array input) | ✓ |
+| `stable_baselines3:PPO` | 9 k params, PyTorch | classmethod factory whose argument is a **downloaded file**, tuple result with a 0-d action | `--fmi 3 --create load --call predict --start "path=call:huggingface_sb3:load_from_hub(repo_id='sb3/demo-hf-CartPole-v1', filename='ppo-CartPole-v1.zip')" --start "observation=[0.0, 0.0, 0.05, 0.0]" --start deterministic=true`; build with `--capture-output` | — (array input) | ✓ |
+| `surfaces…gradient_boosting_regressor:GradientBoostingRegressorFunction` | 19 KB MLP, ONNX Runtime | class, hyperparameters through `**kwargs` | `--call __call__ --start use_surrogate=true --start n_estimators=78 --start max_depth=13` | ✓ | ✓ |
+| `torchani.models:ANI2x` | 1.7 M params (one network), PyTorch | factory function, **tuple argument** `(species, coordinates)`, NamedTuple result | `--fmi 3 --call forward --start model_index=0 --start "species_coordinates=([[6, 1, 1, 1, 1]], [[[0.0, 0.0, 0.0], …]])"`; build with `--capture-output` | — (array input) | ✓ |
+
+What was checked:
+
+| Model | Test | Result |
+|---|---|---|
+| Silero VAD | 40 chunks of 512 samples: noise, a voiced vowel-like sound (140 Hz harmonics, syllable envelope), noise | All 40 speech probabilities identical to the direct calls, so the recurrent state carries over between FMI steps. 0.09 → 0.01 on noise, 0.76–0.997 on the voiced sound, back to 0 after. 40 steps: 0.08 s. |
+| Granite TTM | Two 96-hour forecasts from 512 hours of a daily cycle with weekly modulation | All 192 values identical. Mean absolute error 1.94 and 2.04 against the true series (amplitude ±25). Save/restore works. |
+| SB3 PPO | **Closed loop of two FMUs:** the PPO policy FMU controls a Gymnasium `CartPoleEnv` FMU, exchanging observation and action every step | The pole stays up the full 500 steps (largest angle 0.045 rad; the episode fails at 0.209). All 500 actions identical to `PPO.predict`. |
+| surfaces | A 4 × 4 grid of `n_estimators` × `max_depth`, FMI 2 and FMI 3 | All 16 predictions identical, for both FMI versions. |
+| TorchANI | Methane with one C–H bond stretched from 0.85 to 1.60 Å | All 16 energies identical. Minimum at 1.10 Å (experiment: 1.09 Å); +39 kcal/mol compressed to 0.85 Å, +61 kcal/mol stretched to 1.60 Å. Save/restore works. |
+
+Notes:
+
+- **No model code was changed.** What the configs needed is now part of fmugen; see the features listed at the top of this page.
+- **`--capture-output`** was needed whenever a model prints while loading (warnings, progress bars), which hangs UniFMU 0.14 otherwise ([manual](manual.md)).
+- **State save/restore** is disabled for the two ONNX Runtime models (Silero VAD, surfaces): an `InferenceSession` cannot be pickled. fmugen detects this when building and declares `canGetAndSetFMUState="false"`.
+- **Weights from Hugging Face** (Chronos, TTM, PPO) are downloaded on first use into the user's cache, not put inside the FMU.
+
+### Chronos-Bolt
 
 [Chronos-Bolt Tiny](https://huggingface.co/amazon/chronos-bolt-tiny) is a pretrained transformer (about 9 M parameters) that forecasts a time series from its recent history. It is used as published: `pip install chronos-forecasting` into a venv, plus fmugen.
 
