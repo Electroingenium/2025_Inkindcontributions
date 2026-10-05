@@ -53,6 +53,7 @@ fmugen build MODEL -o OUTPUT [options]
 | `--platform TAG` | With `--vendor`: also vendor wheels for this platform. Repeatable. |
 | `--python-version X.Y` | With `--vendor`: vendor wheels for this Python version. Repeatable. |
 | `--compile {pyinstaller,nuitka}` | Freeze everything into an executable: no sources in the FMU, no Python needed, this OS only. |
+| `--capture-output` | Send what the model prints to the importer's log instead of the console (UniFMU 0.14 hangs when the FMU's Python prints more than about 4 KB). |
 
 ---
 

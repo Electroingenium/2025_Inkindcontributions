@@ -14,8 +14,10 @@ import importlib
 import json
 import logging
 import math
+import os
 import pickle
 import sys
+import tempfile
 import traceback
 from collections.abc import Mapping
 from fractions import Fraction
@@ -56,6 +58,7 @@ class Engine:
         self.log = log
         self.info_category = info_category
         self.interface = json.loads((self.resources_dir / "interface.json").read_text())
+        self._output, self._position = _capture_output(self.interface.get("capture_output", False)), 0
         self.variables = self.interface["variables"]
         self.by_name = {v["name"]: v for v in self.variables}
         self.by_reference = {v["valueReference"]: v for v in self.variables}
@@ -76,6 +79,7 @@ class Engine:
         self.call_constants = {k: resolve_constant(v) for k, v in self.interface.get("call_constants", {}).items()}
         self.converters = {v["name"]: resolve_reference(v["convert"]) for v in self.variables if v.get("convert")}
         self.reset()
+        self._forward_output()   # e.g. warnings printed while the model was imported
 
     # ================= life cycle =================
 
@@ -477,8 +481,23 @@ class Engine:
             with self._forward_logs():
                 fn()
         except Exception as e:
+            self._forward_output()
             return self.error(f"{what} failed: {e!r}\n{traceback.format_exc()}")
+        self._forward_output()
         return Status.ok
+
+    def _forward_output(self):
+        """Send what the model printed (stdout/stderr, also from C code) to the importer's log."""
+        if self._output is None:
+            return
+        for stream in (sys.stdout, sys.stderr):
+            with contextlib.suppress(Exception):
+                stream.flush()
+        self._output.seek(self._position)
+        text = self._output.read().decode("utf-8", errors="replace")
+        self._position = self._output.tell()
+        if text.strip() and self.logging_on:
+            self.log(f"[output] {text.rstrip()}", Status.ok, self.info_category)
 
     @contextlib.contextmanager
     def _forward_logs(self):
@@ -760,6 +779,27 @@ def coerce(fmi_type, value):
             return bytes.fromhex(value)
         return bytes(value)
     return str(value)
+
+
+def _capture_output(enabled):
+    """With `fmugen build --capture-output`, inside UniFMU's backend process, send stdout and
+    stderr (file descriptors 1 and 2) to a file.
+
+    UniFMU 0.14 crashes when its backend writes more than about 4 KB to the console, which
+    models that print warnings or progress bars do. The output then goes to the importer's
+    log instead (Engine._forward_output). Outside UniFMU (build probe, tests), nothing is
+    redirected.
+    """
+    if not enabled or "UNIFMU_DISPATCHER_ENDPOINT" not in os.environ:
+        return None
+    for stream in (sys.stdout, sys.stderr):
+        with contextlib.suppress(Exception):
+            stream.flush()
+    sink = tempfile.TemporaryFile()
+    for fd in (1, 2):
+        with contextlib.suppress(OSError):
+            os.dup2(sink.fileno(), fd)
+    return sink
 
 
 def fraction(value):

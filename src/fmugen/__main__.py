@@ -199,9 +199,10 @@ def _probe(resources, interface):
 
 
 def build(target, output, model_name=None, author=None, output_format="fmu", call=None, fmi_version=None,
-          vendor=False, platforms=(), python_versions=(), compiler=None):
+          vendor=False, platforms=(), python_versions=(), compiler=None, capture_output=False):
     """Build an FMU. `vendor` (with `platforms`/`python_versions`) or `compiler` ("pyinstaller"
-    or "nuitka") make it run on other machines; see distribute.py."""
+    or "nuitka") make it run on other machines; see distribute.py. `capture_output` sends what
+    the model prints to the importer's log instead of the console."""
     if vendor and compiler:
         raise InterfaceError("--vendor and --compile exclude each other: a compiled FMU already contains its packages")
     if (platforms or python_versions) and not vendor:
@@ -244,6 +245,7 @@ def build(target, output, model_name=None, author=None, output_format="fmu", cal
                     if config.requirements else ""
                 raise InterfaceError(f"cannot import {config.model['entry']}: {e!r}{hint}") from e
             interface = normalize(config, entry_obj, module, sys_path, model_name, author, version)
+            interface["capture_output"] = bool(capture_output)
             for note in interface.pop("notes"):
                 print(f"note: {note}")
             write_interface(interface, resources / "interface.json")
@@ -357,6 +359,9 @@ def main(argv=None):
                    help="freeze the model, its packages and Python into an executable: the FMU contains no "
                         "source code and needs no Python, but only runs on this OS")
     b.add_argument("--fmi", type=int, choices=(2, 3), help="FMI version (default: [model] fmi_version, else 2)")
+    b.add_argument("--capture-output", action="store_true",
+                   help="send what the model prints (stdout/stderr) to the importer's log instead of the "
+                        "console; use it when the model prints more than a few KB, which hangs UniFMU 0.14")
 
     args = parser.parse_args(argv)
     try:
@@ -368,7 +373,7 @@ def main(argv=None):
             return
         output, interface = build(args.model, args.output, args.name, args.author,
                                   args.format, args.call, args.fmi, args.vendor, args.platform,
-                                  args.python_version, args.compile)
+                                  args.python_version, args.compile, args.capture_output)
     except (FileExistsError, InterfaceError) as e:
         parser.exit(2, f"fmugen: error: {e}\n")
 
