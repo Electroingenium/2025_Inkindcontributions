@@ -88,11 +88,17 @@ def infer_config(target, call=None, config_dir=None, fmi_version=None, starts=No
     comments = {}
     if inspect.isclass(entry) and kind != "function":
         _infer_class(entry, call, data, comments, arrays, starts, create)
+    elif call and kind != "function":
+        # a function with --call is a factory: called once, --call runs on what it returns
+        if create:
+            raise InterfaceError("--create only applies to classes; a function with --call is already a factory")
+        _infer_class(None, call, data, comments, arrays, starts, factory=entry)
     else:
         if call or create:
             raise InterfaceError("--call and --create only apply to classes")
         _infer_function(entry, data, comments, arrays, starts)
-    unused = set(starts) - {n for sec in ("parameters", "inputs", "states") for n in data.get(sec, {})}
+    unused = set(starts) - {n for sec in ("parameters", "inputs", "states") for n in data.get(sec, {})}         - {n for table in ("constants", "call_constants") for n in data["model"].get(table, {})}         - {str(info.get("to", "")).partition(":")[2].partition("[")[0]
+           for sec in ("parameters", "inputs", "states") for info in data.get(sec, {}).values()}
     if unused:
         raise InterfaceError(f"--start names that are not arguments of the model: {sorted(unused)}")
     return data, comments
@@ -158,11 +164,9 @@ def _pick_entry(module, name):
 
 def _infer_function(fn, data, comments, arrays=False, starts=None):
     _arguments(fn, "inputs", data, comments, arrays=arrays, starts=starts)
-    args, kwargs = _probe_args(data, ("inputs",))
-    kwargs.update(_time_kwargs(data.get("time", {})))
     try:
         _run_setup(data)
-        result = fn(*args, **kwargs)
+        result = _probe_call(fn, data, comments)
     except Exception as e:
         comments[("outputs", None)] = f"probe call failed ({e!r}); add the outputs by hand"
         return
@@ -172,30 +176,45 @@ def _infer_function(fn, data, comments, arrays=False, starts=None):
 
 # ---------------- classes ----------------
 
-def _infer_class(cls, call, data, comments, arrays=False, starts=None, create=None):
+def _infer_class(cls, call, data, comments, arrays=False, starts=None, create=None, factory=None):
+    """Infer a class model; with `factory` (a function), the object comes from calling it instead."""
     method_name = call or _pick_method(cls)
     if create:
         if not callable(getattr(cls, create, None)):
             raise InterfaceError(f"{cls.__name__} has no classmethod {create!r}")
         data["model"]["create"] = create
-    constructor = getattr(cls, create) if create else cls.__init__   # a bound classmethod has no cls argument
-    init_starts, call_starts = _assign_starts(constructor, getattr(cls, method_name, None), starts or {})
-    _arguments(constructor, "parameters", data, comments, skip_self=not create, allow_time=False, arrays=arrays,
-               starts=init_starts, positional=False)
+    if factory:
+        constructor = factory
+        # The step method's arguments are known only once the object exists: names the factory
+        # declares go to it, everything else to the step method (even if the factory takes **kwargs).
+        declared = inspect.signature(factory).parameters
+        init_starts = {k: v for k, v in (starts or {}).items() if k in declared}
+        call_starts = {k: v for k, v in (starts or {}).items() if k not in declared}
+    else:
+        constructor = getattr(cls, create) if create else cls.__init__   # a bound classmethod has no cls argument
+        init_starts, call_starts = _assign_starts(constructor, getattr(cls, method_name, None), starts or {})
+    _arguments(constructor, "parameters", data, comments, skip_self=not (create or factory), allow_time=False,
+               arrays=arrays, starts=init_starts, positional=False)
 
     if method_name != "__call__" or call:
         data["model"]["call"] = method_name
-    method = getattr(cls, method_name, None)
-    if not callable(method):
+    if not factory and not callable(getattr(cls, method_name, None)):
         raise InterfaceError(f"{cls.__name__} has no method {method_name!r}")
 
     try:
         _run_setup(data)
-        obj = (getattr(cls, create) if create else cls)(**_probe_args(data, ("parameters",))[1])
+        build = factory or (getattr(cls, create) if create else cls)
+        obj = build(**_probe_constants(data, "constants"), **_probe_args(data, ("parameters",))[1])
         _run_setup(data, obj)
     except Exception as e:
         comments[("outputs", None)] = f"probe construction failed ({e!r}); add the outputs by hand"
         return
+    if factory:
+        method = getattr(obj, method_name, None)   # bound: no self argument
+        if not callable(method):
+            raise InterfaceError(f"the object {factory.__name__}() returns has no method {method_name!r}")
+    else:
+        method = getattr(cls, method_name)
 
     # Parameters kept as writable attributes *may* be tunable, but only if the step method
     # reads the attribute (not a value derived from it in __init__), so only suggest it.
@@ -203,13 +222,11 @@ def _infer_class(cls, call, data, comments, arrays=False, starts=None, create=No
         if _writable_attribute(obj, name) and _same(getattr(obj, name), data["parameters"][name].get("start")):
             comments.setdefault(("parameters", name), "kept as an attribute: add variability = \"tunable\" if the step reads it")
 
-    _arguments(method, "inputs", data, comments, skip_self=True, constants_key="call_constants", arrays=arrays,
-               starts=call_starts)
+    _arguments(method, "inputs", data, comments, skip_self=not factory, constants_key="call_constants",
+               arrays=arrays, starts=call_starts)
     before = _numeric_attributes(obj, arrays)
-    args, kwargs = _probe_args(data, ("inputs",))
-    kwargs.update(_time_kwargs(data.get("time", {})))
     try:
-        result = getattr(obj, method_name)(*args, **kwargs)
+        result = _probe_call(getattr(obj, method_name), data, comments, constants_key="call_constants")
     except Exception as e:
         comments[("outputs", None)] = f"probe call failed ({e!r}); add the outputs by hand"
         return
@@ -233,6 +250,51 @@ def _infer_class(cls, call, data, comments, arrays=False, starts=None, create=No
             data.setdefault("locals", {})[attr] = _typed({}, value, arrays)
             comments[("locals", attr)] = f"changed by {method_name}()"
     _detect_states(data, comments, returned=result if isinstance(result, Mapping) else None, obj=obj)
+
+
+ARRAY_RETRIES = ("numpy", "torch:tensor")   # tried in order when a probe call fails with list inputs
+
+
+def _probe_constants(data, table):
+    """Constants set in the config (e.g. computed by a call), resolved as the FMU would."""
+    from fmugen.templates.fmugen_runtime import resolve_constant
+    return {k: resolve_constant(v) for k, v in data["model"].get(table, {}).items()}
+
+
+def _probe_call(fn, data, comments, constants_key="constants"):
+    """Call fn with the probe inputs. If it fails and array inputs are plain lists, retry with them
+    as numpy arrays, then torch tensors (when installed), and keep the first that works."""
+    def call():
+        args, kwargs = _probe_args(data, ("inputs",))
+        kwargs.update(_time_kwargs(data.get("time", {})))
+        kwargs.update(_probe_constants(data, constants_key))
+        return fn(*args, **kwargs)
+
+    try:
+        return call()
+    except Exception as first:
+        plain = [info for info in data.get("inputs", {}).values()
+                 if "dimensions" in info and not info.get("numpy") and not info.get("convert")]
+        if not plain:
+            raise
+        for converter in ARRAY_RETRIES:
+            module = "numpy" if converter == "numpy" else converter.partition(":")[0]
+            if importlib.util.find_spec(module) is None:
+                continue
+            for info in plain:
+                info.update({"numpy": True} if converter == "numpy" else {"convert": converter})
+            try:
+                result = call()
+            except Exception:
+                for info in plain:
+                    info.pop("numpy", None), info.pop("convert", None)
+                continue
+            names = [n for n, info in data["inputs"].items() if any(info is p for p in plain)]
+            shown = "numpy arrays" if converter == "numpy" else converter.replace(":", ".") + "(...)"
+            for name in names:
+                comments[("inputs", name)] = f"passed as {shown}: the probe failed with lists"
+            return result
+        raise first
 
 
 def _assign_starts(init, method, starts):
@@ -311,6 +373,11 @@ def _arguments(fn, section, data, comments, skip_self=False, allow_time=True, co
         if allow_time and p.name in TIME_NAMES and p.name not in starts:
             time_args[p.name] = TIME_NAMES[p.name]
             continue
+        if isinstance(starts.get(p.name), dict) and "call" in starts[p.name]:
+            data["model"].setdefault(constants_key, {})[p.name] = dict(starts[p.name])
+            continue
+        if p.name in starts and _split_items(p, starts[p.name], variables, section, comments, arrays):
+            continue
         if p.name in starts and not arrays and isinstance(starts[p.name], (list, tuple, bytes)):
             raise InterfaceError(f"--start {p.name}: arrays and bytes need --fmi 3 (FMI 2 has only scalar variables)")
         has_default = p.default is not p.empty or p.name in starts
@@ -377,6 +444,41 @@ def _converter(annotation):
     return next((conv for name, conv in ARRAY_CONVERTERS.items() if name in text), None)
 
 
+def _split_items(p, value, variables, section, comments, arrays):
+    """A tuple of arrays (or a dict) passed as one argument becomes one variable per item,
+    bound with to = "arg:NAME[i]" / "arg:NAME[key]". Returns whether it was split."""
+    import typing
+    if isinstance(value, tuple) and len(value) > 1 and not (arrays and _array_info(value)):
+        keys = list(range(len(value)))
+        names = [f"{p.name}_{i}" for i in keys]
+        hints = typing.get_args(p.annotation) if p.annotation is not p.empty else ()
+    elif isinstance(value, dict) and value and all(isinstance(k, str) and k.isidentifier() for k in value):
+        keys = list(value)
+        names = keys
+        hints = ()
+    else:
+        return False
+    items = [value[k] for k in keys]
+    if not all(isinstance(item, SCALARS) or (arrays and _array_info(item)) for item in items):
+        return False
+    for i, (key, name, item) in enumerate(zip(keys, names, items)):
+        info = _array_info(item, with_start=True) if (arrays and _array_info(item)) else _type_info(item)
+        if "dimensions" in info:
+            from fmugen.templates.fmugen_runtime import flatten
+            flat = flatten(list(item))
+            if all(isinstance(x, int) and not isinstance(x, bool) for x in flat):   # e.g. atomic numbers, indices
+                info.update(type="Int32", start=flat)
+        info["to"] = f"arg:{p.name}[{key}]"
+        converter = _converter(hints[i]) if i < len(hints) else None
+        if converter == "numpy":
+            info["numpy"] = True
+        elif converter and "dimensions" in info:
+            info["convert"] = converter
+        variables[name] = info
+        comments[(section, name)] = f"item {key!r} of the argument {p.name}"
+    return True
+
+
 def _type_info(value, annotation=inspect.Parameter.empty):
     if value is None:
         hint = {float: 0.0, int: 0, bool: False, str: ""}.get(annotation, 0.0)
@@ -411,7 +513,13 @@ def _probe_args(data, sections):
         if str(info.get("to", "")).startswith("pos:")
     )
     args = [values.pop(name) for _, name in positional]
-    return args, values
+    from fmugen.templates.fmugen_runtime import assemble_items
+    targets = {name: str(info["to"]).partition(":")[2] for section in sections
+               for name, info in data.get(section, {}).items()
+               if "[" in str(info.get("to", "")) and str(info["to"]).startswith(("arg:", "init:"))}
+    for name, target in targets.items():
+        values[target] = values.pop(name)
+    return args, assemble_items(values)
 
 
 def _probe_kwargs(data, sections):
@@ -442,6 +550,7 @@ def _time_kwargs(time_args):
 
 def _typed(info, value, arrays=False):
     """Type of an output seen in the probe; ints become Real (a probe often just returns 0)."""
+    value = _scalar_of(value)
     if arrays and isinstance(value, bytes):
         info["type"] = "Binary"
     elif arrays and _array_info(value):
@@ -462,6 +571,8 @@ def _outputs_from_return(result, data, comments, default_name, is_class, arrays=
         items = [(str(k), v, f"return:{k}") for k, v in result.items()]
     elif arrays and _array_info(result):
         items = [(default_name, result, "return")]
+    elif isinstance(result, tuple) and hasattr(result, "_fields"):   # NamedTuple: use the field names
+        items = [(field, getattr(result, field), f"return:{field}") for field in result._fields]
     elif isinstance(result, (tuple, list)):
         items = [(f"{default_name}{i}", v, f"return:{i}") for i, v in enumerate(result)]
     elif _fmi_value(result):
@@ -520,10 +631,17 @@ def _snapshot(value):
 
 
 def _property_values(obj, arrays=False):
-    """Public properties of the object whose current value is an FMI value."""
+    """Public properties of the object whose current value is an FMI value.
+
+    Only properties defined in the model's own package count: base classes from frameworks
+    (torch.nn.Module, transformers' PreTrainedModel, ...) add properties that aren't model results.
+    """
+    package = type(obj).__module__.split(".")[0]
+    own = {name for klass in type(obj).__mro__ if klass.__module__.split(".")[0] == package
+           for name, member in vars(klass).items() if isinstance(member, property)}
     values = {}
     for name, prop in inspect.getmembers(type(obj), lambda m: isinstance(m, property)):
-        if name.startswith("_") or prop.fget is None:
+        if name.startswith("_") or prop.fget is None or name not in own:
             continue
         try:
             value = getattr(obj, name)
@@ -548,7 +666,19 @@ NUMPY_TYPES = {"float32": "Float32", "float64": "Real", "int8": "Int8", "uint8":
                "bool": "Boolean"}
 
 
+def _scalar_of(value):
+    """The scalar inside a 0-dimensional array or tensor (numpy, torch, ...), else the value itself."""
+    # numpy scalars (np.float32, ...) also have ndim 0, but are handled as they are, keeping their type
+    if getattr(value, "ndim", None) == 0 and hasattr(value, "item") and type(value).__name__ not in NUMPY_SCALARS:
+        try:
+            return value.item()
+        except Exception:
+            return value
+    return value
+
+
 def _fmi_value(value, arrays=False):
+    value = _scalar_of(value)
     if isinstance(value, (*SCALARS, enum.Enum)) or type(value).__name__ in NUMPY_SCALARS:
         return True
     return arrays and (isinstance(value, bytes) or _array_info(value) is not None)
@@ -645,19 +775,26 @@ def render_toml(data, comments=None):
     lines = [HEADER]
     lines.append("[model]")
     for key, value in data["model"].items():
-        lines.append(f"{_key(key)} = {_value(value)}")
+        if key not in ("constants", "call_constants"):
+            lines.append(f"{_key(key)} = {_value(value)}")
     for table in ("constants", "call_constants"):
+        real = data["model"].get(table, {})
         examples = [
             (key.split(".", 1)[1], example) for (section, key), example in comments.items()
-            if section == "model" and key.startswith(table + ".")
+            if section == "model" and key.startswith(table + ".") and key.split(".", 1)[1] not in real
         ]
-        if examples:
+        if real or examples:
             lines.append("")
+        if examples:
             lines.append("# Arguments whose code default is not an FMI value; the default is used.")
-            lines.append("# To override one, uncomment the table header and the line.")
-            lines.append(f"# [model.{table}]")
-            for name, example in examples:
-                lines.append(f"# {_key(name)} = {_value(example)}" if example else f"# {_key(name)} = ...")
+            lines.append("# To override one, uncomment the line" + ("." if real else " and the table header."))
+        if real or examples:
+            lines.append(f"[model.{table}]" if real else f"# [model.{table}]")
+        for name, value in real.items():
+            lines.append(_with_comment(f"{_key(name)} = {_value(value)}", "computed when the FMU initializes"
+                                       if isinstance(value, dict) and "call" in value else None))
+        for name, example in examples:
+            lines.append(f"# {_key(name)} = {_value(example)}" if example else f"# {_key(name)} = ...")
 
     for section in SECTION_ORDER:
         table = data.get(section)
