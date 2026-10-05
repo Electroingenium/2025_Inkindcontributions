@@ -168,6 +168,7 @@ Packages the model into an FMU. Before writing the FMU, it runs the packaged mod
 fmugen build MODEL -o OUTPUT [--fmi {2,3}] [--format {fmu,folder}]
                    [--name NAME] [--author AUTHOR] [--call METHOD]
                    [--vendor [--platform TAG ...] [--python-version X.Y ...] | --compile {pyinstaller,nuitka}]
+                   [--capture-output]
 ```
 
 | Option | Default | Description |
@@ -183,6 +184,7 @@ fmugen build MODEL -o OUTPUT [--fmi {2,3}] [--format {fmu,folder}]
 | `--platform TAG` | this machine | With `--vendor`: also vendor wheels for this platform, e.g. `win_amd64`, `manylinux2014_x86_64`, `macosx_11_0_arm64`. Repeatable. |
 | `--python-version X.Y` | this Python | With `--vendor`: vendor wheels for this Python version. Repeatable. |
 | `--compile {pyinstaller,nuitka}` | off | Freeze the model, its packages and Python into an executable (`resources/dist/main/`). The FMU contains no source code and needs no Python, but only runs on the OS it was built on. Needs `pip install fmugen[pyinstaller]` or `fmugen[nuitka]`. |
+| `--capture-output` | off | Send what the model prints (stdout and stderr, also from C code) to the importer's log, prefixed `[output]`, instead of the console. Use it for models that print more than a few KB (warnings, progress bars): UniFMU 0.14 crashes when the FMU's Python writes that much to the console, and the importer hangs. The importer may only show these messages with debug logging on. |
 
 On success it prints the FMU path, the FMI version, and the number of variables per causality (and clocks):
 
@@ -601,4 +603,5 @@ This config is illustrative: `plant.py` is not part of the repository. Every key
 | `duplicate variable or clock names` | The same name in two sections, or a variable named like a clock. | Rename one; bind it with `to`/`from`. |
 | `note: the model object cannot be pickled …` | The object holds a file, socket or generator. | Fine for most uses; FMU state saving and restoring is disabled. |
 | The FMU fails at runtime with `ModuleNotFoundError` | The environment the FMU was built in has changed or was deleted. | Reinstall the package there, or rebuild the FMU from the environment that has it. |
+| The importer hangs; the console shows `panicked at ... zeromq-0.4.1/src/rep.rs:168:40: not yet implemented` | The model printed more than about 4 KB (warnings, progress bars); UniFMU 0.14 crashes on that. | Rebuild with `--capture-output`. |
 | The simulation hangs or the importer reports an unknown command | The importer called an FMI function the UniFMU backend lacks. | See [fmi.md](fmi.md#unsupported-functions). |
