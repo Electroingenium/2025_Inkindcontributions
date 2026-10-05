@@ -24,8 +24,8 @@ The main risks for an open-source release are **distribution and portability**, 
 |---|---|---|
 | 1 | ✅ Fixed | The wheel did not contain the UniFMU boilerplate. fmugen now runs `unifmu generate` and requires UniFMU 0.14.0 to be installed |
 | 2 | 🔴 Critical | **No LICENSE file** |
-| 3 | 🟠 High | The FMU's Python environment is not managed. `launch.toml` hard-codes `python3` on Linux and macOS, `--python` only affects Windows, and `--vendor` installs wheels for the *build* interpreter and platform |
-| 4 | 🟠 High | The package metadata is a placeholder (`name = "2025-inkindcontributions"`, "Add your description here"), and the runtime dependencies are bloated (PySide6, plotly, FMPy, colorama…) |
+| 3 | ✅ Fixed | The FMU's Python was unclear. By design, fmugen is installed in the model's venv and the FMU runs with that venv's Python |
+| 4 | ✅ Fixed | Placeholder package metadata and bloated dependencies. The package is now `fmugen`, depending only on what the FMU's backend needs |
 | 5 | 🟡 Medium | `requires-python >= 3.13` excludes many users. The code needs about 3.11 (`tomllib`) and the FMU runtime needs 3.10 (`match` in the backend) |
 | 6 | 🟡 Medium | The build-time probe always runs the model. That is unsafe for hardware or network models (e.g. tclab) and there is no `--no-probe` option |
 | 7 | 🟡 Medium | Some inference gaps reduce the "works on any model" coverage (see §4) |
@@ -43,25 +43,23 @@ The wheel only contained `src/fmugen`, while the build copied the UniFMU boilerp
 
 Still to do: a CI job that installs the built wheel and UniFMU into a clean environment and builds an example FMU.
 
-### 2.2 🟠 Project metadata
-- `name = "2025-inkindcontributions"`: the CLI is `fmugen`, so the distribution should be called `fmugen`. Check that the name is free on PyPI.
-- `description` is the uv placeholder.
-- No `license`, `authors`, `urls`, `classifiers` or `keywords`.
-- `version = "0.1.0"` is static. Consider `hatch-vcs` and git tags, and add a `CHANGELOG.md`.
-- `src/fmugen/templates/` has no `__init__.py`. It works as a namespace package, but adding one is more robust with some tools.
+### 2.2 ✅ Project metadata (fixed)
+The distribution was called `2025-inkindcontributions`, with the uv placeholder description and no authors, keywords or classifiers.
 
-### 2.3 🟠 Dependency hygiene
-The runtime `dependencies` include packages fmugen itself never imports:
+**Fixed:** the package is `fmugen`, with a real description, author, keywords and classifiers. A built wheel installed into a fresh model venv builds an FMU that FMPy simulates [verified].
 
-| Dependency | Used by | Should be |
-|---|---|---|
-| `pyside6` (~ hundreds of MB) | nothing in `src/` | removed, or a `[gui]` extra |
-| `plotly` | nothing in `src/` | removed, or a `[plot]` extra |
-| `fmpy` | tests and validation | `dev` group, or a `[validate]` extra |
-| `colorama`, `coloredlogs`, `toml`, `pyzmq`, `protobuf==5.27.3` | the UniFMU backend *inside the FMU* | not a dependency of the generator. They belong to the FMU runtime environment (§3.1) |
-| `typing-extensions` | not imported | removed |
+Still open:
+- No `license` field, because there is no licence yet (§2.5).
+- No project URLs, because there is no public repository yet.
+- The version is static. Consider `hatch-vcs` and a `CHANGELOG.md`.
+- Check that `fmugen` is free on PyPI before the first upload. Until then, install it from a checkout or a built wheel.
 
-`protobuf==5.27.3` is pinned exactly in the generator's own dependencies. That pin will conflict with users' environments (TensorFlow, grpc, etc.). The generator only needs `tomllib` (stdlib). Its true dependency list is close to **empty**, which is a strong selling point.
+### 2.3 ✅ Dependency hygiene (fixed)
+fmugen required PySide6, plotly, FMPy, colorama, coloredlogs, toml, typing-extensions, pyzmq and an exact `protobuf==5.27.3`, and imported none of them.
+
+**Fixed:** fmugen is installed into the user's model venv, and the FMU runs with that venv. So its dependencies are exactly what UniFMU 0.14's Python backend imports: `protobuf==5.27.3` and `pyzmq`. Everything else is gone, and FMPy is a dev dependency for the tests. Inside the FMU, `requirements.txt` lists those two plus `[model] requirements`. UniFMU's own file also listed FMPy, colorama, coloredlogs and toml, which the backend doesn't use.
+
+Remaining risk: the exact `protobuf==5.27.3` pin lands in the user's environment and can conflict with other packages that pin protobuf (TensorFlow, grpcio, …). The pin comes from UniFMU's generated `*_pb2.py` files. Regenerating the schemas, or testing a range like `protobuf>=5.27,<6`, would loosen it.
 
 ### 2.4 🟡 Python version
 `requires-python = ">=3.13"` and `.python-version = 3.13`, but nothing needs 3.13:
@@ -83,18 +81,12 @@ Lowering the floor to **3.10 or 3.11** (with `tomli` as a fallback for 3.10) wid
 
 This matters most for "handle all models, run anywhere".
 
-### 3.1 🟠 The Python interpreter and environment inside the FMU
-- `launch.toml` always uses `python3` on Linux and macOS. `--python` rewrites only the `windows` line (`_write_launch_toml`), so there is no way to pin a Linux or macOS interpreter.
-- With `--python`, the builder's absolute interpreter path (e.g. `C:/Users/.../.venv/Scripts/python.exe`) is baked into the FMU. The FMU then only works on that machine. This is documented, but it is an easy trap.
-- `requirements.txt` is appended but **never installed automatically**. The importer's machine must already have `protobuf==5.27.3`, `pyzmq` and the model's requirements on `python3`.
-- `--vendor` runs `pip install --target` for the **build** interpreter's ABI and OS. A vendored numpy wheel built on Windows/CPython 3.13 will not import on Linux/CPython 3.11. The FMU looks self-contained but is not.
+### 3.1 ✅ The Python interpreter inside the FMU (fixed)
+Before: `launch.toml` used `python3` on Linux and macOS and, with `--python`, the builder's interpreter on Windows only. Nothing made sure that interpreter had the backend's and the model's packages.
 
-**Suggested direction** (largest single gain for portability):
-1. `launch.toml` runs a small **bootstrap launcher**. On first run it creates a venv next to the FMU (or in a user cache keyed by a hash of the requirements) with `uv` if available, else `python -m venv` plus pip. It installs `requirements.txt`, then starts `main.py`. UniFMU's own docs suggest this pattern.
-2. `--vendor --platform manylinux2014_x86_64 --platform win_amd64 --python-version 3.11` downloads wheels for several targets into `site/<platform-tag>/`. The runtime then picks the matching directory.
-3. Record the Python version the FMU was built and probed with in `interface.json`, and warn at startup when it differs.
-4. Allow `--python` per OS: `--python linux=/opt/py/bin/python3`.
-5. Optionally embed a relocatable interpreter (python-build-standalone) for a truly self-contained FMU. This could be large, so make it opt-in with `--embed-python`.
+**Fixed, by design:** fmugen is installed into the model's virtual environment and run from there. That environment already has the model's packages, and it gets the backend's packages as fmugen's dependencies. `launch.toml` always points at that environment's interpreter (`sys.executable`) for the current OS. `--python` and `--vendor` were removed. The build probe runs in the same environment the FMU will use, so a successful build means the FMU's imports work.
+
+Consequence: an FMU runs on the machine where it was built, as long as that environment exists. Running it on another machine means rebuilding it there from an equivalent environment (`resources/requirements.txt` lists what it needs). Shipping FMUs to other machines is a non-goal for now. See §8 if that changes.
 
 ### 3.2 🟡 Module name clashes
 `RESERVED_MODULES` protects `model`, `backend`, `main`, … but not the standard library:
@@ -145,7 +137,6 @@ These are the gaps found:
 ### 5.1 CLI and build (`__main__.py`)
 - The **probe always executes user code at build time**, both in `infer_config` and in `_probe`. For hardware (tclab), network or licence-server models, or slow models, this has side effects or hangs. Add `--no-probe` (assume `can_get_and_set_state = false` or let the config decide) and a probe timeout.
 - `build()` writes `interface.json` twice: once before the probe and once after it with `can_get_and_set_state`. That is fine, but if the probe raises, the error has no "the model built but the probe failed" context. Point to `--no-probe`.
-- `_vendor()` uses `uv pip install --python sys.executable`, which ties it to the build interpreter (§3.1).
 - Missing commands that users will expect (see §8): `fmugen check`, `fmugen run`, `fmugen inspect`.
 - `main()` only catches `FileExistsError` and `InterfaceError`. An exception from user code during `build` (e.g. at import) prints a raw traceback. That is acceptable, but a `--debug` flag would let the default path show a short message.
 
@@ -230,15 +221,15 @@ Gaps:
 Ordered by value to an open-source user base.
 
 ### Tier 1: before the first public release
-1. **Rename the distribution to `fmugen`, trim dependencies to zero or near zero (§2.3), add a LICENSE and third-party notices (§2.5), publish to PyPI.
+1. ✅ Rename the distribution and trim dependencies (done). **Add a LICENSE** and third-party notices (§2.5), then publish to PyPI.
 2. **CI matrix** on 3 OSes × Python 3.10–3.13, plus a "build from installed wheel" smoke test.
 3. **Lower `requires-python`** to 3.10 or 3.11.
 4. **`--no-probe`** and a probe timeout.
 5. **Reject model module names that shadow the standard library.**
 
 ### Tier 2: portability ("an FMU that runs anywhere")
-6. **Self-provisioning FMU runtime.** A bootstrap launcher creates or reuses a cached venv from `requirements.txt` using `uv` (fast) or venv+pip, then starts the backend (§3.1).
-7. **Multi-platform vendoring** (`--vendor --platform … --python-version …`) with per-platform `site/` directories.
+6. **Self-provisioning FMU runtime** (only if FMUs must run on other machines). A launcher could recreate the environment from `requirements.txt` on first run. This is out of scope for now (§3.1).
+7. **Multi-platform vendoring** (same condition): wheels for target platforms inside the FMU, for offline installs.
 8. **`--embed-python`** (opt-in): a python-build-standalone interpreter for fully offline, self-contained FMUs.
 9. **Reproducible builds**: a deterministic GUID, `SOURCE_DATE_EPOCH`, and sorted zip entries with fixed timestamps.
 
