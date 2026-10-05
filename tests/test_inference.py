@@ -112,3 +112,44 @@ def test_fmi3_infers_arrays_binary_and_float32(tmp_path):
 
     data2, _ = infer(tmp_path / "filt.py")                     # FMI 2: no arrays
     assert "weights" not in data2.get("parameters", {})
+
+
+def test_start_setup_kind_and_errors(tmp_path):
+    (tmp_path / "gh.py").write_text(textwrap.dedent('''
+        STARTED = False
+
+        def start():
+            global STARTED
+            STARTED = True
+
+        class Filter:
+            def __init__(self, x, g, h=0.1, **kwargs):
+                if not STARTED:
+                    raise RuntimeError("call start() first")
+                self.x, self.g, self.h = x, g, h
+
+            def update(self, z, g=None):
+                self.x += (g or self.g) * (z - self.x)
+                return self.x
+
+        class Props:
+            def __init__(self, **kwargs):
+                self.T = kwargs["T"]
+                self.double = 2 * kwargs["T"]
+    '''))
+    # g has no default in the constructor and one in update(): --start g goes to the constructor
+    data, _ = infer(f"{tmp_path / 'gh.py'}:Filter", starts={"x": 0.0, "g": 0.5, "z": 1.0},
+                    setup=["gh:start"])
+    assert data["model"]["setup"] == ["gh:start"]
+    assert data["parameters"]["g"] == {"start": 0.5} and data["inputs"]["z"] == {"start": 1.0}
+    assert "g" not in data["inputs"] and data["outputs"] == {"y": {"from": "return"}}
+
+    # a class whose constructor does the work, called like a function; inputs aren't echoed as outputs
+    data, _ = infer(f"{tmp_path / 'gh.py'}:Props", kind="function", starts={"T": 300.0})
+    assert data["model"]["kind"] == "function"
+    assert data["inputs"] == {"T": {"start": 300.0}} and data["outputs"] == {"double": {}}
+
+    with pytest.raises(InterfaceError, match="arrays and bytes need --fmi 3"):
+        infer(f"{tmp_path / 'gh.py'}:Filter", starts={"x": [0.0, 1.0], "g": 0.5})
+    with pytest.raises(InterfaceError, match="not arguments"):
+        infer(f"{tmp_path / 'gh.py'}:start", starts={"nope": 1.0})

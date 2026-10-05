@@ -14,6 +14,7 @@ This page shows the shapes of code fmugen understands, how each maps onto an FMU
 - [Enumerations](#enumerations)
 - [Several files](#several-files)
 - [Models from PyPI](#models-from-pypi)
+- [Libraries that need setup, C extensions, constructors that do the work](#libraries-that-need-setup-c-extensions-constructors-that-do-the-work)
 - [Arrays and structural parameters (FMI 3)](#arrays-and-structural-parameters-fmi-3)
 - [Clocks (FMI 3)](#clocks-fmi-3)
 - [Stopping the simulation from the model (FMI 3)](#stopping-the-simulation-from-the-model-fmi-3)
@@ -254,6 +255,39 @@ requirements = ["simple-pid==2.0.1"]
 
 ---
 
+## Libraries that need setup, C extensions, constructors that do the work
+
+Three more shapes show up often in published libraries:
+
+- **Setup before use.** Some libraries need a call first: `psychrolib.SetUnitSystem(psychrolib.SI)`, or `env.reset()` for a gym environment. List those calls in `[model] setup`. A `"module:function(...)"` runs before the model is constructed; a bare `"method"` runs on the object right after construction:
+
+  ```toml
+  [model]
+  entry = "psychrolib:GetHumRatioFromRelHum"
+  setup = ["psychrolib:SetUnitSystem(psychrolib.SI)"]
+  ```
+
+  ```toml
+  [model]
+  entry = "gymnasium.envs.classic_control.cartpole:CartPoleEnv"
+  call = "step"
+  setup = ["reset"]
+  ```
+
+- **Positional-only arguments** (common in C extensions, e.g. CoolProp's `PropsSI(output, name1, value1, name2, value2, fluid)`). Bind them by position with `to = "pos:N"`. If the signature can't be inspected at all, `fmugen init` says so and you write the variables by hand:
+
+  ```toml
+  [inputs]
+  output = { start = "T", to = "pos:0" }
+  name1  = { start = "P", to = "pos:1" }
+  ```
+
+- **Setter methods and properties** (hardware-style APIs such as `tclab.TCLabModel`: `lab.Q1(50)` sets the heater, `lab.T1` reads a sensor). Bind an input to a setter with `to = "call:Q1"`. Properties are read like attributes, and `fmugen init` lists readable properties as outputs.
+
+- **The constructor does the work** (e.g. `iapws.IAPWS97(T=400, P=1)` computes every property in `__init__`). `[model] kind = "function"` constructs the class with the inputs on every step and reads outputs from the new object.
+
+---
+
 ## Arrays and structural parameters (FMI 3)
 
 FMI 3 variables can be arrays. Give a variable `dimensions`, and your code exchanges lists or numpy arrays with the FMU:
@@ -380,10 +414,23 @@ When it is true after a step or a clock tick, the FMU returns `terminateSimulati
 ## What `fmugen init` infers
 
 ```bash
-uv run fmugen init path/to/model.py[:Name] [--call METHOD] [--fmi 3] [-o fmugen.toml | -o -] [--force]
+uv run fmugen init path/to/model.py[:Name] [--call METHOD] [--fmi 3] [--start NAME=VALUE ...] [--setup CALL ...] [--kind function] [-o fmugen.toml | -o -] [--force]
 ```
 
-It imports the module, picks the entry, makes one probe call with the start values, and writes a commented config:
+It imports the module, picks the entry, makes one probe call with the start values, and writes a commented config.
+
+The probe only works if the model accepts the start values. Arguments without a default start at `0`, which many models reject (`Re=0`, `dim=0`, a time step of 0). Give realistic values with `--start` (repeatable; values are Python literals, lists for FMI 3 arrays). Run required calls with `--setup`, and use `--kind function` for constructors that do the work:
+
+```bash
+uv run --with fluids fmugen init fluids.friction:friction_factor --start Re=1e5 -o -
+```
+
+```bash
+uv run --with psychrolib fmugen init psychrolib:GetHumRatioFromRelHum --setup "psychrolib:SetUnitSystem(psychrolib.SI)" --start TDryBulb=25.0 --start RelHum=0.5 --start Pressure=101325.0 -o -
+```
+
+A `--start` name that appears in both the constructor and the step method goes to the one without a default; on a tie, to the step method. Names neither declares are passed through `**kwargs` if one of them accepts it.
+
 
 | | Inferred from |
 |---|---|
@@ -392,10 +439,11 @@ It imports the module, picks the entry, makes one probe call with the start valu
 | **Start values and types** | The default value. With no default: the annotation, otherwise Real `0.0` |
 | **Time arguments** | Arguments named `dt`, `step_size`, `h` (step size) or `t`, `time` (time) |
 | **Outputs from the return value** | The probe result: dict keys, tuple positions, a single value (`y`), or object attributes |
-| **Outputs and locals of classes** | Public numeric attributes the probe step *created* (outputs) or *changed* (locals) |
+| **Outputs and locals of classes** | Public numeric attributes the probe step *created* (outputs) or *changed* (locals), and readable properties (outputs) |
 | **States** | An input `x_prev` whose next value is returned or stored as `x_next` or `x` |
 | **Sources** | Local modules under the config's folder that the model imported |
 | **Constants** | Non-FMI defaults, written as commented-out examples |
+| **Positional-only arguments** | Bound with `to = "pos:N"` |
 | **Arrays and Binary** (`--fmi 3`) | List, tuple and numpy defaults and results become `dimensions` (`numpy = true` for numpy inputs); `bytes` becomes Binary; numpy `float32` becomes Float32 |
 
 Check afterwards:

@@ -51,7 +51,7 @@ SECTIONS = {
 
 MODEL_KEYS = {
     "entry", "call", "name", "description", "author", "sources", "requirements",
-    "constants", "call_constants", "init_call", "terminate", "fmi_version",
+    "constants", "call_constants", "init_call", "terminate", "fmi_version", "setup", "kind",
 }
 EXPERIMENT_KEYS = {"start_time", "stop_time", "step_size", "tolerance", "fixed_step"}
 TIME_SOURCES = ("time", "step_size", "end_time")
@@ -209,7 +209,10 @@ def normalize(config, entry_obj, module_name, sys_path, model_name=None, author=
     if version not in FMI_VERSIONS:
         raise InterfaceError(f"unknown FMI version {version!r}, expected one of {FMI_VERSIONS}")
     notes = []
-    is_class = inspect.isclass(entry_obj)
+    if model.get("kind", "auto") not in ("auto", "function"):
+        raise InterfaceError('[model] kind must be "function" (call a class like a function on every step)')
+    # kind = "function": a class whose constructor does the work is called like a function on every step
+    is_class = inspect.isclass(entry_obj) and model.get("kind") != "function"
     if not is_class and not callable(entry_obj):
         raise InterfaceError(f"{config.model['entry']} is neither a function nor a class")
     kind = "class" if is_class else "function"
@@ -280,6 +283,18 @@ def normalize(config, entry_obj, module_name, sys_path, model_name=None, author=
                 check_arg(sig, to["name"], f"[{section}] {name}")
             variables.append(var)
 
+    if not variables:
+        raise InterfaceError(
+            "the config defines no FMU variables: add [inputs]/[parameters] and [outputs] "
+            "(the model's arguments and results could not be inferred)"
+        )
+    for clock_name in [None, *clock_names]:
+        positions = sorted(int(v["to"]["name"]) for v in variables
+                           if v.get("to", {}).get("kind") == "pos" and (v.get("clocks") or [None])[0] == clock_name)
+        if positions != list(range(len(positions))):
+            raise InterfaceError(f"positional arguments (to = \"pos:N\") must be numbered 0, 1, 2, ... without gaps; "
+                                 f"got {positions}")
+
     names = [v["name"] for v in variables]
     duplicates = sorted({n for n in names if names.count(n) > 1} | (set(names) & clock_names))
     if duplicates:
@@ -331,6 +346,7 @@ def normalize(config, entry_obj, module_name, sys_path, model_name=None, author=
             "terminate": model.get("terminate"),
         },
         "sys_path": sys_path,
+        "setup": _setup(model.get("setup", []), is_class),
         "constants": constants,
         "call_constants": call_constants,
         "time_args": time_args,
@@ -343,6 +359,52 @@ def normalize(config, entry_obj, module_name, sys_path, model_name=None, author=
         "can_get_and_set_state": True,
         "notes": notes,
     }
+
+
+def parse_call(text):
+    """'module:function(arg, ...)' or 'method(arg, ...)' -> {call, args}.
+
+    Arguments are Python literals or dotted references to importable objects
+    (e.g. psychrolib.SI); references are resolved when the FMU initializes.
+    """
+    import ast
+    call, paren, rest = text.partition("(")
+    args = []
+    if paren:
+        if not rest.endswith(")"):
+            raise InterfaceError(f"[model] setup {text!r}: missing ')'")
+        try:
+            nodes = ast.parse(f"_({rest}", mode="eval").body.args
+        except SyntaxError as e:
+            raise InterfaceError(f"[model] setup {text!r}: {e.msg}") from e
+        for node in nodes:
+            try:
+                value = ast.literal_eval(node)
+                args.append(value if isinstance(value, (bool, int, float, str)) else {"python": ast.unparse(node)})
+            except ValueError:
+                if not isinstance(node, (ast.Attribute, ast.Name)):
+                    raise InterfaceError(f"[model] setup {text!r}: arguments must be literals or names")
+                args.append({"ref": ast.unparse(node)})
+    return {"call": call.strip(), "args": args}
+
+
+def _setup(steps, is_class):
+    """[model] setup: calls run when the FMU initializes, before the model is used."""
+    if isinstance(steps, (str, dict)):
+        steps = [steps]
+    normalized = []
+    for step in steps:
+        if isinstance(step, str):
+            step = parse_call(step)
+        if not isinstance(step, dict) or "call" not in step:
+            raise InterfaceError("[model] setup entries are \"module:function\", \"method\", "
+                                 "or { call = ..., args = [...], kwargs = {...} }")
+        _check_keys(step, {"call", "args", "kwargs"}, "[model] setup")
+        if ":" not in step["call"] and not is_class:
+            raise InterfaceError(f"[model] setup {step['call']!r}: use \"module:function\" (the model is a function)")
+        normalized.append({"call": step["call"], "args": list(step.get("args", [])),
+                           "kwargs": dict(step.get("kwargs", {}))})
+    return normalized
 
 
 def _clock(name, info, entry_obj, is_class, time_args):
@@ -508,8 +570,10 @@ def _variable(section, causality, name, info, is_class, type_definitions, versio
     # bindings to the user's code
     if section in ("structural_parameters", "parameters", "inputs", "states"):
         default = "init" if (section in ("parameters", "structural_parameters") and is_class) else "arg"
-        kinds = ("init", "arg", "attr") if is_class else ("arg",)
+        kinds = ("init", "arg", "pos", "attr", "call") if is_class else ("arg", "pos")
         var["to"] = parse_binding(info.get("to", f"{default}:{name}"), kinds, where)
+        if var["to"]["kind"] == "pos" and not var["to"]["name"].isdigit():
+            raise InterfaceError(f"{where}: pos needs an argument index, e.g. to = \"pos:0\"")
         if "clocks" in var and var["to"]["kind"] == "init":
             raise InterfaceError(f"{where}: a clocked input is passed to its clock's call, not the constructor")
         if section == "states":
