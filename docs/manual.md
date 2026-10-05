@@ -51,6 +51,8 @@ uv sync
 
 This installs Python 3.13, the dependencies and the `fmugen` command. Run it as `uv run fmugen …`, or as `fmugen …` inside the activated `.venv`.
 
+You also need [UniFMU](https://github.com/INTO-CPS-Association/unifmu/releases) **0.14.0** (exactly this version) for `fmugen build`. fmugen runs `unifmu generate` to get each FMU's native binaries and Python backend. Put `unifmu` on `PATH`, or set the environment variable `FMUGEN_UNIFMU` to the executable. `fmugen init` works without it.
+
 Libraries your model imports must be installed in the same environment, so that `init` and `build` can import them (`uv add …`, or `uv run --with <package> fmugen …`). They must also be available to the Python that runs the FMU; see [`--python`](#fmugen-build) and [`--vendor`](#fmugen-build).
 
 ---

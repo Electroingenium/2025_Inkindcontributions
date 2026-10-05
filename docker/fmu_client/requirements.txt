@@ -4,6 +4,6 @@ pandas
 opcua
 cryptography
 
-# UniFMU Python backend that runs inside the FMU (see src/fmu/resources/requirements.txt)
+# UniFMU Python backend that runs inside the FMU (the requirements.txt that `unifmu generate` writes into the FMU)
 protobuf==5.27.3
 pyzmq
