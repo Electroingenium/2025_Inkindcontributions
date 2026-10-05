@@ -114,7 +114,7 @@ fmugen init MODEL [-o OUTPUT] [--call METHOD] [--fmi {2,3}]
 | `-o`, `--output PATH` | `fmugen.toml` next to the model (current directory for an installed module) | Where to write the config; missing folders are created. `-o -` prints it instead. A model file must be inside the config's folder. |
 | `--call METHOD` | `step`, `do_step`, `update`, `__call__`, or the only public method | Classes: the method run on each step. |
 | `--fmi {2,3}` | none (FMI 2) | Writes `fmi_version` into the config. With `3`, list/tuple/numpy values are inferred as arrays, `bytes` as Binary and numpy `float32` as Float32. |
-| `--start NAME=VALUE` | none | Start and probe value for an argument; repeatable. `VALUE` is a Python literal (`1e5`, `"Water"`, `[1.0, 0.0]`); a bare word is taken as a string. Use it for arguments without a default, or whose default breaks the model. |
+| `--start NAME=VALUE` | none | Start and probe value for an argument; repeatable. `VALUE` is a Python literal (`1e5`, `"Water"`, `[1.0, 0.0]`); a bare word is taken as a string. `true`/`false` are booleans. A tuple or dict value is split into one variable per item. `call:module:function(args)` makes a [computed constant](#value-syntax) instead of a variable. Use it for arguments without a default, or whose default breaks the model. |
 | `--setup CALL` | none | A [setup call](#model) to run before the probe; it is also written to `[model] setup`. Repeatable. E.g. `"psychrolib:SetUnitSystem(psychrolib.SI)"`, `reset`. |
 | `--kind function` | none | Treat a class whose constructor does the work as a function called on every step (writes `[model] kind`). |
 | `--create CLASSMETHOD` | none | Classes built by a factory: the classmethod that creates the object, e.g. `from_pretrained`. Its arguments become parameters (writes `[model] create`). |
@@ -279,7 +279,7 @@ Each error names the section and key, e.g. `[inputs] x: unknown key(s) ['strat']
 |---|---|---|---|
 | `entry` | string | **required** | `"path/file.py:Name"` or `"package.module:Name"`. |
 | `fmi_version` | `2` / `3` | `2` | FMI version. `build --fmi` overrides it. |
-| `call` | string / `false` | `"__call__"` if the class is callable | Classes: the method run on each step. `false`: nothing runs on a step and only clocks run code (needs `[clocks]`; also allowed for functions). |
+| `call` | string / `false` | `"__call__"` if the class is callable | Classes: the method run on each step. A **function** entry with `call` set is a factory: it is called once, at the end of initialization, with the parameters (like a constructor), and `call` is the method run on each step on the object it returns, e.g. `entry = "silero_vad:load_silero_vad"`, `call = "__call__"`. `false`: nothing runs on a step and only clocks run code (needs `[clocks]`; also allowed for functions). |
 | `kind` | `"function"` | none | Treat a class as a function: construct it with the inputs on every step and read outputs from the new object (`return:<attr>`). |
 | `create` | classmethod name | none | Classes only: build the object with this classmethod instead of calling the class, e.g. `"from_pretrained"`. Parameters bound to `init:` (the default) become its arguments. For models loaded from saved weights or files. |
 | `setup` | list | `[]` | Calls run each time the FMU initializes, before the model is used. See [setup syntax](#value-syntax). |
@@ -394,6 +394,7 @@ These keys apply to every section, unless marked.
 | `"pos:<N>"` | both | Positional argument N (0, 1, … without gaps). For positional-only arguments, e.g. in C extensions. |
 | `"attr:<path>"` | classes | Attribute set after construction and before every step (or tick, for clocked inputs). Dotted paths are allowed. |
 | `"call:<method>"` | classes | Setter method called with the value after construction and before every step, e.g. `Q1(value)`. |
+| `"arg:<arg>[<i>]"`, `"arg:<arg>[<key>]"` | both | Item of a tuple or dict argument: variables bound to items of the same argument are put together into a tuple (0, 1, … without gaps) or a dict. `init` splits tuple and dict `--start` values this way. |
 
 **`from`** (outputs, locals, calculated parameters) and **`next`** (states): where a value comes from.
 
@@ -466,6 +467,7 @@ from = "attr:overflowed"
 | TOML string, number, bool, array, table | that value (arrays become lists) |
 | `{ python = "<literal>" }` | `ast.literal_eval`, e.g. `"None"`, `"(0, 100)"` |
 | `{ ref = "module:attr" }` or `{ ref = "module.attr" }` | the imported object |
+| `{ call = "module:function(args)" }` | the result of calling it when the FMU initializes. Arguments are literals or dotted names, keyword arguments allowed, e.g. `"huggingface_sb3:load_from_hub(repo_id='sb3/demo-hf-CartPole-v1', filename='ppo-CartPole-v1.zip')"`. `init --start "NAME=call:..."` writes it. |
 
 **Setup calls** (`[model] setup`, `init --setup`):
 

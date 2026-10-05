@@ -29,7 +29,7 @@ Unknown keys are rejected with an error, so typos don't go unnoticed. Keys marke
 |---|---|---|---|
 | `entry` | string | **required** | `"path/file.py:Name"` (a file under this folder) or `"package.module:Name"` (an installed module). `Name` is a function or a class. |
 | `fmi_version` | `2` or `3` | `2` | FMI version to build. `fmugen build --fmi` overrides it. |
-| `call` | string or `false` | `"__call__"` if the class is callable | Classes: the method run on each step. `false` (classes and functions; needs `[clocks]`): nothing runs on `doStep`, only clocks run code. |
+| `call` | string or `false` | `"__call__"` if the class is callable | Classes: the method run on each step. A **function** entry with `call` set is a factory: it is called once, at the end of initialization, with the parameters (like a constructor), and `call` is the method run on each step on the object it returns, e.g. `entry = "silero_vad:load_silero_vad"`, `call = "__call__"`. `false` (classes and functions; needs `[clocks]`): nothing runs on `doStep`, only clocks run code. |
 | `name` | string | the entry's name | `modelName` in `modelDescription.xml`. `fmugen build --name` overrides it. |
 | `description` | string | first line of the entry's docstring, else the module's | `description` in `modelDescription.xml`. |
 | `author` | string | `""` | `author` in `modelDescription.xml`. `fmugen build --author` overrides it. |
@@ -52,6 +52,7 @@ These are fixed keyword arguments that are not FMU variables, typically values t
 | a TOML string, number, bool, array or table | that value (an array becomes a list) |
 | `{ python = "<literal>" }` | `ast.literal_eval(literal)`, e.g. `"None"`, `"(0, 100)"`, `"{'a': 1}"` |
 | `{ ref = "module:attr.path" }` or `{ ref = "module.attr" }` | the imported object, e.g. a class or function |
+| `{ call = "module:function(args)" }` | the result of calling it when the FMU initializes. Arguments are literals or dotted names, keyword arguments allowed, e.g. `"huggingface_sb3:load_from_hub(repo_id='sb3/demo-hf-CartPole-v1', filename='ppo-CartPole-v1.zip')"`. `init --start "NAME=call:..."` writes it. |
 
 Every key must be an argument of the constructor, function or method (unless it accepts `**kwargs`).
 
@@ -153,6 +154,7 @@ Without `type`, it comes from `start`: `bool` → Boolean, `int` → Integer, `s
 | | | `"call:<method>"` | A setter method called with the value after construction and before every step (classes), e.g. tclab's `Q1(value)`. |
 | | | `"pos:<N>"` | Positional argument number N (0, 1, … without gaps) of the function or step method, for positional-only arguments such as those of C extensions. |
 | | | `"attr:<name>"` | Attribute set on the object after construction and before every step (classes); clocked: before every tick. Dotted paths allowed. |
+| | | `"arg:<arg>[<i>]"`, `"arg:<arg>[<key>]"` | Item `i` of a tuple argument, or key `key` of a dict argument: the variables bound to the items of one argument are put together into a tuple (items 0, 1, … without gaps) or a dict, e.g. torchani's `forward((species, coordinates))`. `init` splits a tuple or dict `--start` value this way. Also `"init:<arg>[…]"`. |
 | `from` | outputs, locals, calculated_parameters | `"return"` | The whole return value. |
 | | | `"return:<key>"` | `result[key]` for a dict, `result[int(key)]` for a tuple or list, else `result.key`. |
 | | | `"attr:<name>"` | An attribute of the object after the step (classes). Dotted paths allowed. Calculated parameters must use this form. |
