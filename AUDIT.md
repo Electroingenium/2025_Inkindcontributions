@@ -24,7 +24,7 @@ The main risks for an open-source release are **distribution and portability**, 
 |---|---|---|
 | 1 | ✅ Fixed | The wheel did not contain the UniFMU boilerplate. fmugen now runs `unifmu generate` and requires UniFMU 0.14.0 to be installed |
 | 2 | 🔴 Critical | **No LICENSE file** |
-| 3 | ✅ Fixed | The FMU's Python was unclear. By design, fmugen is installed in the model's venv and the FMU runs with that venv's Python |
+| 3 | ✅ Fixed | The FMU's Python was unclear. By default the FMU runs with the model's venv; `--vendor` (offline wheels, needs Python) and `--compile pyinstaller/nuitka` (no Python, no sources, one OS) make FMUs for other machines |
 | 4 | ✅ Fixed | Placeholder package metadata and bloated dependencies. The package is now `fmugen`, depending only on what the FMU's backend needs |
 | 5 | 🟡 Medium | `requires-python >= 3.13` excludes many users. The code needs about 3.11 (`tomllib`) and the FMU runtime needs 3.10 (`match` in the backend) |
 | 6 | 🟡 Medium | The build-time probe always runs the model. That is unsafe for hardware or network models (e.g. tclab) and there is no `--no-probe` option |
@@ -86,7 +86,11 @@ Before: `launch.toml` used `python3` on Linux and macOS and, with `--python`, th
 
 **Fixed, by design:** fmugen is installed into the model's virtual environment and run from there. That environment already has the model's packages, and it gets the backend's packages as fmugen's dependencies. `launch.toml` always points at that environment's interpreter (`sys.executable`) for the current OS. `--python` and `--vendor` were removed. The build probe runs in the same environment the FMU will use, so a successful build means the FMU's imports work.
 
-Consequence: an FMU runs on the machine where it was built, as long as that environment exists. Running it on another machine means rebuilding it there from an equivalent environment (`resources/requirements.txt` lists what it needs). Shipping FMUs to other machines is a non-goal for now. See §8 if that changes.
+By default, then, an FMU runs on the machine where it was built. For other machines:
+- **`--vendor`**: wheels of every requirement go into the FMU. A launcher installs them offline into a cached venv on its first run. Wheels for other platforms and Python versions come from `--platform` / `--python-version`. The target needs Python. [verified with FMPy through UniFMU]
+- **`--compile pyinstaller|nuitka`**: the backend, the model, its packages and the interpreter are frozen into an executable. The FMU ships no `.py` files and needs no Python, but runs only on the OS it was built on. Nuitka compiles to machine code, which protects the source much better than PyInstaller's bytecode. [both verified with FMPy through UniFMU]
+
+Still open: building compiled FMUs for several OSes needs one build per OS plus a step that merges them into one `.fmu`.
 
 ### 3.2 🟡 Module name clashes
 `RESERVED_MODULES` protects `model`, `backend`, `main`, … but not the standard library:
@@ -228,8 +232,8 @@ Ordered by value to an open-source user base.
 5. **Reject model module names that shadow the standard library.**
 
 ### Tier 2: portability ("an FMU that runs anywhere")
-6. **Self-provisioning FMU runtime** (only if FMUs must run on other machines). A launcher could recreate the environment from `requirements.txt` on first run. This is out of scope for now (§3.1).
-7. **Multi-platform vendoring** (same condition): wheels for target platforms inside the FMU, for offline installs.
+6. ✅ **Self-provisioning FMU runtime from vendored wheels.** Done: `--vendor` (§3.1).
+7. ✅ **Multi-platform vendoring.** Done: `--platform` / `--python-version` (§3.1). Also done: `--compile pyinstaller|nuitka`. Next: merging compiled builds from several OSes into one FMU.
 8. **`--embed-python`** (opt-in): a python-build-standalone interpreter for fully offline, self-contained FMUs.
 9. **Reproducible builds**: a deterministic GUID, `SOURCE_DATE_EPOCH`, and sorted zip entries with fixed timestamps.
 
