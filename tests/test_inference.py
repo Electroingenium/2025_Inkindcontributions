@@ -154,3 +154,26 @@ def test_start_setup_kind_and_errors(tmp_path):
         infer(f"{tmp_path / 'gh.py'}:Filter", starts={"x": [0.0, 1.0], "g": 0.5})
     with pytest.raises(InterfaceError, match="not arguments"):
         infer(f"{tmp_path / 'gh.py'}:start", starts={"nope": 1.0})
+
+
+@pytest.mark.parametrize("annotation", ["int | None", "Optional[int]", "typing.Optional[int]"])
+def test_optional_annotation_keeps_the_type(tmp_path, annotation):
+    (tmp_path / "opt.py").write_text(textwrap.dedent(f"""
+        from __future__ import annotations
+        import typing
+        from typing import Optional
+        def f(n: {annotation}, flag: bool | None, x: float | None) -> float:
+            return 1.0
+    """))
+    data, _ = infer(tmp_path / "opt.py", probe=False)
+    assert data["inputs"]["n"]["start"] == 0 and type(data["inputs"]["n"]["start"]) is int
+    assert data["inputs"]["flag"]["start"] is False
+    assert data["inputs"]["x"]["start"] == 0.0
+
+
+def test_optional_from_typing_objects():
+    import typing
+    from fmugen.static import unwrap_optional
+    assert unwrap_optional(typing.Optional[bool]) is bool
+    assert unwrap_optional(int | None) is int
+    assert unwrap_optional(int | str) == int | str
