@@ -372,3 +372,20 @@ def test_boolean_from_unknown_string_is_an_error():
     from fmugen.templates.fmugen_runtime import coerce
     with pytest.raises(ValueError):
         coerce("Boolean", "maybe")
+
+
+def test_number_like_values_are_coerced():
+    from decimal import Decimal
+    from fractions import Fraction
+    from fmugen.templates.fmugen_runtime import coerce, plain_number
+    assert coerce("Real", plain_number(Decimal("1.5"))) == 1.5
+    assert coerce("Real", plain_number(Fraction(1, 4))) == 0.25
+
+
+def test_pint_quantities_in_and_out():
+    pint = pytest.importorskip("pint")
+    from fmugen.templates.fmugen_runtime import converter, plain_number
+    q = converter({"convert": "pint", "unit": "kPa"})(100.0)
+    assert q == pint.get_application_registry().Quantity(100.0, "kPa")
+    assert plain_number(q, "Pa") == pytest.approx(1e5)
+    assert plain_number(q) == 100.0

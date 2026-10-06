@@ -757,6 +757,8 @@ def _time_kwargs(time_args):
 
 def _typed(info, value, arrays=False):
     """Type of an output seen in the probe; ints become Real (a probe often just returns 0)."""
+    if _unit_of(value):
+        info["unit"] = _unit_of(value)
     value = _scalar_of(value)
     if arrays and isinstance(value, bytes):
         info["type"] = "Binary"
@@ -875,7 +877,10 @@ NUMPY_TYPES = {"float32": "Float32", "float64": "Real", "int8": "Int8", "uint8":
 
 
 def _scalar_of(value):
-    """The scalar inside a 0-dimensional array or tensor (numpy, torch, ...), else the value itself."""
+    """The scalar inside a 0-dimensional array or tensor (numpy, torch, ...) or a pint quantity,
+    else the value itself."""
+    if hasattr(value, "magnitude") and hasattr(value, "units"):
+        value = value.magnitude
     # numpy scalars (np.float32, ...) also have ndim 0, but are handled as they are, keeping their type
     if getattr(value, "ndim", None) == 0 and hasattr(value, "item") and type(value).__name__ not in NUMPY_SCALARS:
         try:
@@ -887,9 +892,27 @@ def _scalar_of(value):
 
 def _fmi_value(value, arrays=False):
     value = _scalar_of(value)
-    if isinstance(value, (*SCALARS, enum.Enum)) or type(value).__name__ in NUMPY_SCALARS:
+    if isinstance(value, (*SCALARS, enum.Enum)) or type(value).__name__ in NUMPY_SCALARS or _number_like(value):
         return True
     return arrays and (isinstance(value, bytes) or _array_info(value) is not None)
+
+
+def _number_like(value):
+    """Decimal, Fraction, numpy.float16, ... : anything that converts to a float or an int and isn't an array."""
+    if getattr(value, "ndim", 0) or isinstance(value, (str, bytes, complex)):
+        return False
+    return hasattr(type(value), "__float__") or hasattr(type(value), "__index__")
+
+
+def _unit_of(value):
+    """The unit of a pint quantity, written compactly ("m/s"); None for anything else or dimensionless."""
+    units = getattr(value, "units", None)
+    if units is None or not hasattr(value, "magnitude"):
+        return None
+    try:
+        return f"{units:~C}" or None
+    except Exception:
+        return str(units) or None
 
 
 def _array_info(value, with_start=False):

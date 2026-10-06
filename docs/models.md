@@ -490,7 +490,7 @@ Reading the code is enough for most plain-Python models. On the published models
 | `--setup CALL` | A [setup call](#libraries-that-need-setup-first), written to the config; with `--probe`, also run before the probe. Repeatable. |
 | `--kind function` | For [constructors that do the work](#constructors-that-do-the-work). |
 | `--probe` | Call the model once to find what the code doesn't show. |
-| `--convert NAME=module:function` | How an argument is passed in (`x=torch:tensor`, `x=numpy`), when it isn't annotated. |
+| `--convert NAME=module:function` | How an argument is passed in (`x=torch:tensor`, `x=numpy`, `x=pint`), when it isn't annotated. `pint` also needs a `unit` on the variable. |
 
 ```bash
 fmugen init fluids.friction:friction_factor --start Re=1e5 -o -
