@@ -22,7 +22,7 @@ from pathlib import Path
 
 from fmugen.compose import PARTS_DIR, Composite, combine, is_composite
 from fmugen.config import MODEL_DIR, Config, InterfaceError, load_config, normalize
-from fmugen.description import write_model_description
+from fmugen.description import build_time, stamp_guid, write_model_description
 from fmugen.distribute import COMPILERS, bundle_hf_models, compile_fmu, compiled_launch_command, vendor as vendor_wheels
 from fmugen.interface import infer_config, parse_target, render_toml
 from fmugen.templates.fmugen_runtime import setup_sys_path
@@ -186,6 +186,23 @@ def _flat(interface, resources):
                                for k, v in p.get("call_constants", {}).items()}}
 
 
+def _write_zip(fmu_dir, output):
+    """Zip fmu_dir reproducibly: sorted entries, one fixed date (SOURCE_DATE_EPOCH, else 1980-01-01), fixed modes."""
+    date_time = build_time().timetuple()[:6] if "SOURCE_DATE_EPOCH" in os.environ else (1980, 1, 1, 0, 0, 0)
+    date_time = max(date_time, (1980, 1, 1, 0, 0, 0))   # the earliest date a zip can store
+    with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as zipf:
+        for file in sorted(fmu_dir.rglob("*")):
+            if file.is_file() and "__pycache__" not in file.parts:
+                info = zipfile.ZipInfo(file.relative_to(fmu_dir).as_posix(), date_time)
+                info.compress_type = zipfile.ZIP_DEFLATED
+                if os.name == "nt":   # no executable bit: binaries and launchers are the executable files
+                    executable = "binaries" in file.relative_to(fmu_dir).parts or file.suffix in (".exe", ".sh")
+                else:
+                    executable = bool(file.stat().st_mode & 0o111)
+                info.external_attr = (0o100755 if executable else 0o100644) << 16
+                zipf.writestr(info, file.read_bytes())
+
+
 def build(target, output, model_name=None, author=None, output_format="fmu", call=None, fmi_version=None,
           vendor=False, platforms=(), python_versions=(), compiler=None, capture_output=False, probe=False,
           hf_weights=None):
@@ -256,13 +273,12 @@ def build(target, output, model_name=None, author=None, output_format="fmu", cal
             compile_fmu(compiler, resources, interface, Path(tmp) / "compile")
         _write_launch_toml(resources, "vendor" if vendor else "compile" if compiler else None)
 
+        stamp_guid(fmu_dir)
+
         output.parent.mkdir(parents=True, exist_ok=True)
         if output_format == "fmu":
             output.unlink(missing_ok=True)
-            with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as zipf:
-                for file in sorted(fmu_dir.rglob("*")):
-                    if "__pycache__" not in file.parts:
-                        zipf.write(file, arcname=file.relative_to(fmu_dir).as_posix())
+            _write_zip(fmu_dir, output)
         else:
             if output.exists():
                 shutil.rmtree(output)
