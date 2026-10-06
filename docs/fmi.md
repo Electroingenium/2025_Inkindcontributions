@@ -29,7 +29,7 @@ These tables follow UniFMU's published support matrix for its Python backend. "U
 | `fmi2EnterInitializationMode`, `fmi2ExitInitializationMode` | ✓ | exit builds the model object and computes initial outputs |
 | `fmi2Terminate`, `fmi2Reset` | ✓ | optional terminate method; reset to start values |
 | `fmi2Get/Set{Real,Integer,Boolean,String}` | ✓ | see [Setting variables](#setting-variables) |
-| `fmi2GetFMUstate`, `fmi2SetFMUstate`, `fmi2FreeFMUstate`, `fmi2SerializedFMUstateSize`, `fmi2SerializeFMUstate`, `fmi2DeSerializeFMUstate` | ✓ | the whole Python object is pickled ([FMU state](#fmu-state)) |
+| `fmi2GetFMUstate`, `fmi2SetFMUstate`, `fmi2FreeFMUstate`, `fmi2SerializedFMUstateSize`, `fmi2SerializeFMUstate`, `fmi2DeSerializeFMUstate` | ✓ | the Python object is pickled, or the attributes in `[model] save_state` ([FMU state](#fmu-state)) |
 | `fmi2DoStep` | ✓ | runs the step function/method |
 | `fmi2CancelStep` | x | not needed: `doStep` is synchronous |
 | `fmi2GetStatus`, `fmi2GetRealStatus`, `fmi2GetIntegerStatus`, `fmi2GetBooleanStatus`, `fmi2GetStringStatus` | x | not needed: no asynchronous steps; the FMU never asks to stop in FMI 2 |
@@ -179,7 +179,7 @@ Examples: [examples/sampled_pid](../examples/sampled_pid) (periodic input clock)
 
 ### FMU state
 
-`canGetAndSetFMUstate` / `canGetAndSetFMUState` and `canSerializeFMUstate` / `canSerializeFMUState` are `true` when the model object can be pickled. `fmugen build` checks this by running the packaged model once and saving its state. If that fails (the object holds a file handle, generator, socket, …), the flags are written as `false`.
+`canGetAndSetFMUstate` / `canGetAndSetFMUState` and `canSerializeFMUstate` / `canSerializeFMUState` follow `[model] save_state`: `true` unless it is `false`. The state is pickled, with `cloudpickle` as a fallback (lambdas, local functions). With a list of attributes, only those are saved and restored; the rest of the object (an ONNX session, a device handle) stays as it is. `fmugen build` does not run the model: `fmugen init` decides `save_state` when it makes its probe call, by trying to pickle the object, then each attribute.
 
 Restoring a state restores the whole Python object, so classes that keep internal state (integrators, filters, controllers) roll back correctly too.
 
@@ -206,7 +206,7 @@ Any exception raised by your code makes the call return an error status. The tra
 |---|---|
 | `needsExecutionTool` | `true`: a Python interpreter is needed (see [packaging.md](packaging.md#the-fmus-python-environment)) |
 | `canHandleVariableCommunicationStepSize` | `true`, or `false` with `[experiment] fixed_step` |
-| `canGetAndSetFMUstate`/`FMUState`, `canSerializeFMUstate`/`FMUState` | from the build probe |
+| `canGetAndSetFMUstate`/`FMUState`, `canSerializeFMUstate`/`FMUState` | `[model] save_state` |
 | `canNotUseMemoryManagementFunctions` (FMI 2) | `true` |
 | `hasEventMode` (FMI 3) | `true` with clocks or `[events]` |
 | `canReturnEarlyAfterIntermediateUpdate`, `providesIntermediateUpdate` (FMI 3) | `false` |
