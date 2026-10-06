@@ -6,5 +6,6 @@
 !examples
 !docker/app
 !docker/model
+!docker/models
 !docker/build_fmu.py
 **/__pycache__

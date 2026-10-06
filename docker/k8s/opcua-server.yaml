@@ -4,6 +4,8 @@ metadata:
   name: opcua-server
 spec:
   replicas: 1
+  strategy:
+    type: Recreate   # one server only: inputs and outputs live in it
   selector:
     matchLabels: {app: opcua-server}
   template:
