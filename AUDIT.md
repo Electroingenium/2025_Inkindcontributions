@@ -28,7 +28,7 @@ The main risks for an open-source release are **distribution and portability**, 
 | 4 | ✅ Fixed | Placeholder package metadata and bloated dependencies. The package is now `fmugen`, depending only on what the FMU's backend needs |
 | 5 | 🟡 Medium | `requires-python >= 3.13` excludes many users. The code needs about 3.11 (`tomllib`) and the FMU runtime needs 3.10 (`match` in the backend) |
 | 6 | ✅ Fixed | The model was always run to build and to infer the config, which was unsafe for hardware or network models (e.g. tclab). Now neither `fmugen build` nor `fmugen init` runs it: `init` reads the source code, and only calls the model with `--probe` |
-| 7 | 🟡 Medium | Some inference gaps reduce the "works on any model" coverage (see §4) |
+| 7 | 🟢 Mostly fixed | The inference gaps of §4 are closed, each checked with a published model, except generators/`async` models (no published model found to test against) and `--compile` of composite FMUs |
 | 8 | 🟢 Partly fixed | `.idea/` is no longer tracked, and `tools/unifmu.exe` is removed from the `tomas` branch history (not pushed yet). The pack is still large because of old generated `.fmu`/`.zip` files and a 71 MB `unifmu.so` in early commits on `main` |
 | 9 | 🟢 Low | Builds are not reproducible (random GUID and current timestamp), there is no CI, and a few docstrings are stale |
 | 10 | 🟠 High | **UniFMU 0.14 crashes when the FMU's Python prints more than about 4 KB**, and the importer hangs forever. Worked around with `build --capture-output` (§5.7); still needs an upstream fix |
