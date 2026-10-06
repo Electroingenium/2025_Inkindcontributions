@@ -202,3 +202,40 @@ def test_pint_outputs_get_their_unit(tmp_path):
     data, _ = infer(tmp_path / "q.py")
     assert data["outputs"]["v"]["unit"] == "m/s"
     assert "unit" not in data["outputs"]["n"]
+
+
+NESTED = """
+from dataclasses import dataclass
+from types import SimpleNamespace
+
+@dataclass
+class Zone:
+    T: float
+    occupied: bool
+
+def f(x: float = 1.0):
+    return {"zone": {"T": x, "air": {"rh": 0.5}}, "obj": Zone(2.0, True), "ns": SimpleNamespace(q=3.0)}
+"""
+
+
+def test_nested_outputs_are_named_with_dots(tmp_path):
+    (tmp_path / "nested.py").write_text(NESTED)
+    data, _ = infer(f"{tmp_path / 'nested.py'}:f")
+    assert list(data["outputs"]) == ["zone.T", "zone.air.rh", "obj.T", "obj.occupied", "ns.q"]
+    assert data["outputs"]["obj.occupied"]["type"] == "Boolean"
+    static, _ = infer(f"{tmp_path / 'nested.py'}:f", probe=False)   # dict literals are read from the code too
+    assert {"zone.T", "zone.air.rh"} <= set(static["outputs"])
+    assert '"zone.air.rh" = {}' in render_toml(data)
+
+
+def test_fmi3_time_attribute_is_renamed(tmp_path):
+    (tmp_path / "clock.py").write_text(textwrap.dedent("""
+        class M:
+            def __init__(self):
+                self.time = 0.0
+            def step(self, dt: float = 1.0):
+                self.time += dt
+    """))
+    data, _ = infer(tmp_path / "clock.py", fmi_version=3)
+    assert "time" not in data.get("locals", {})
+    assert data["locals"]["model_time"] == {"from": "attr:time"}

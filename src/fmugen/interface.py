@@ -10,6 +10,7 @@ fmugen.toml) plus comments explaining each guess; `render_toml()` writes it out 
 user to review. `fmugen build model.py` runs the same inference in memory.
 """
 import ast
+import dataclasses
 import enum
 import importlib
 import importlib.util
@@ -17,6 +18,7 @@ import inspect
 import json
 import math
 import sys
+import types
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -104,6 +106,8 @@ def infer_config(target, call=None, config_dir=None, fmi_version=None, starts=No
         if call or create:
             raise InterfaceError("--call and --create only apply to classes")
         _infer_function(entry, data, comments, **options)
+    if fmi_version == 3:
+        _rename_reserved(data, comments, is_class="call" in data["model"] or inspect.isclass(entry))
     variables = {n for sec in ("parameters", "inputs", "states") for n in data.get(sec, {})}
     unknown = set(converts or {}) - variables
     if unknown:
@@ -115,6 +119,18 @@ def infer_config(target, call=None, config_dir=None, fmi_version=None, starts=No
     if unused:
         raise InterfaceError(f"--start names that are not arguments of the model: {sorted(unused)}")
     return data, comments
+
+
+def _rename_reserved(data, comments, is_class):
+    """FMI 3 reserves `time`: an output or local read from the model's own `time` becomes `model_time`."""
+    for section in ("outputs", "locals"):
+        variables = data.get(section, {})
+        if "time" in variables and "model_time" not in variables:
+            info = variables.pop("time")
+            info.setdefault("from", "attr:time" if is_class else "return:time")
+            variables["model_time"] = info
+            comments.pop((section, "time"), None)
+            comments[(section, "model_time")] = "the model's `time` (FMI 3 reserves that name)"
 
 
 def _run_setup(data, obj=None):
@@ -351,8 +367,10 @@ def _add_returned(read, data, comments, is_class, arrays, probe, seen):
                                            'dimensions and uncomment, or run init --probe')
         return
     taken = _taken(data) | set(seen)
+    # "y4" and "y4.rewards" when the probe found "y4.rewards.speed"
+    parents = {".".join(n.split(".")[:i]) for n in taken for i in range(1, n.count(".") + 1)}
     for name in read.names:
-        if name in taken:
+        if name in taken or name in parents:
             continue
         kind = read.types.get(name)
         source = read.sources[name]
@@ -790,11 +808,12 @@ def _outputs_from_return(result, data, comments, default_name, is_class, arrays=
         items = [(k, v, f"return:{k}") for k, v in vars(result).items() if not k.startswith("_")]
     else:
         items = []
+    items = [leaf for name, value, source in items for leaf in _nested(name, value, source, arrays)]
     taken = {n for section in ("parameters", "inputs", "states") for n in data.get(section, {})}
     for name, value, source in items:
         if name in taken:  # e.g. an object that echoes its inputs as attributes
             continue
-        if not name.isidentifier() or not _fmi_value(value, arrays):
+        if not _dotted_name(name) or not _fmi_value(value, arrays):
             comments[("outputs", None)] = f"skipped {name!r}: not an FMI value or not a valid name"
             continue
         # from = "return:<name>" is the default for functions
@@ -802,6 +821,37 @@ def _outputs_from_return(result, data, comments, default_name, is_class, arrays=
         outputs[name] = _typed(info, value, arrays)
     if not outputs:
         data.pop("outputs")
+
+
+MAX_NESTING = 4
+
+
+def _nested(name, value, source, arrays, depth=0):
+    """(name, value, source) for each value inside nested dicts, NamedTuples, dataclasses and
+    namespaces, named with dots: {"zone": {"T": 21}} gives ("zone.T", 21, "return:zone.T")."""
+    if depth < MAX_NESTING and not _fmi_value(value, arrays):
+        children = _children(value)
+        if children:
+            sep = ":" if source == "return" else "."
+            return [leaf for key, child in children
+                    for leaf in _nested(f"{name}.{key}", child, f"{source}{sep}{key}", arrays, depth + 1)]
+    return [(name, value, source)]
+
+
+def _children(value):
+    if isinstance(value, Mapping):
+        return [(k, v) for k, v in value.items() if isinstance(k, str)]
+    if isinstance(value, tuple) and hasattr(value, "_fields"):
+        return [(f, getattr(value, f)) for f in value._fields]
+    if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        return [(f.name, getattr(value, f.name)) for f in dataclasses.fields(value)]
+    if isinstance(value, types.SimpleNamespace):
+        return list(vars(value).items())
+    return []
+
+
+def _dotted_name(name):
+    return all(part.isidentifier() for part in name.split("."))
 
 
 def _detect_states(data, comments, returned, attrs):
