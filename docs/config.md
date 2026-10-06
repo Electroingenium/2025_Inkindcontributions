@@ -138,7 +138,7 @@ Without `type`, it comes from `start`: `bool` → Boolean, `int` → Integer, `s
 | `enum` | string | none | `"module:EnumClass"`: items are the enum's members, and the model receives and returns members. |
 | `dimensions` **FMI 3** | list | none | Makes the variable an array. Each entry is a size (`3`) or the name of a structural parameter (`"n"`). |
 | `numpy` **FMI 3** | bool | `false` | Arrays only: pass the value to the model as a `numpy.ndarray` instead of nested lists. Values coming back are accepted either way. |
-| `convert` | `"module:function"` | none | Values passed to the model (parameters, inputs, states): call this function on the value first, e.g. `"torch:tensor"`, `"jax.numpy:asarray"`. `init` sets it from `torch.Tensor`, JAX and TensorFlow annotations. |
+| `convert` | `"module:function"` or `"pint"` | none | Values passed to the model (parameters, inputs, states): call this function on the value first, e.g. `"torch:tensor"`, `"jax.numpy:asarray"`. `init` sets it from `torch.Tensor`, JAX and TensorFlow annotations. `"pint"` passes a pint quantity in the variable's `unit` (from pint's application registry), for models such as `fluids.units` that only accept quantities. |
 | `clocks` **FMI 3** | list with one clock name | none | Inputs, outputs and locals: the variable belongs to that clock (see [`[clocks.<name>]`](#clocksname-fmi-3)). |
 
 **Start values and `initial`:**

@@ -551,8 +551,14 @@ def _variable(section, causality, name, info, is_class, type_definitions, versio
         if section not in ("structural_parameters", "parameters", "inputs", "states"):
             raise InterfaceError(f"{where}: convert only applies to values passed to the model")
         from fmugen.templates.fmugen_runtime import resolve_reference  # same resolution as at runtime
+        if info["convert"] == "pint":   # a pint quantity in the variable's unit
+            if not info.get("unit"):
+                raise InterfaceError(f"{where}: convert = \"pint\" needs a unit")
+            reference = "pint:get_application_registry"
+        else:
+            reference = str(info["convert"])
         try:
-            converter = resolve_reference(str(info["convert"]))
+            converter = resolve_reference(reference)
         except Exception as e:
             raise InterfaceError(f"{where}: cannot import convert {info['convert']!r}: {e!r}") from e
         if not callable(converter):
