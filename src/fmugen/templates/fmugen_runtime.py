@@ -444,25 +444,38 @@ class Engine:
     # ================= state =================
 
     def serialize(self):
+        """The FMU state as bytes. [model] save_state = [attributes] saves only those attributes
+        of the model object (the rest, e.g. an ONNX session or a device handle, stays as it is)."""
+        save = self.interface.get("save_state", True)
+        if isinstance(save, list):
+            obj = None if self.obj is None else {path: get_path(self.obj, path) for path in save}
+        else:
+            obj = self.obj
         state = {
-            "values": self.values, "obj": self.obj, "time": self.time, "mode": self.mode,
+            "values": self.values, "obj": obj, "time": self.time, "mode": self.mode,
             "clock_active": self.clock_active, "clock_interval": self.clock_interval,
             "clock_shift": self.clock_shift, "terminate_requested": self.terminate_requested,
             "clock_last_tick": self.clock_last_tick,
         }
         try:
-            return Status.ok, pickle.dumps(state)
+            return Status.ok, dump_state(state)
         except Exception as e:
             self.log(f"cannot serialize FMU state: {e!r}", Status.error, "logStatusError")
             return Status.error, b""
 
     def deserialize(self, data):
         try:
-            state = pickle.loads(data)
+            state = load_state(data)
         except Exception as e:
             return self.error(f"cannot deserialize FMU state: {e!r}")
         self.values = dict(state["values"])
-        self.obj, self.time, self.mode = state["obj"], state["time"], state["mode"]
+        if isinstance(self.interface.get("save_state", True), list):
+            if self.obj is not None and state["obj"] is not None:
+                for path, value in state["obj"].items():
+                    set_path(self.obj, path, value)
+        else:
+            self.obj = state["obj"]
+        self.time, self.mode = state["time"], state["mode"]
         self.clock_active = dict(state.get("clock_active", self.clock_active))
         self.clock_interval = dict(state.get("clock_interval", self.clock_interval))
         self.clock_shift = dict(state.get("clock_shift", self.clock_shift))
@@ -712,6 +725,27 @@ def resolve_reference(ref):
             continue
         return get_path(module, ".".join(parts[i:])) if i < len(parts) else module
     raise ImportError(f"cannot import {ref!r}")
+
+
+def dump_state(state):
+    """pickle, else cloudpickle (lambdas, local functions); the first byte says which."""
+    try:
+        return b"P" + pickle.dumps(state)
+    except Exception as first:
+        try:
+            import cloudpickle
+        except ImportError:
+            raise first from None
+        return b"C" + cloudpickle.dumps(state)
+
+
+def load_state(data):
+    kind, payload = data[:1], data[1:]
+    if kind == b"C":
+        import cloudpickle   # noqa: F401  (its pickles load with pickle once it is importable)
+    elif kind != b"P":
+        raise ValueError("not an FMU state saved by this FMU")
+    return pickle.loads(payload)
 
 
 def split_item(name):

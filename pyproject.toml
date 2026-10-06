@@ -21,6 +21,7 @@ classifiers = [
 dependencies = [
     "protobuf==5.27.3",
     "pyzmq>=27.2.0",
+    "cloudpickle>=3.0",   # FMU state save/restore when pickle can't (lambdas, local functions)
 ]
 
 [project.optional-dependencies]

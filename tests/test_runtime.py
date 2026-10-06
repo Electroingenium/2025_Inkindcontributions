@@ -5,6 +5,7 @@ import textwrap
 import pytest
 
 from conftest import EXAMPLES
+from fmugen.__main__ import init, isolated_imports
 from fmugen.templates.model_fmi2 import Fmi2Status
 
 OK, ERROR = Fmi2Status.ok, Fmi2Status.error
@@ -155,22 +156,92 @@ def test_enumeration(tmp_path, make_fmu, adapter):
     assert fmu.fmi2GetInteger([fmu.vr["mode_echo"]]) == (OK, [1])
 
 
-def test_unpicklable_model_disables_state(tmp_path, make_fmu, adapter):
+def test_state_with_cloudpickle_when_pickle_fails(tmp_path, make_fmu, adapter):
+    write(tmp_path, "lam.py", '''
+        class Scaled:
+            def __init__(self, k=2.0):
+                self.f = lambda u: k * u            # pickle can't store a lambda; cloudpickle can
+                self.total = 0.0
+
+            def step(self, u=1.0):
+                self.total += self.f(u)
+                return {"total": self.total}
+    ''')
+    with isolated_imports():
+        init(str(tmp_path / "lam.py"))
+    assert "save_state" not in (tmp_path / "fmugen.toml").read_text()
+    fmu = adapter(make_fmu(tmp_path))
+    fmu.initialize()
+    assert fmu.fmi2DoStep(0.0, 1.0, False) == OK
+    status, state = fmu.fmi2SerializeFmuState()
+    assert status == OK and state[:1] == b"C"              # saved with cloudpickle
+    assert fmu.fmi2DoStep(1.0, 1.0, False) == OK and fmu.get("total") == 4.0
+    assert fmu.fmi2DeserializeFmuState(state) == OK
+    assert fmu.fmi2DoStep(1.0, 1.0, False) == OK and fmu.get("total") == 4.0   # rolled back, then redone
+
+
+def test_state_of_selected_attributes(tmp_path, make_fmu, adapter):
+    write(tmp_path, "res.py", '''
+        import threading
+
+        class Accumulator:
+            def __init__(self):
+                self.lock = threading.Lock()        # a fixed resource: can't be pickled at all
+                self.total = 0.0
+
+            def step(self, u=1.0):
+                with self.lock:
+                    self.total += u
+                return {"total": self.total}
+    ''')
+    with isolated_imports():
+        _, data = init(str(tmp_path / "res.py"))
+    assert data["model"]["save_state"] == ["total"]
+    text = (tmp_path / "fmugen.toml").read_text()
+    assert "kept as they are on restore: lock" in text
+    fmu_dir = make_fmu(tmp_path)
+    assert 'canGetAndSetFMUstate="true"' in (fmu_dir / "modelDescription.xml").read_text()
+    fmu = adapter(fmu_dir)
+    fmu.initialize()
+    assert fmu.fmi2DoStep(0.0, 1.0, False) == OK and fmu.get("total") == 1.0
+    status, state = fmu.fmi2SerializeFmuState()
+    lock = fmu.engine.obj.lock
+    assert fmu.fmi2DoStep(1.0, 1.0, False) == OK and fmu.get("total") == 2.0
+    assert fmu.fmi2DeserializeFmuState(state) == OK
+    assert fmu.engine.obj.lock is lock                     # the resource is kept, not replaced
+    assert fmu.fmi2DoStep(1.0, 1.0, False) == OK and fmu.get("total") == 2.0   # rolled back, then redone
+
+
+def test_unpicklable_attribute_that_changes_is_flagged(tmp_path):
+    # a generator advances on every step: saving only `count` would restore it wrongly, so init
+    # names the attribute it leaves out and asks to check it (or set save_state = false)
     write(tmp_path, "gen.py", '''
         class Counter:
             def __init__(self):
-                self.it = (i for i in range(1000))   # generators cannot be pickled
+                self.it = (i for i in range(1000))   # generators can't be pickled
                 self.count = -1
 
             def step(self):
                 self.count = next(self.it)
     ''')
-    fmu_dir = make_fmu(tmp_path / "gen.py")
-    xml = (fmu_dir / "modelDescription.xml").read_text()
-    assert 'canGetAndSetFMUstate="false"' in xml
-    fmu = adapter(fmu_dir)
-    fmu.initialize()
-    assert fmu.fmi2SerializeFmuState()[0] == ERROR
+    with isolated_imports():
+        _, data = init(str(tmp_path / "gen.py"))
+    assert data["model"]["save_state"] == ["count"]
+    assert "kept as they are on restore: it. Check those don't change" in (tmp_path / "fmugen.toml").read_text()
+
+
+def test_save_state_false(tmp_path, make_fmu, adapter):
+    write(tmp_path, "m.py", "def f(u=1.0):\n    return {'y': u}\n", config='''
+        [model]
+        entry = "m.py:f"
+        save_state = false
+        [inputs]
+        u = { start = 1.0 }
+        [outputs]
+        y = {}
+    ''')
+    fmu_dir = make_fmu(tmp_path)
+    assert 'canGetAndSetFMUstate="false"' in (fmu_dir / "modelDescription.xml").read_text()
 
 
 def test_setup_positional_arguments_and_kind_function(tmp_path, make_fmu, adapter):
@@ -259,3 +330,32 @@ def test_setter_method_inputs_and_property_outputs(tmp_path, make_fmu, adapter):
     fmu.initialize()
     assert fmu.fmi2DoStep(0.0, 2.0, False) == OK
     assert fmu.get("temperature") == 22.0
+
+
+def test_build_does_not_run_the_model(tmp_path, make_fmu):
+    # like tclab: constructing the model needs hardware (or a network) that isn't there at build time
+    write(tmp_path, "hw.py", '''
+        RUNS = []
+
+        class Heater:
+            def __init__(self, port="COM3"):
+                RUNS.append("constructed")
+                raise RuntimeError(f"no device on {port}")
+
+            def step(self, power=0.0):
+                RUNS.append("stepped")
+                return {"T": 20.0 + power}
+    ''', config='''
+        [model]
+        entry = "hw.py:Heater"
+        call = "step"
+        save_state = false
+        [parameters]
+        port = { start = "COM3" }
+        [inputs]
+        power = { start = 0.0 }
+        [outputs]
+        T = { from = "return:T" }
+    ''')
+    fmu_dir = make_fmu(tmp_path)
+    assert 'canGetAndSetFMUstate="false"' in (fmu_dir / "modelDescription.xml").read_text()

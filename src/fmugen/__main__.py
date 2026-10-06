@@ -24,8 +24,7 @@ from fmugen.config import MODEL_DIR, Config, InterfaceError, load_config, normal
 from fmugen.description import write_model_description
 from fmugen.distribute import COMPILERS, compile_fmu, compiled_launch_command, vendor as vendor_wheels
 from fmugen.interface import infer_config, parse_target, render_toml
-from fmugen.templates import model_fmi2, model_fmi3
-from fmugen.templates.fmugen_runtime import Status, setup_sys_path
+from fmugen.templates.fmugen_runtime import setup_sys_path
 
 PACKAGE_DIR = Path(__file__).resolve().parent
 TEMPLATES_DIR = PACKAGE_DIR / "templates"
@@ -41,8 +40,8 @@ FORMATS = ("fmu", "folder")
 OSES = ("linux", "macos", "windows")
 DEFAULT_PYTHON = {"linux": "python3", "macos": "python3", "windows": "python"}
 CURRENT_OS = {"win32": "windows", "darwin": "macos"}.get(sys.platform, "linux")
-# What UniFMU 0.14's Python backend imports (its own requirements.txt lists more)
-BACKEND_REQUIREMENTS = ["protobuf==5.27.3", "pyzmq"]
+# What UniFMU 0.14's Python backend imports (its own requirements.txt lists more), plus fmugen's runtime
+BACKEND_REQUIREMENTS = ["protobuf==5.27.3", "pyzmq", "cloudpickle"]   # cloudpickle: FMU state fallback
 
 # The FMU boilerplate (native binaries + Python backend) comes from `unifmu generate`.
 # The adapters are written against this exact UniFMU version's backend.
@@ -109,7 +108,7 @@ def write_interface(interface, path):
 def isolated_imports():
     """Undo sys.path changes and forget modules loaded from the added paths.
 
-    Building imports the user's code to inspect and probe it; this keeps one build
+    Building imports the user's code to inspect it (it is not run); this keeps one build
     (or a test) from seeing modules cached by another.
     """
     saved_path = list(sys.path)
@@ -150,52 +149,6 @@ def _copy_sources(config, model_dir):
             shutil.copytree(src, dest, ignore=IGNORE, dirs_exist_ok=True)
         else:
             shutil.copy2(src, dest)
-
-
-def _probe(resources, interface):
-    """Run the packaged model once through the real adapter; return whether its state can be saved."""
-    logs = []
-
-    def log(status, category, message):
-        logs.append(message)
-
-    experiment = interface["experiment"]
-    start = experiment.get("start_time", 0.0)
-    stop = experiment.get("stop_time")
-    step = experiment.get("step_size", 1.0)
-
-    def check(status, what):
-        if status != Status.ok:
-            raise InterfaceError(f"probe {what} failed:\n" + "\n".join(logs))
-
-    if interface["fmi_version"] == 3:
-        event_mode = interface["has_event_mode"]
-        model = model_fmi3.Model("probe", "", str(resources), False, False, event_mode, False, [], log,
-                                 resources_dir=resources)
-        check(model.fmi3EnterInitializationMode(False, 0.0, start, stop is not None, stop or 0.0), "initialization")
-        check(model.fmi3ExitInitializationMode(), "initialization")
-        if event_mode:
-            input_clocks = [c["valueReference"] for c in interface["clocks"] if c["causality"] == "input"]
-            if input_clocks:  # tick every input clock once
-                check(model.fmi3SetClock(input_clocks, [True] * len(input_clocks)), "setting clocks")
-                check(model.fmi3UpdateDiscreteStates()[0], "clock tick (updateDiscreteStates)")
-            check(model.fmi3EnterStepMode(), "entering step mode")
-        check(model.fmi3DoStep(start, step, False)[0], "doStep")
-        serialize, deserialize = model.fmi3SerializeFmuState, model.fmi3DeserializeFmuState
-    else:
-        model = model_fmi2.Model(log, resources_dir=resources)
-        check(model.fmi2SetupExperiment(start, stop, experiment.get("tolerance")), "setup")
-        check(model.fmi2EnterInitializationMode(), "initialization")
-        check(model.fmi2ExitInitializationMode(), "initialization")
-        check(model.fmi2DoStep(start, step, False), "doStep")
-        serialize, deserialize = model.fmi2SerializeFmuState, model.fmi2DeserializeFmuState
-
-    status, state = serialize()
-    if status != Status.ok:
-        print(f"note: the model object cannot be pickled, so FMU state save/restore is disabled ({logs[-1]})")
-        return False
-    check(deserialize(state), "state restore")
-    return True
 
 
 def build(target, output, model_name=None, author=None, output_format="fmu", call=None, fmi_version=None,
@@ -248,8 +201,6 @@ def build(target, output, model_name=None, author=None, output_format="fmu", cal
             interface["capture_output"] = bool(capture_output)
             for note in interface.pop("notes"):
                 print(f"note: {note}")
-            write_interface(interface, resources / "interface.json")
-            interface["can_get_and_set_state"] = _probe(resources, interface)
         write_interface(interface, resources / "interface.json")
 
         write_model_description(interface, fmu_dir / "modelDescription.xml")

@@ -117,7 +117,7 @@ def compiled_launch_command(system):
 
 def _modules(interface):
     """Modules the runtime imports by name, which a freezer can't find by itself."""
-    modules = {"model", "fmugen_runtime", interface["entry"]["module"]}
+    modules = {"model", "fmugen_runtime", "cloudpickle", interface["entry"]["module"]}
     refs = [step["call"] for step in interface.get("setup", [])]
     refs += [td["enum"] for td in interface.get("type_definitions", {}).values() if td.get("enum")]
     refs += [c["call"] for c in interface.get("clocks", []) if c.get("call")]
