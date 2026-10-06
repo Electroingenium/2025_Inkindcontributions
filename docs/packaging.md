@@ -27,10 +27,12 @@ fmugen init MODEL [-o OUTPUT] [--call METHOD] [--fmi {2,3}] [--start NAME=VALUE 
 | `-o, --output` | Where to write the config. Default: `fmugen.toml` next to the model (or in the current directory for an installed module). `-` prints it instead. The model file must be inside the config's folder. |
 | `--call` | For classes: the method run on each step, when it isn't `step`/`do_step`/`update`/`__call__`/the only public method. |
 | `--fmi {2,3}` | Write `fmi_version` into the config. With `3`, also infer arrays and Binary. |
-| `--start NAME=VALUE` | Start and probe value for an argument (a Python literal), e.g. one without a default. Repeatable. |
-| `--setup CALL` | A `[model] setup` call to run before the probe, e.g. `'psychrolib:SetUnitSystem(psychrolib.SI)'` or `reset`. Repeatable. |
+| `--start NAME=VALUE` | Start value for an argument (a Python literal), e.g. one without a default; also used by `--probe`. Repeatable. |
+| `--setup CALL` | A `[model] setup` call, e.g. `'psychrolib:SetUnitSystem(psychrolib.SI)'` or `reset`; run before the probe with `--probe`. Repeatable. |
 | `--kind function` | Treat a class whose constructor does the work as a function called every step. |
 | `--create CLASSMETHOD` | Build the object with this classmethod (e.g. `from_pretrained`) instead of the class. |
+| `--probe` | Also call the model once, to find what reading the code can't (array sizes, runtime results, `save_state`). Without it, the model is never called. |
+| `--convert NAME=module:function` | How an argument is passed in, e.g. `x=torch:tensor`. Repeatable. |
 | `--force` | Overwrite an existing config. |
 
 What it infers: [models.md](models.md#what-fmugen-init-infers).
@@ -66,7 +68,7 @@ fmugen build MODEL -o OUTPUT [options]
 4. Imports the entry from the copied files, checks the config against it (argument names, function vs class), and writes `resources/interface.json`.
 5. Writes `modelDescription.xml` and `launch.toml`, then zips the result (or copies the folder).
 
-`build` imports the model but **never runs it**: no object is constructed, no setup call or step is made. Models that need hardware (TCLab), a network or a licence server build anywhere. `canGetAndSetFMUState` comes from `[model] save_state`, which `fmugen init` sets when it makes its probe call. (`fmugen build model.py`, without a `fmugen.toml`, infers the config like `init`, and so does call the model.)
+`build` imports the model but **never runs it**: no object is constructed, no setup call or step is made. Models that need hardware (TCLab), a network or a licence server build anywhere. `canGetAndSetFMUState` comes from `[model] save_state`, which `fmugen init --probe` sets. `fmugen build model.py`, without a `fmugen.toml`, infers the config like `init`: from the code, without calling the model, unless you pass `build --probe`.
 
 ---
 

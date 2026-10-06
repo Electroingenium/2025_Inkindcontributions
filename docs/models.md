@@ -475,18 +475,22 @@ When it is true after a step or a clock tick, the FMU returns `terminateSimulati
 ## What `fmugen init` infers
 
 ```bash
-fmugen init path/to/model.py[:Name] [--call METHOD] [--fmi 3] [--start NAME=VALUE ...] [--setup CALL ...] [--kind function] [-o fmugen.toml | -o -] [--force]
+fmugen init path/to/model.py[:Name] [--call METHOD] [--fmi 3] [--start NAME=VALUE ...] [--setup CALL ...] [--kind function] [--probe] [--convert NAME=module:function ...] [-o fmugen.toml | -o -] [--force]
 ```
 
-It imports the module, picks the entry, makes one probe call with the start values, and writes a commented config.
+It imports the module, picks the entry, reads the signatures and **the source code**, and writes a commented config. **It does not call the model**: no object is built, no setup call or step is run. Models that need a device, a network or a licence can be configured anywhere. (Importing the module runs its top-level code, as any import does.)
 
-The probe only works if the model accepts the start values. Arguments without a default start at `0`, which many models reject (`Re=0`, `dim=0`, a time step of 0). Three options help `init` get further:
+Reading the code is enough for most plain-Python models. On the published models in [tested-models.md](tested-models.md), it gives the same outputs as calling the model for all 11 scalar functions (pvlib, fluids, ht, chemicals, iapws, psychrolib) and for the RC building. What it can't know, the config says in comments: array sizes (FMI 3), results built at runtime, code without Python source (C extensions), unannotated properties, and whether the object can be pickled (`save_state`).
+
+**`--probe`** also calls the model once with the start values (setup calls, construction, one step), and fills in exactly those. Use it for ML models, C extensions and anything with array results. The probe only works if the model accepts the start values: arguments without a default start at `0`, which many models reject (`Re=0`, `dim=0`, a time step of 0).
 
 | Option | Use |
 |---|---|
-| `--start NAME=VALUE` | A realistic start/probe value (a Python literal; a list for an FMI 3 array). Repeatable. |
-| `--setup CALL` | A [setup call](#libraries-that-need-setup-first) to run before the probe; it is also written to the config. Repeatable. |
+| `--start NAME=VALUE` | A realistic start value (a Python literal; a list for an FMI 3 array), also used by `--probe`. Repeatable. |
+| `--setup CALL` | A [setup call](#libraries-that-need-setup-first), written to the config; with `--probe`, also run before the probe. Repeatable. |
 | `--kind function` | For [constructors that do the work](#constructors-that-do-the-work). |
+| `--probe` | Call the model once to find what the code doesn't show. |
+| `--convert NAME=module:function` | How an argument is passed in (`x=torch:tensor`, `x=numpy`), when it isn't annotated. |
 
 ```bash
 fmugen init fluids.friction:friction_factor --start Re=1e5 -o -
@@ -504,8 +508,8 @@ A `--start` name that appears in both the constructor and the step method goes t
 | **Inputs (functions) / parameters (classes)** | Arguments with a `bool`/`int`/`float`/`str` default, or with no default |
 | **Start values and types** | The default value. With no default: the annotation, otherwise Real `0.0` |
 | **Time arguments** | Arguments named `dt`, `step_size`, `h` (step size) or `t`, `time` (time) |
-| **Outputs from the return value** | The probe result: dict keys, tuple positions, a single value (`y`), or object attributes |
-| **Outputs and locals of classes** | Public numeric attributes the probe step *created* (outputs) or *changed* (locals), and readable properties (outputs) |
+| **Outputs from the return value** | The code: dict keys (also a dict built in a variable), tuple positions, a single value (`y`), NamedTuple/dataclass fields, or the return annotation. With `--probe`: the actual result |
+| **Outputs and locals of classes** | Public attributes the step method assigns, following the methods it calls on `self` (also assigned in `__init__`: local; else output), and annotated properties. With `--probe`: also what the step actually created or changed, and every readable numeric property |
 | **States** | An input `x_prev` whose next value is returned or stored as `x_next` or `x` |
 | **Sources** | Local modules under the config's folder that the model imported |
 | **Constants** | Non-FMI defaults, written as commented-out examples |
@@ -518,7 +522,7 @@ Check afterwards:
 - **States:** only inputs named `x_prev` are detected. A model that takes its own previous result under another name (Madgwick's `updateIMU(q, ...)` returning the new `q`) needs a `[states]` entry: `q = { dimensions = [4], start = [1.0, 0.0, 0.0, 0.0], next = "return" }`.
 - **Integer vs Real:** an `int` default (`setpoint=0`) gives an Integer. Write `0.0` for a Real.
 - **Units and descriptions:** add them; they can't be inferred.
-- **Outputs and locals:** remove the ones you don't need. Attributes that were 0 in the probe show up as Real.
+- **Outputs and locals:** remove the ones you don't need. Types come from annotations and obvious literals (`True`, comparisons, strings); everything else is Real. Uncomment and complete the commented lines (`dimensions = [...]`, properties, `save_state`), or rerun with `--probe`.
 - **Tunable parameters:** `init` only suggests them in comments (see [above](#a-class-with-a-step-method)).
 
 `fmugen build model.py` runs the same inference in memory. That's handy for a quick try; for anything you keep, write the config.

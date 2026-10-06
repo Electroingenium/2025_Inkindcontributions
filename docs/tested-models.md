@@ -61,8 +61,16 @@ Only RC_BuildingSimulator is copied into this repository. The others are install
 ## Models from PyPI
 
 Columns:
-- **`init` options:** what was passed to `fmugen init` besides the target. "—" means nothing: the config was inferred from the code alone.
+- **`init` options:** what was passed to `fmugen init` besides the target. "—" means nothing else was needed.
 - **FMI 2 / FMI 3:** whether `build`, `validate` and `simulate` all passed.
+
+These runs were made while `init` always called the model, which is now `init --probe`. Rerun since then **without `--probe`** (the model is not called, only its code is read):
+
+- The 11 scalar functions (pvlib ×4, `effectiveness_from_NTU`, `Antoine`, `friction_factor`, `Reynolds`, `Nu_conv_internal`, `_TSat_P`, `GetHumRatioFromRelHum`) give **exactly the same outputs** as with the probe.
+- `IAPWS97` (`--kind function`): 29 of the 52 outputs are found in the code; the other 23 are set by a helper that fills the object in a loop, which only `--probe` sees. None found in the code is wrong.
+- `TCLabModel`: its six properties (`T1`, `Q1`, …) have no type annotation, so they're written as commented lines to uncomment; `--probe` reads them.
+- `PropsSI` is a C extension: no source to read, with or without the probe; its config is written by hand.
+- Models with array results (Gymnasium, Madgwick) need `--probe` for the array sizes with FMI 3 (not rerun).
 
 | Model | Shape | `init` options | FMI 2 | FMI 3 |
 |---|---|---|---|---|
@@ -93,16 +101,16 @@ Each `--start` takes one `NAME=VALUE`; the table groups several per row for brev
 
 ## Neural networks
 
-Six small, published networks, each installed as published (`pip install <package>`) into its own venv together with fmugen, then run through `init` → `build` → `fmpy validate` → simulation with FMPy (`FMU3Slave` / `FMU2Slave`). Each result was compared with calling the model directly in its own venv.
+Six small, published networks, each installed as published (`pip install <package>`) into its own venv together with fmugen, then run through `init --probe` → `build` → `fmpy validate` → simulation with FMPy (`FMU3Slave` / `FMU2Slave`). Each result was compared with calling the model directly in its own venv. Neural networks need `--probe`: their result sizes depend on the weights, and their code is mostly compiled or framework code. Rerun after `--probe` became opt-in, the Chronos, Silero VAD and TorchANI configs came out identical.
 
 | Model | Size, runtime | Shape | `init` options | FMI 2 | FMI 3 |
 |---|---|---|---|---|---|
 | `chronos:ChronosBoltPipeline` | ~9 M params, PyTorch | classmethod factory, tensor in/out | [below](#chronos-bolt) | — (array input) | ✓ |
-| `silero_vad:load_silero_vad` | ~2 MB, ONNX Runtime | **factory function**, recurrent state, unannotated tensor input | `--fmi 3 --call __call__ --start onnx=true --start "x=[…512 samples…]" --start sr=16000`; build with `--capture-output` | — (array input) | ✓ |
-| `tsfm_public.toolkit.get_model:get_model` | 805 k params, PyTorch | factory function with `**kwargs`, 3-D tensor input, Hugging Face output object | `--fmi 3 --call forward --start model_path=ibm-granite/granite-timeseries-ttm-r2 --start context_length=512 --start prediction_length=96 --start "past_values=[[[…512 values…]]]"`; build with `--capture-output` | — (array input) | ✓ |
-| `stable_baselines3:PPO` | 9 k params, PyTorch | classmethod factory whose argument is a **downloaded file**, tuple result with a 0-d action | `--fmi 3 --create load --call predict --start "path=call:huggingface_sb3:load_from_hub(repo_id='sb3/demo-hf-CartPole-v1', filename='ppo-CartPole-v1.zip')" --start "observation=[0.0, 0.0, 0.05, 0.0]" --start deterministic=true`; build with `--capture-output` | — (array input) | ✓ |
-| `surfaces…gradient_boosting_regressor:GradientBoostingRegressorFunction` | 19 KB MLP, ONNX Runtime | class, hyperparameters through `**kwargs` | `--call __call__ --start use_surrogate=true --start n_estimators=78 --start max_depth=13` | ✓ | ✓ |
-| `torchani.models:ANI2x` | 1.7 M params (one network), PyTorch | factory function, **tuple argument** `(species, coordinates)`, NamedTuple result | `--fmi 3 --call forward --start model_index=0 --start "species_coordinates=([[6, 1, 1, 1, 1]], [[[0.0, 0.0, 0.0], …]])"`; build with `--capture-output` | — (array input) | ✓ |
+| `silero_vad:load_silero_vad` | ~2 MB, ONNX Runtime | **factory function**, recurrent state, unannotated tensor input | `--probe --fmi 3 --call __call__ --start onnx=true --start "x=[…512 samples…]" --start sr=16000`; build with `--capture-output` | — (array input) | ✓ |
+| `tsfm_public.toolkit.get_model:get_model` | 805 k params, PyTorch | factory function with `**kwargs`, 3-D tensor input, Hugging Face output object | `--probe --fmi 3 --call forward --start model_path=ibm-granite/granite-timeseries-ttm-r2 --start context_length=512 --start prediction_length=96 --start "past_values=[[[…512 values…]]]"`; build with `--capture-output` | — (array input) | ✓ |
+| `stable_baselines3:PPO` | 9 k params, PyTorch | classmethod factory whose argument is a **downloaded file**, tuple result with a 0-d action | `--probe --fmi 3 --create load --call predict --start "path=call:huggingface_sb3:load_from_hub(repo_id='sb3/demo-hf-CartPole-v1', filename='ppo-CartPole-v1.zip')" --start "observation=[0.0, 0.0, 0.05, 0.0]" --start deterministic=true`; build with `--capture-output` | — (array input) | ✓ |
+| `surfaces…gradient_boosting_regressor:GradientBoostingRegressorFunction` | 19 KB MLP, ONNX Runtime | class, hyperparameters through `**kwargs` | `--probe --call __call__ --start use_surrogate=true --start n_estimators=78 --start max_depth=13` | ✓ | ✓ |
+| `torchani.models:ANI2x` | 1.7 M params (one network), PyTorch | factory function, **tuple argument** `(species, coordinates)`, NamedTuple result | `--probe --fmi 3 --call forward --start model_index=0 --start "species_coordinates=([[6, 1, 1, 1, 1]], [[[0.0, 0.0, 0.0], …]])"`; build with `--capture-output` | — (array input) | ✓ |
 
 What was checked:
 
@@ -127,7 +135,7 @@ Notes:
 
 | Model | Shape | `init` options | FMI 2 | FMI 3 |
 |---|---|---|---|---|
-| `chronos:ChronosBoltPipeline` | class built by a factory (`from_pretrained`), `predict(inputs)`, tensor in and out, weights downloaded from Hugging Face | `--fmi 3 --create from_pretrained --call predict --start pretrained_model_name_or_path=amazon/chronos-bolt-tiny --start "inputs=[…24 values…]"`; build with `--capture-output` | — (array input: FMI 3 only) | ✓ |
+| `chronos:ChronosBoltPipeline` | class built by a factory (`from_pretrained`), `predict(inputs)`, tensor in and out, weights downloaded from Hugging Face | `--probe --fmi 3 --create from_pretrained --call predict --start pretrained_model_name_or_path=amazon/chronos-bolt-tiny --start "inputs=[…24 values…]"`; build with `--capture-output` | — (array input: FMI 3 only) | ✓ |
 
 `init` inferred everything from the code and the start values:
 
