@@ -27,7 +27,7 @@ The main risks for an open-source release are **distribution and portability**, 
 | 3 | ✅ Fixed | The FMU's Python was unclear. By default the FMU runs with the model's venv; `--vendor` (offline wheels, needs Python) and `--compile pyinstaller/nuitka` (no Python, no sources, one OS) make FMUs for other machines |
 | 4 | ✅ Fixed | Placeholder package metadata and bloated dependencies. The package is now `fmugen`, depending only on what the FMU's backend needs |
 | 5 | 🟡 Medium | `requires-python >= 3.13` excludes many users. The code needs about 3.11 (`tomllib`) and the FMU runtime needs 3.10 (`match` in the backend) |
-| 6 | ✅ Fixed | The build-time probe always ran the model, which was unsafe for hardware or network models (e.g. tclab). `fmugen build` now never runs the model; `[model] save_state` (set by `init`) declares state support |
+| 6 | ✅ Fixed | The model was always run to build and to infer the config, which was unsafe for hardware or network models (e.g. tclab). Now neither `fmugen build` nor `fmugen init` runs it: `init` reads the source code, and only calls the model with `--probe` |
 | 7 | 🟡 Medium | Some inference gaps reduce the "works on any model" coverage (see §4) |
 | 8 | 🟡 Medium | An 89 MB `.git` history (the removed `unifmu.exe` and binaries are still in it). `.idea/` is tracked even though `.gitignore` lists it |
 | 9 | 🟢 Low | Builds are not reproducible (random GUID and current timestamp), there is no CI, and a few docstrings are stale |
@@ -144,7 +144,7 @@ These are the gaps found:
 ## 5. Correctness and robustness (code-level)
 
 ### 5.1 CLI and build (`__main__.py`)
-- ✅ Fixed: `build` no longer runs user code. It imports the model to check the config, but constructs nothing and makes no step, so hardware (tclab), network and licence-server models build anywhere. `fmugen init` still calls the model, by design: it is how outputs are discovered. A probe timeout for `init` would still help with slow models.
+- ✅ Fixed: neither `build` nor `init` runs user code by default. `build` imports the model to check the config. `init` reads signatures and source code (`fmugen/static.py`): return statements, attributes the step method and the methods it calls assign, annotations, and the `x_prev` state pattern. Calling the model is opt-in, with `init --probe`. On the published models, reading the code gives the same outputs as the probe for all 11 scalar functions and the RC building. It can't know array sizes, results built at runtime, code without Python source, unannotated property types or `save_state`; the config marks those with commented lines. A timeout for the `--probe` call would still help with slow models.
 - Missing commands that users will expect (see §8): `fmugen check`, `fmugen run`, `fmugen inspect`.
 - `main()` only catches `FileExistsError` and `InterfaceError`. An exception from user code during `build` (e.g. at import) prints a raw traceback. That is acceptable, but a `--debug` flag would let the default path show a short message.
 
@@ -198,7 +198,7 @@ Found while testing Chronos-Bolt. When the FMU's Python process writes more than
 
 Still open:
 - Report it upstream to UniFMU, with the small reproduction (a function that prints 5 KB).
-- The default is still exposed: a model that prints a lot hangs unless built with the flag. `init` could suggest the flag when its probe call prints a lot.
+- The default is still exposed: a model that prints a lot hangs unless built with the flag. `init --probe` could suggest the flag when its probe call prints a lot.
 
 ---
 
@@ -246,7 +246,7 @@ Ordered by value to an open-source user base.
 1. ✅ Rename the distribution and trim dependencies (done). **Add a LICENSE** and third-party notices (§2.5), then publish to PyPI.
 2. **CI matrix** on 3 OSes × Python 3.10–3.13, plus a "build from installed wheel" smoke test.
 3. **Lower `requires-python`** to 3.10 or 3.11.
-4. ✅ **The build no longer runs the model** (done). Still useful: a timeout for `init`'s probe call.
+4. ✅ **Neither build nor init runs the model by default** (done; `init --probe` to call it). Still useful: a timeout for the `--probe` call.
 5. **Reject model module names that shadow the standard library.**
 
 ### Tier 2: portability ("an FMU that runs anywhere")
