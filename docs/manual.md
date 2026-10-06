@@ -101,11 +101,12 @@ fmugen build MODEL -o OUTPUT [options]
 
 ### `fmugen init`
 
-Imports the model, inspects its function or class, makes **one probe call** with the start values to discover its results, and writes a commented `fmugen.toml`.
+Imports the model, reads its signatures and **its source code**, and writes a commented `fmugen.toml`. **The model is not called**: no object is built and no step is run, so models that need a device, a network or a licence can be configured anywhere. Importing the module still runs its top-level code, as any import does. With `--probe`, `init` also calls the model once, to find what the code doesn't show.
 
 ```
 fmugen init MODEL [-o OUTPUT] [--call METHOD] [--fmi {2,3}]
-                  [--start NAME=VALUE ...] [--setup CALL ...] [--kind function] [--create CLASSMETHOD] [--force]
+                  [--start NAME=VALUE ...] [--setup CALL ...] [--kind function] [--create CLASSMETHOD]
+                  [--probe] [--convert NAME=module:function ...] [--force]
 ```
 
 | Option | Default | Description |
@@ -114,10 +115,12 @@ fmugen init MODEL [-o OUTPUT] [--call METHOD] [--fmi {2,3}]
 | `-o`, `--output PATH` | `fmugen.toml` next to the model (current directory for an installed module) | Where to write the config; missing folders are created. `-o -` prints it instead. A model file must be inside the config's folder. |
 | `--call METHOD` | `step`, `do_step`, `update`, `__call__`, or the only public method | Classes: the method run on each step. |
 | `--fmi {2,3}` | none (FMI 2) | Writes `fmi_version` into the config. With `3`, list/tuple/numpy values are inferred as arrays, `bytes` as Binary and numpy `float32` as Float32. |
-| `--start NAME=VALUE` | none | Start and probe value for an argument; repeatable. `VALUE` is a Python literal (`1e5`, `"Water"`, `[1.0, 0.0]`); a bare word is taken as a string. `true`/`false` are booleans. A tuple or dict value is split into one variable per item. `call:module:function(args)` makes a [computed constant](#value-syntax) instead of a variable. Use it for arguments without a default, or whose default breaks the model. |
-| `--setup CALL` | none | A [setup call](#model) to run before the probe; it is also written to `[model] setup`. Repeatable. E.g. `"psychrolib:SetUnitSystem(psychrolib.SI)"`, `reset`. |
+| `--start NAME=VALUE` | none | Start value (and, with `--probe`, the value it is called with) for an argument; repeatable. `VALUE` is a Python literal (`1e5`, `"Water"`, `[1.0, 0.0]`); a bare word is taken as a string. `true`/`false` are booleans. A tuple or dict value is split into one variable per item. `call:module:function(args)` makes a [computed constant](#value-syntax) instead of a variable. Use it for arguments without a default, or whose default breaks the model. |
+| `--setup CALL` | none | A [setup call](#model), written to `[model] setup`; with `--probe` it is also run before the probe. Repeatable. E.g. `"psychrolib:SetUnitSystem(psychrolib.SI)"`, `reset`. |
 | `--kind function` | none | Treat a class whose constructor does the work as a function called on every step (writes `[model] kind`). |
 | `--create CLASSMETHOD` | none | Classes built by a factory: the classmethod that creates the object, e.g. `from_pretrained`. Its arguments become parameters (writes `[model] create`). |
+| `--probe` | off | Also **call the model once**: run the setup calls, build the object, call the step with the start values (retrying array inputs as numpy arrays, then tensors), and try to pickle the object. Finds what the code doesn't show: array sizes, exact types, results built at runtime, unannotated properties, and `save_state`. Results the code shows but the probe didn't reach are added too. Without `--probe`, the model is never called. |
+| `--convert NAME=module:function` | none | How an argument is passed to the model, e.g. `x=torch:tensor`, or `x=numpy` for a numpy array; writes `convert` / `numpy`. Repeatable. Not needed when the argument is annotated (`torch.Tensor`, `np.ndarray`). |
 | `--force` | off | Overwrite an existing config. |
 
 **Where `--start` values go.** If a name is an argument of both the constructor and the step method, the value goes to the one that has no default; on a tie, to the step method. A name that neither declares goes to whichever accepts `**kwargs`, the step method first. A name that matches nothing is an error.
@@ -130,14 +133,23 @@ fmugen init MODEL [-o OUTPUT] [--call METHOD] [--fmi {2,3}]
 | Inputs (functions) / parameters (classes) | arguments with a `bool`/`int`/`float`/`str` default, without a default, or given `--start` |
 | Start values and types | the default or `--start` value; otherwise the annotation; otherwise Real `0.0` |
 | Time arguments | arguments named `dt`, `step_size`, `h` (step size) or `t`, `time` (time) |
-| Outputs from the return value | dict keys, tuple positions (`y0`, `y1`, …), a single value (`y`), or an object's attributes |
-| Class outputs and locals | public attributes the probe step created (outputs) or changed (locals), and readable properties (outputs) |
+| Outputs from the return value | read from the code: dict keys (also a dict built in a variable), tuple positions (`y0`, `y1`, …), a single value (`y`), NamedTuple/dataclass fields, or the return annotation. An argument returned as it is keeps its type (e.g. an enum) |
+| Class outputs and locals | public attributes the step method assigns, following the methods it calls on `self`: also assigned in `__init__` → local, else output. Properties of the model's own classes with a type annotation → outputs; without one → a commented line (reading a property runs code) |
+| Types of outputs | annotations; booleans from comparisons and `True`/`False`; strings; otherwise Real. Lists, arrays and objects are never written as scalars |
 | States | an input `x_prev` whose next value is returned or stored as `x_next` or `x` |
 | Sources | local modules under the config's folder that the model imported |
 | Positional-only arguments | bound with `to = "pos:N"` |
 | Constants | non-FMI defaults (`None`, tuples, objects), written as commented-out examples |
 
-**Not inferred:** units, descriptions, tunable variability (suggested in comments), states with other names, clocks, events, setter-method inputs (`call:`), and anything the probe couldn't reach. If the probe fails, `init` still writes the config and says why in a comment.
+**Not inferred from the code** (use `--probe`, or write them by hand; the config says so in comments):
+
+- **Array sizes.** With `--fmi 3`, array results appear as commented lines with `dimensions = [...]` to fill in. With FMI 2, arrays can't be FMU variables, so they're left out.
+- **Results built at runtime** (filled in loops, set by helper functions, returned from library calls) and **code without Python source** (C extensions, compiled models): the `[outputs]` section says the outputs couldn't be read.
+- **Unannotated properties**: commented lines, to uncomment if they are numbers.
+- **`save_state`** (whether the object can be pickled): a commented `save_state = false` line to uncomment if the model holds a device, file, socket or ONNX session.
+- **Factories without a return annotation**: the step method's inputs and outputs, because the object's class is only known by calling the factory.
+
+**Never inferred:** units, descriptions, tunable variability (suggested in comments), states with other names, clocks, events, setter-method inputs (`call:`). With `--probe`, if the probe call fails, `init` still writes the config, with what the code shows, and says why in a comment.
 
 **Examples:**
 
@@ -601,7 +613,7 @@ This config is illustrative: `plant.py` is not part of the repository. Every key
 | Message | Cause | Fix |
 |---|---|---|
 | `cannot import …: No module named …` | The model's package isn't in the environment running fmugen. | `pip install <pkg>` in that environment. |
-| `probe call failed (…)` in the config written by `init` | The model raised an error at the start values (division by zero, `log(0)`, out of range…). | Rerun `init` with realistic `--start` values. |
+| `probe call failed (…)` in the config written by `init --probe` | The model raised an error at the start values (division by zero, `log(0)`, out of range…). | Rerun `init` with realistic `--start` values. |
 | `… must be called first` / `has not been defined` (raised by the model) | The library needs setup. | `[model] setup` / `init --setup`. |
 | `--start NAME: arrays and bytes need --fmi 3` | An array or Binary value in an FMI 2 build. | Use `--fmi 3`. |
 | `--start names that are not arguments of the model` | A typo, or the argument isn't in the inspected signature. | Check the names; for C extensions, write the config by hand. |

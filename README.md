@@ -39,7 +39,9 @@ For your own model:
    fmugen init path/to/your_model.py
    ```
 
-2. Review the file. Check the start values, add units, and remove anything you don't want in the FMU. If the model rejects zeros or needs a setup call first, rerun `init` with `--start NAME=VALUE` / `--setup CALL` (see [docs/models.md](docs/models.md#what-fmugen-init-infers)).
+   `init` reads your code and never calls the model, so it's safe for models that drive hardware. For ML models, compiled code or array results, add `--probe`: `init` then calls the model once to find array sizes and exact types.
+
+2. Review the file. Check the start values, add units, and remove anything you don't want in the FMU. Commented lines mark what the code didn't show (array sizes, property types, `save_state`): complete them, or rerun with `--probe`. If the model rejects zeros or needs a setup call first, rerun `init` with `--start NAME=VALUE` / `--setup CALL` (see [docs/models.md](docs/models.md#what-fmugen-init-infers)).
 3. Build:
 
    ```bash
@@ -131,7 +133,7 @@ See [docs/fmi.md](docs/fmi.md) for what each FMI call does, function by function
 ## CLI
 
 ```
-fmugen init MODEL [-o fmugen.toml] [--call METHOD] [--fmi {2,3}] [--start NAME=VALUE ...] [--setup CALL ...] [--kind function] [--create CLASSMETHOD] [--force]
+fmugen init MODEL [-o fmugen.toml] [--call METHOD] [--fmi {2,3}] [--start NAME=VALUE ...] [--setup CALL ...] [--kind function] [--create CLASSMETHOD] [--probe] [--convert NAME=module:function ...] [--force]
 fmugen build MODEL -o OUTPUT [--fmi {2,3}] [--format fmu|folder] [--name NAME] [--author AUTHOR] [--vendor [--platform TAG] [--python-version X.Y] | --compile {pyinstaller,nuitka}] [--capture-output]
 ```
 
