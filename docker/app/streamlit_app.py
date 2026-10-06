@@ -125,10 +125,19 @@ class KubernetesRuns:
         pod = self._pod(name)
         if pod is None:
             return "(no pod yet)"
+        # No log until the container starts; asking earlier is an API error
+        for status in pod.status.container_statuses or []:
+            if status.state.waiting:
+                waiting = status.state.waiting
+                return f"(starting: {waiting.reason}{f' - {waiting.message}' if waiting.message else ''})"
+        if pod.status.phase == "Pending":
+            return "(starting: waiting to be scheduled)"
         try:
-            return self.core.read_namespaced_pod_log(pod.metadata.name, self.namespace)
+            # raw response: the client would otherwise turn the bytes into "b'...'" text
+            resp = self.core.read_namespaced_pod_log(pod.metadata.name, self.namespace, _preload_content=False)
+            return resp.data.decode("utf-8", errors="replace")
         except Exception as e:
-            return f"(no logs yet) {e}"
+            return f"(no logs yet) {getattr(e, 'reason', None) or e}"
 
     def remove(self, name):
         self.batch.delete_namespaced_job(name, self.namespace, propagation_policy="Background")
