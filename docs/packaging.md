@@ -227,7 +227,7 @@ In the GUI, open the `.fmu`, set start values, press play, and tick outputs to p
 | `src/fmugen/templates/fmugen_launch.py` | The launcher of vendored FMUs: offline install into a cached environment |
 | `examples/` | Example models with their `fmugen.toml` |
 | `tests/` | `uv run pytest` |
-| `docker/` | FMU + OPC UA + Streamlit demo stack (see [docker/Readme.md](../docker/Readme.md)) |
+| `docker/` | FMU + OPC UA + Streamlit demo stack, Docker Compose or Kubernetes/Liqo (see [docker/Readme.md](../docker/Readme.md)) |
 
 ---
 
