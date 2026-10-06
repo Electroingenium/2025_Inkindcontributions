@@ -595,7 +595,7 @@ def _arguments(fn, section, data, comments, skip_self=False, allow_time=True, co
                 comments[(section, p.name)] = "start from --start"
             elif not has_default:
                 comments[(section, p.name)] = "no default in the code: check the start value"
-            elif type(default) is int and p.annotation is not int:
+            elif type(default) is int and static.unwrap_optional(p.annotation) is not int:
                 comments[(section, p.name)] = "Integer because the default is an int; write a float start for Real"
             variables[p.name] = info
         elif isinstance(default, enum.Enum):
@@ -686,6 +686,7 @@ def _split_items(p, value, variables, section, comments, arrays):
 
 
 def _type_info(value, annotation=inspect.Parameter.empty):
+    annotation = static.unwrap_optional(annotation)
     if value is None:
         hint = {float: 0.0, int: 0, bool: False, str: ""}.get(annotation, 0.0)
         return {"start": hint}

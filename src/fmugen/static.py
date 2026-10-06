@@ -10,6 +10,7 @@ import ast
 import dataclasses
 import inspect
 import textwrap
+import types
 import typing
 
 PRIMITIVE_TYPES = {float: "Real", int: "Integer", bool: "Boolean", str: "String"}
@@ -88,7 +89,25 @@ def _literal_type(node, namespace=None):
 
 
 def _hint_type(hint):
-    return PRIMITIVE_TYPES.get(hint)
+    return PRIMITIVE_TYPES.get(unwrap_optional(hint))
+
+
+OPTIONAL_NAMES = {"float": float, "int": int, "bool": bool, "str": str}
+
+
+def unwrap_optional(hint):
+    """X for Optional[X] / X | None / Union[X, None] (also written as strings), else hint unchanged."""
+    if isinstance(hint, str):
+        text = hint.replace(" ", "").replace("typing.", "")
+        if text.startswith("Optional[") and text.endswith("]"):
+            text = text[len("Optional["):-1]
+        parts = [t for t in text.split("|") if t != "None"]
+        return OPTIONAL_NAMES.get(parts[0], hint) if len(parts) == 1 else hint
+    if typing.get_origin(hint) in (typing.Union, types.UnionType):
+        rest = [a for a in typing.get_args(hint) if a is not type(None)]
+        if len(rest) == 1:
+            return rest[0]
+    return hint
 
 
 def _is_array_hint(hint):
