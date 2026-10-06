@@ -50,6 +50,7 @@ SECTIONS = {
 MODEL_KEYS = {
     "entry", "call", "name", "description", "author", "sources", "requirements",
     "constants", "call_constants", "init_call", "terminate", "fmi_version", "setup", "kind", "create",
+    "save_state",
 }
 EXPERIMENT_KEYS = {"start_time", "stop_time", "step_size", "tolerance", "fixed_step"}
 TIME_SOURCES = ("time", "step_size", "end_time")
@@ -385,9 +386,25 @@ def normalize(config, entry_obj, module_name, sys_path, model_name=None, author=
         "clocks": clocks,
         "events": events,
         "has_event_mode": bool(clocks or events),
-        "can_get_and_set_state": True,
+        "can_get_and_set_state": _save_state(model) is not False,
+        "save_state": _save_state(model),
         "notes": notes,
     }
+
+
+def _save_state(model):
+    """[model] save_state: how the FMU saves and restores its state.
+
+    true: the whole model object (pickle, else cloudpickle); false: not supported; a list of
+    attribute paths: only those attributes. fmugen init picks one by trying to pickle the object.
+    """
+    value = model.get("save_state", True)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, list) and value and all(
+            isinstance(p, str) and all(part.isidentifier() for part in p.split(".")) for p in value):
+        return list(value)
+    raise InterfaceError('[model] save_state must be true, false, or a list of attribute names like ["_state"]')
 
 
 def parse_call(text):

@@ -231,6 +231,7 @@ def _infer_class(cls, call, data, comments, arrays=False, starts=None, create=No
         comments[("outputs", None)] = f"probe call failed ({e!r}); add the outputs by hand"
         return
     after = _numeric_attributes(obj, arrays)
+    _check_picklable(obj, data, comments)
 
     if result is not None and result is not obj:
         _outputs_from_return(result, data, comments, default_name="y", is_class=True, arrays=arrays)
@@ -295,6 +296,39 @@ def _probe_call(fn, data, comments, constants_key="constants"):
                 comments[("inputs", name)] = f"passed as {shown}: the probe failed with lists"
             return result
         raise first
+
+
+def _check_picklable(obj, data, comments):
+    """Pick [model] save_state: FMU state save/restore pickles the model object (as the runtime does:
+    pickle, else cloudpickle). If that fails, save only the attributes that can be pickled; if none
+    can, declare save/restore unsupported."""
+    from fmugen.templates.fmugen_runtime import dump_state
+    try:
+        dump_state(obj)
+        return
+    except Exception as e:
+        error = f"{type(e).__name__}: {e}"[:120]
+    try:
+        attrs = vars(obj)
+    except TypeError:
+        attrs = {}
+    saved, skipped = [], []
+    for name, value in attrs.items():
+        try:
+            dump_state(value)
+            saved.append(name)
+        except Exception:
+            skipped.append(name)
+    if saved and skipped:
+        data["model"]["save_state"] = saved
+        comments[("model", "save_state")] = (
+            f"the whole object can't be pickled ({error}); saved: these attributes only. Not saved, "
+            f"kept as they are on restore: {', '.join(skipped)}. Check those don't change during a simulation, "
+            "else set save_state = false")
+    else:
+        data["model"]["save_state"] = False
+        comments[("model", "save_state")] = f"the model object can't be pickled ({error}): " \
+                                            "the FMU can't save and restore its state"
 
 
 def _assign_starts(init, method, starts):
@@ -776,7 +810,7 @@ def render_toml(data, comments=None):
     lines.append("[model]")
     for key, value in data["model"].items():
         if key not in ("constants", "call_constants"):
-            lines.append(f"{_key(key)} = {_value(value)}")
+            lines.append(_with_comment(f"{_key(key)} = {_value(value)}", comments.get(("model", key))))
     for table in ("constants", "call_constants"):
         real = data["model"].get(table, {})
         examples = [

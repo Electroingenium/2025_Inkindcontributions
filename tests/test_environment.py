@@ -14,4 +14,4 @@ def test_fmu_runs_with_this_interpreter_and_lists_its_requirements(tmp_path):
         requirements = [line for line in z.read("resources/requirements.txt").decode().splitlines()
                         if not line.startswith("#")]
     assert launch[CURRENT_OS] == [sys.executable, "main.py"]
-    assert requirements == ["protobuf==5.27.3", "pyzmq", "simple-pid==2.0.1"]
+    assert requirements == ["protobuf==5.27.3", "pyzmq", "cloudpickle", "simple-pid==2.0.1"]
