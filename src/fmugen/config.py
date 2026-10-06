@@ -51,7 +51,7 @@ SECTIONS = {
 MODEL_KEYS = {
     "entry", "call", "name", "description", "author", "sources", "requirements",
     "constants", "call_constants", "init_call", "terminate", "fmi_version", "setup", "kind", "create",
-    "save_state",
+    "save_state", "cwd",
 }
 EXPERIMENT_KEYS = {"start_time", "stop_time", "step_size", "tolerance", "fixed_step"}
 TIME_SOURCES = ("time", "step_size", "end_time")
@@ -123,6 +123,10 @@ class Config:
         self.entry_target, self.entry_name = parse_entry(self.model["entry"])
         self.entry_is_file = self.entry_target.endswith(".py")
         self.requirements = list(self.model.get("requirements", []))
+        if "cwd" in self.model:
+            cwd = self._inside(str(self.model["cwd"]), "cwd")
+            if not cwd.is_dir():
+                raise InterfaceError(f"[model] cwd {self.model['cwd']!r} is not a folder (relative to {self.base_dir})")
 
     def fmi_version(self, override=None):
         return override or self.model.get("fmi_version", 2)
@@ -131,6 +135,13 @@ class Config:
 
     def entry_file(self):
         return self._inside(self.entry_target, "entry") if self.entry_is_file else None
+
+    def model_cwd(self):
+        """Where model code runs, relative to the FMU's resources/ folder ([model] cwd), or None."""
+        if "cwd" not in self.model:
+            return None
+        rel = self._inside(str(self.model["cwd"]), "cwd").relative_to(self.base_dir).as_posix()
+        return (PurePosixPath(MODEL_DIR) / rel).as_posix()
 
     def source_files(self):
         """[(absolute source path, path relative to the config dir)] to copy into the FMU."""
@@ -393,6 +404,7 @@ def normalize(config, entry_obj, module_name, sys_path, model_name=None, author=
             "terminate": model.get("terminate"),
         },
         "sys_path": sys_path,
+        "cwd": config.model_cwd(),
         "setup": _setup(model.get("setup", []), is_class),
         "constants": constants,
         "call_constants": call_constants,
