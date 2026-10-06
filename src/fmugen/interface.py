@@ -1,10 +1,13 @@
 """Infer a fmugen.toml from an ordinary Python model.
 
-`infer_config()` imports the model, inspects the entry function or class and makes
-one probe call with the start values to discover what it returns or which
-attributes it sets. The result is a config dict (the same shape as fmugen.toml)
-plus comments explaining each guess; `render_toml()` writes it out for the user to
-review. `fmugen build model.py` runs the same inference in memory.
+`infer_config()` imports the model and inspects the entry function or class: its
+signatures give the parameters and inputs, and its source code (static.py) what it
+returns and which attributes it sets. The model is not called. With probe=True
+(`fmugen init --probe`) it is also called once with the start values, which finds
+what reading the code can't: array sizes, exact types, results built at runtime, and
+whether the object can be pickled. The result is a config dict (the same shape as
+fmugen.toml) plus comments explaining each guess; `render_toml()` writes it out for the
+user to review. `fmugen build model.py` runs the same inference in memory.
 """
 import ast
 import enum
@@ -17,6 +20,7 @@ import sys
 from collections.abc import Mapping
 from pathlib import Path
 
+from fmugen import static
 from fmugen.config import InterfaceError
 
 TIME_NAMES = {"dt": "step_size", "step_size": "step_size", "h": "step_size", "t": "time", "time": "time"}
@@ -50,13 +54,15 @@ def parse_target(target):
 
 
 def infer_config(target, call=None, config_dir=None, fmi_version=None, starts=None, setup=None, kind=None,
-                 create=None):
+                 create=None, probe=False, converts=None):
     """Return (config dict, {(section, name): comment}) for a model target.
 
     With fmi_version=3, list/tuple/numpy values become array variables and bytes become Binary.
     `starts` ({argument: value}) gives probe/start values for arguments, e.g. ones without a
     default; `setup` (list of "module:function(args)" / "method") is run before the probe.
     `create` names a classmethod that builds the object (e.g. "from_pretrained").
+    `probe`: also call the model once (setup, construction, one step); otherwise it is never called.
+    `converts` ({argument: "module:function" or "numpy"}) sets how arguments are passed in.
     """
     arrays = fmi_version == 3
     starts = dict(starts or {})
@@ -86,18 +92,25 @@ def infer_config(target, call=None, config_dir=None, fmi_version=None, starts=No
     if kind == "function":
         data["model"]["kind"] = "function"
     comments = {}
+    options = {"arrays": arrays, "starts": starts, "probe": probe, "converts": dict(converts or {})}
     if inspect.isclass(entry) and kind != "function":
-        _infer_class(entry, call, data, comments, arrays, starts, create)
+        _infer_class(entry, call, data, comments, create=create, **options)
     elif call and kind != "function":
         # a function with --call is a factory: called once, --call runs on what it returns
         if create:
             raise InterfaceError("--create only applies to classes; a function with --call is already a factory")
-        _infer_class(None, call, data, comments, arrays, starts, factory=entry)
+        _infer_class(None, call, data, comments, factory=entry, **options)
     else:
         if call or create:
             raise InterfaceError("--call and --create only apply to classes")
-        _infer_function(entry, data, comments, arrays, starts)
-    unused = set(starts) - {n for sec in ("parameters", "inputs", "states") for n in data.get(sec, {})}         - {n for table in ("constants", "call_constants") for n in data["model"].get(table, {})}         - {str(info.get("to", "")).partition(":")[2].partition("[")[0]
+        _infer_function(entry, data, comments, **options)
+    variables = {n for sec in ("parameters", "inputs", "states") for n in data.get(sec, {})}
+    unknown = set(converts or {}) - variables
+    if unknown:
+        raise InterfaceError(f"--convert names that are not arguments of the model: {sorted(unknown)}")
+    unused = set(starts) - variables \
+        - {n for table in ("constants", "call_constants") for n in data["model"].get(table, {})} \
+        - {str(info.get("to", "")).partition(":")[2].partition("[")[0]
            for sec in ("parameters", "inputs", "states") for info in data.get(sec, {}).values()}
     if unused:
         raise InterfaceError(f"--start names that are not arguments of the model: {sorted(unused)}")
@@ -162,22 +175,40 @@ def _pick_entry(module, name):
 
 # ---------------- functions ----------------
 
-def _infer_function(fn, data, comments, arrays=False, starts=None):
+def _infer_function(fn, data, comments, arrays=False, starts=None, probe=False, converts=None):
     _arguments(fn, "inputs", data, comments, arrays=arrays, starts=starts)
-    try:
-        _run_setup(data)
-        result = _probe_call(fn, data, comments)
-    except Exception as e:
-        comments[("outputs", None)] = f"probe call failed ({e!r}); add the outputs by hand"
-        return
-    _outputs_from_return(result, data, comments, default_name="y", is_class=False, arrays=arrays)
-    _detect_states(data, comments, returned=result if isinstance(result, Mapping) else None, obj=None)
+    _apply_converts(data, converts)
+    returned_names, seen = set(), set()
+    if probe:
+        try:
+            _run_setup(data)
+            result = _probe_call(fn, data, comments)
+        except Exception as e:
+            comments[("outputs", None)] = f"probe call failed ({e!r}); outputs below are read from the code"
+        else:
+            _outputs_from_return(result, data, comments, default_name="y", is_class=False, arrays=arrays)
+            seen = set(result) if isinstance(result, Mapping) else set(data.get("outputs", {}))
+            returned_names |= seen
+    if inspect.isclass(fn):   # kind = "function": the new object is the result; its constructor sets the outputs
+        kinds = static.class_attributes(fn, "__init__")[0]
+        public = [a for a, k in kinds.items() if not a.startswith("_") and k not in ("other", "none")
+                  and (k != "array" or arrays)]
+        read = static.Returned(public, {a: f"return:{a}" for a in public}, {a: kinds[a] for a in public})
+        if not public and static.function_node(fn.__init__) is None:
+            read = static.Returned(unknown="no Python source to read")
+    else:
+        read = static.returned(fn)
+    _add_returned(read, data, comments, is_class=False, arrays=arrays, probe=probe, seen=seen)
+    _detect_states(data, comments, returned=returned_names | set(read.names), attrs=set())
 
 
 # ---------------- classes ----------------
 
-def _infer_class(cls, call, data, comments, arrays=False, starts=None, create=None, factory=None):
+def _infer_class(cls, call, data, comments, arrays=False, starts=None, create=None, factory=None, probe=False,
+                 converts=None):
     """Infer a class model; with `factory` (a function), the object comes from calling it instead."""
+    if factory and cls is None:
+        cls = static.factory_class(factory)   # from its return annotation; else known only by calling it
     method_name = call or _pick_method(cls)
     if create:
         if not callable(getattr(cls, create, None)):
@@ -185,7 +216,7 @@ def _infer_class(cls, call, data, comments, arrays=False, starts=None, create=No
         data["model"]["create"] = create
     if factory:
         constructor = factory
-        # The step method's arguments are known only once the object exists: names the factory
+        # The step method's arguments may be known only once the object exists: names the factory
         # declares go to it, everything else to the step method (even if the factory takes **kwargs).
         declared = inspect.signature(factory).parameters
         init_starts = {k: v for k, v in (starts or {}).items() if k in declared}
@@ -195,20 +226,65 @@ def _infer_class(cls, call, data, comments, arrays=False, starts=None, create=No
         init_starts, call_starts = _assign_starts(constructor, getattr(cls, method_name, None), starts or {})
     _arguments(constructor, "parameters", data, comments, skip_self=not (create or factory), allow_time=False,
                arrays=arrays, starts=init_starts, positional=False)
+    _apply_converts(data, converts)
 
     if method_name != "__call__" or call:
         data["model"]["call"] = method_name
     if not factory and not callable(getattr(cls, method_name, None)):
         raise InterfaceError(f"{cls.__name__} has no method {method_name!r}")
 
+    seen_returns, seen_attrs, obj = set(), set(), None
+    if probe:
+        obj, seen_returns, seen_attrs = _probe_class(cls, method_name, data, comments, arrays, call_starts,
+                                                     create, factory, converts)
+    elif cls is None:
+        comments[("inputs", None)] = (f"the object {factory.__name__}() returns is known only by running it: add the "
+                                      f"inputs and outputs of {method_name}() by hand, or run init --probe")
+    else:
+        method = inspect.getattr_static(cls, method_name)
+        _arguments(getattr(cls, method_name), "inputs", data, comments,
+                   skip_self=not isinstance(method, (staticmethod, classmethod)), constants_key="call_constants",
+                   arrays=arrays, starts=call_starts)
+        _apply_converts(data, converts)
+        copies = static.init_copies(cls) if not factory and not create else set()
+        for name in data.get("parameters", {}):
+            if name in copies:
+                comments.setdefault(("parameters", name),
+                                    "kept as an attribute: add variability = \"tunable\" if the step reads it")
+        comments[("model", "#save_state")] = (
+            "save_state = false  # not checked without --probe: set it if the model holds a device, file, "
+            "socket or ONNX session")
+    if obj is None and cls is None:
+        return   # a factory whose object type isn't known without running it
+
+    read = static.returned(getattr(cls, method_name)) if cls is not None else static.Returned()
+    _add_returned(read, data, comments, is_class=True, arrays=arrays, probe=probe, seen=seen_returns)
+    if cls is not None:
+        _add_attributes(cls, method_name, data, comments, arrays, probe, seen_attrs)
+    attrs = set(seen_attrs) | (set(dir(obj)) if obj is not None else set())
+    if cls is not None:
+        attrs |= set(static.assigned_attributes(cls, method_name)) | set(static.assigned_attributes(cls, "__init__"))
+        attrs |= set(static.own_properties(cls))
+    _detect_states(data, comments, returned=seen_returns | set(read.names), attrs=attrs)
+
+
+def _probe_class(cls, method_name, data, comments, arrays, call_starts, create, factory, converts):
+    """--probe: construct the object, call the step method once, and read what changed.
+
+    Returns (object or None, returned keys, attribute names seen).
+    """
     try:
         _run_setup(data)
         build = factory or (getattr(cls, create) if create else cls)
         obj = build(**_probe_constants(data, "constants"), **_probe_args(data, ("parameters",))[1])
         _run_setup(data, obj)
     except Exception as e:
-        comments[("outputs", None)] = f"probe construction failed ({e!r}); add the outputs by hand"
-        return
+        comments[("outputs", None)] = f"probe construction failed ({e!r}); outputs below are read from the code"
+        if cls is not None:
+            _arguments(getattr(cls, method_name), "inputs", data, comments, skip_self=True,
+                       constants_key="call_constants", arrays=arrays, starts=call_starts)
+            _apply_converts(data, converts)
+        return None, set(), set()
     if factory:
         method = getattr(obj, method_name, None)   # bound: no self argument
         if not callable(method):
@@ -224,12 +300,13 @@ def _infer_class(cls, call, data, comments, arrays=False, starts=None, create=No
 
     _arguments(method, "inputs", data, comments, skip_self=not factory, constants_key="call_constants",
                arrays=arrays, starts=call_starts)
+    _apply_converts(data, converts)
     before = _numeric_attributes(obj, arrays)
     try:
         result = _probe_call(getattr(obj, method_name), data, comments, constants_key="call_constants")
     except Exception as e:
-        comments[("outputs", None)] = f"probe call failed ({e!r}); add the outputs by hand"
-        return
+        comments[("outputs", None)] = f"probe call failed ({e!r}); outputs below are read from the code"
+        return obj, set(), set(getattr(obj, "__dict__", {}))
     after = _numeric_attributes(obj, arrays)
     _check_picklable(obj, data, comments)
 
@@ -250,7 +327,102 @@ def _infer_class(cls, call, data, comments, arrays=False, starts=None, create=No
         elif not _same(before[attr], value):
             data.setdefault("locals", {})[attr] = _typed({}, value, arrays)
             comments[("locals", attr)] = f"changed by {method_name}()"
-    _detect_states(data, comments, returned=result if isinstance(result, Mapping) else None, obj=obj)
+    returned = set(result) if isinstance(result, Mapping) else set()
+    return obj, returned, set(getattr(obj, "__dict__", {})) | set(_property_values(obj, arrays))
+
+
+# ---------------- results read from the code ----------------
+
+def _taken(data):
+    return {n for section in ("parameters", "structural_parameters", "inputs", "states", "outputs", "locals")
+            for n in data.get(section, {})}
+
+
+def _add_returned(read, data, comments, is_class, arrays, probe, seen):
+    """Outputs from what the code returns (static.returned). With --probe, only ones the probe didn't see."""
+    if read.unknown:
+        if not probe:
+            comments[("outputs", None)] = (f"outputs could not be read from the code ({read.unknown}); "
+                                           "add them by hand, or run init --probe")
+        return
+    if read.array:
+        if arrays and not probe:   # FMI 3 needs the size; FMI 2 has no array variables at all
+            comments[("outputs", "#y")] = ('y = { from = "return", dimensions = [...] }  # an array: set its '
+                                           'dimensions and uncomment, or run init --probe')
+        return
+    taken = _taken(data) | set(seen)
+    for name in read.names:
+        if name in taken:
+            continue
+        kind = read.types.get(name)
+        source = read.sources[name]
+        copied = None
+        if kind and kind.startswith("arg:"):   # an argument returned as it is: the same type as its variable
+            arg = kind[len("arg:"):]
+            copied = next((info for sec in ("parameters", "inputs", "states")
+                           for n, info in data.get(sec, {}).items()
+                           if n == arg or str(info.get("to", "")).endswith(f":{arg}")), None)
+            kind = "array" if copied and "dimensions" in copied else None
+        if kind == "array":
+            if arrays and not probe:
+                comments[("outputs", f"#{name}")] = (f'{name} = {{ from = "{source}", dimensions = [...] }}  '
+                                                     "# an array: set its dimensions and uncomment, or run init --probe")
+            continue
+        if kind in ("other", "none"):
+            continue
+        info = {} if (source == f"return:{name}" and not is_class) else {"from": source}
+        if copied:
+            info.update({k: v for k, v in copied.items() if k in ("type", "enum", "items")})
+        elif kind in ("Boolean", "String", "Integer"):
+            info["type"] = kind
+        data.setdefault("outputs", {})[name] = info
+        if probe:
+            comments[("outputs", name)] = "from the code; not seen in the probe"
+
+
+def _add_attributes(cls, method_name, data, comments, arrays, probe, seen):
+    """Outputs and locals from the attributes the step method assigns, and the object's own properties."""
+    in_step, in_init = static.class_attributes(cls, method_name)
+    taken = _taken(data) | set(seen)
+    for attr, kind in in_step.items():
+        if attr.startswith("_") or attr in taken:
+            continue
+        kind = static._merge([kind, in_init.get(attr)])
+        section = "locals" if attr in in_init else "outputs"
+        if kind == "array":
+            if arrays and not probe:
+                comments[(section, f"#{attr}")] = (f"{attr} = {{ dimensions = [...] }}  # an array set by "
+                                                   f"{method_name}(): set its dimensions and uncomment, or run init --probe")
+            continue
+        if kind == "other":
+            continue
+        info = {"type": kind} if kind in ("Boolean", "String") else {}
+        data.setdefault(section, {})[attr] = info
+        comments[(section, attr)] = ("from the code; not seen in the probe" if probe else
+                                     f"{'changed' if section == 'locals' else 'set'} by {method_name}()")
+    for name, kind in static.own_properties(cls).items():
+        if name in _taken(data) or name in seen:
+            continue
+        if kind:   # annotated as a number, bool or str
+            data.setdefault("outputs", {})[name] = {"type": kind} if kind != "Real" else {}
+            comments[("outputs", name)] = "from the code; not seen in the probe" if probe else "a property of the object"
+        elif not probe:   # without an annotation its value could be anything: reading it would run code
+            comments[("outputs", f"#{name}")] = (f"{name} = {{}}  # a property of the object (type unknown): "
+                                                 "uncomment if it is a number, or run init --probe")
+
+
+def _apply_converts(data, converts):
+    """--convert NAME=module:function (or NAME=numpy): how an argument is passed to the model."""
+    for name, converter in (converts or {}).items():
+        for section in ("parameters", "inputs", "states"):
+            info = data.get(section, {}).get(name)
+            if info is None:
+                continue
+            info.pop("numpy", None), info.pop("convert", None)
+            if converter == "numpy":
+                info["numpy"] = True
+            else:
+                info["convert"] = converter
 
 
 ARRAY_RETRIES = ("numpy", "torch:tensor")   # tried in order when a probe call fails with list inputs
@@ -629,17 +801,18 @@ def _outputs_from_return(result, data, comments, default_name, is_class, arrays=
         data.pop("outputs")
 
 
-def _detect_states(data, comments, returned, obj):
-    """An input named x_prev whose next value is returned or stored as x_next / x is a state."""
+def _detect_states(data, comments, returned, attrs):
+    """An input named x_prev whose next value is returned (a key in `returned`) or stored as an
+    attribute (a name in `attrs`) x_next / x is a state."""
     inputs = data.get("inputs", {})
     for name in list(inputs):
         if not name.endswith("_prev"):
             continue
         base = name[: -len("_prev")]
         for candidate in (f"{base}_next", base):
-            if returned is not None and candidate in returned:
+            if candidate in returned:
                 source = f"return:{candidate}"
-            elif obj is not None and hasattr(obj, candidate):
+            elif candidate in attrs:
                 source = f"attr:{candidate}"
             else:
                 continue
@@ -811,6 +984,8 @@ def render_toml(data, comments=None):
     for key, value in data["model"].items():
         if key not in ("constants", "call_constants"):
             lines.append(_with_comment(f"{_key(key)} = {_value(value)}", comments.get(("model", key))))
+    if "save_state" not in data["model"] and ("model", "#save_state") in comments:
+        lines.append(f"# {comments[('model', '#save_state')]}")
     for table in ("constants", "call_constants"):
         real = data["model"].get(table, {})
         examples = [
@@ -833,7 +1008,8 @@ def render_toml(data, comments=None):
     for section in SECTION_ORDER:
         table = data.get(section)
         note = comments.get((section, None))
-        if not table and not note:
+        hints = [text for (sec, key), text in comments.items() if sec == section and str(key).startswith("#")]
+        if not table and not note and not hints:
             continue
         lines.append("")
         lines.append(f"[{section}]")
@@ -841,6 +1017,7 @@ def render_toml(data, comments=None):
             lines.append(f"# {note}")
         for name, value in (table or {}).items():
             lines.append(_with_comment(f"{_key(name)} = {_value(value)}", comments.get((section, name))))
+        lines.extend(f"# {text}" for text in hints)   # commented-out lines to complete by hand
     if data["model"].get("fmi_version") == 3:
         lines.append(CLOCKS_EXAMPLE.rstrip("\n"))
     return "\n".join(lines) + "\n"

@@ -11,6 +11,7 @@ from fmugen.interface import infer_config, render_toml
 
 
 def infer(target, **kwargs):
+    kwargs.setdefault("probe", True)   # these tests check what the probe call finds; tests/test_static.py: without
     with isolated_imports():
         return infer_config(target, **kwargs)
 

@@ -126,7 +126,7 @@ def isolated_imports():
                 del sys.modules[name]
 
 
-def resolve_target(target, call=None, fmi_version=None):
+def resolve_target(target, call=None, fmi_version=None, probe=False):
     """Return a Config for a fmugen.toml, a directory containing one, or a model file."""
     path = Path(target)
     if path.is_dir():
@@ -137,7 +137,7 @@ def resolve_target(target, call=None, fmi_version=None):
         return load_config(path)
     model_path, _, _ = parse_target(target)
     with isolated_imports():
-        data, _ = infer_config(target, call=call, fmi_version=fmi_version)
+        data, _ = infer_config(target, call=call, fmi_version=fmi_version, probe=probe)
     return Config(data, model_path.parent if model_path else Path.cwd())
 
 
@@ -152,7 +152,7 @@ def _copy_sources(config, model_dir):
 
 
 def build(target, output, model_name=None, author=None, output_format="fmu", call=None, fmi_version=None,
-          vendor=False, platforms=(), python_versions=(), compiler=None, capture_output=False):
+          vendor=False, platforms=(), python_versions=(), compiler=None, capture_output=False, probe=False):
     """Build an FMU. `vendor` (with `platforms`/`python_versions`) or `compiler` ("pyinstaller"
     or "nuitka") make it run on other machines; see distribute.py. `capture_output` sends what
     the model prints to the importer's log instead of the console."""
@@ -170,7 +170,7 @@ def build(target, output, model_name=None, author=None, output_format="fmu", cal
     if output_format == "folder" and output.is_file():
         raise FileExistsError(f"{output} is a file; cannot write a folder there")
 
-    config = resolve_target(target, call=call, fmi_version=fmi_version)
+    config = resolve_target(target, call=call, fmi_version=fmi_version, probe=probe)
     version = config.fmi_version(fmi_version)
     if version not in ADAPTERS:
         raise InterfaceError(f"unknown FMI version {version!r}, expected one of {sorted(ADAPTERS)}")
@@ -228,8 +228,10 @@ def build(target, output, model_name=None, author=None, output_format="fmu", cal
 
 
 def init(target, output=None, call=None, force=False, fmi_version=None, starts=None, setup=None, kind=None,
-         create=None):
-    """Write the inferred config to `output` (default: fmugen.toml next to the model; "-": stdout)."""
+         create=None, probe=False, converts=None):
+    """Write the inferred config to `output` (default: fmugen.toml next to the model; "-": stdout).
+
+    The model is not called unless `probe` is set (init --probe)."""
     model_path, _, _ = parse_target(target)
     default_dir = model_path.parent if model_path else Path.cwd()
     to_stdout = output == "-"
@@ -238,7 +240,8 @@ def init(target, output=None, call=None, force=False, fmi_version=None, starts=N
         raise FileExistsError(f"{output} already exists; pass --force to overwrite it, or -o - to print it")
     with isolated_imports():
         data, comments = infer_config(target, call=call, config_dir=output.parent, fmi_version=fmi_version,
-                                      starts=starts, setup=setup, kind=kind, create=create)
+                                      starts=starts, setup=setup, kind=kind, create=create, probe=probe,
+                                      converts=converts)
     text = render_toml(data, comments)
     if to_stdout:
         sys.stdout.write(text)
@@ -246,6 +249,18 @@ def init(target, output=None, call=None, force=False, fmi_version=None, starts=N
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(text, encoding="utf-8")
     return output, data
+
+
+def _parse_converts(items):
+    """["NAME=module:function" | "NAME=numpy", ...] -> {NAME: converter}."""
+    converts = {}
+    for item in items:
+        name, sep, converter = item.partition("=")
+        name, converter = name.strip(), converter.strip()
+        if not sep or not name.isidentifier() or not (converter == "numpy" or ":" in converter):
+            raise InterfaceError(f"--convert {item!r}: expected NAME=module:function (e.g. x=torch:tensor) or NAME=numpy")
+        converts[name] = converter
+    return converts
 
 
 def _parse_starts(items):
@@ -275,8 +290,9 @@ def main(argv=None):
     sub = parser.add_subparsers(dest="command", required=True)
 
     i = sub.add_parser("init", help="write a fmugen.toml by inspecting a model",
-                       description="Import the model, inspect its function or class, make one probe call "
-                                   "and write a commented fmugen.toml to review. See docs/models.md.")
+                       description="Import the model, read its signatures and source code, and write a commented "
+                                   "fmugen.toml to review. The model is not called unless --probe is given. "
+                                   "See docs/models.md.")
     i.add_argument("model", help="model.py, model.py:Name, or package.module:Name")
     i.add_argument("-o", "--output", help="config path (default: fmugen.toml next to the model; - prints it)")
     i.add_argument("--call", help="method run on each step, for classes (default: step/do_step/update/__call__)")
@@ -293,6 +309,12 @@ def main(argv=None):
                         "e.g. from_pretrained; its arguments become parameters")
     i.add_argument("--kind", choices=("function",),
                    help="function: treat a class whose constructor does the work as a function called every step")
+    i.add_argument("--probe", action="store_true",
+                   help="also call the model once (setup, construction, one step) with the start values, to find "
+                        "what the code doesn't show: array sizes, exact types, results built at runtime, whether "
+                        "its state can be saved. Without it, the model is never called")
+    i.add_argument("--convert", action="append", default=[], metavar="NAME=module:function",
+                   help="how an argument is passed to the model, e.g. x=torch:tensor or x=numpy; repeatable")
 
     b = sub.add_parser("build", help="build a UniFMU from a fmugen.toml or a model file",
                        description="Build an FMI 2.0 or 3.0 Co-Simulation FMU. MODEL is a fmugen.toml, a directory "
@@ -305,6 +327,8 @@ def main(argv=None):
     b.add_argument("--name", help="modelName in modelDescription.xml (default: [model] name, else the entry name)")
     b.add_argument("--author", default=None, help="author in modelDescription.xml (default: [model] author)")
     b.add_argument("--call", help="method run on each step when MODEL is a .py file with a class")
+    b.add_argument("--probe", action="store_true",
+                   help="when MODEL is a .py file: infer its config like init --probe (calls the model once)")
     b.add_argument("--vendor", action="store_true",
                    help="put wheels of every requirement into the FMU; it installs them offline on its first "
                         "run on a machine (the target needs Python, not this environment)")
@@ -325,13 +349,14 @@ def main(argv=None):
     try:
         if args.command == "init":
             output, data = init(args.model, args.output, args.call, args.force, args.fmi,
-                                _parse_starts(args.start), args.setup, args.kind, args.create)
+                                _parse_starts(args.start), args.setup, args.kind, args.create, args.probe,
+                                _parse_converts(args.convert))
             if output:
                 print(f"Wrote {output.resolve()}; review it, then run: fmugen build {output}")
             return
         output, interface = build(args.model, args.output, args.name, args.author,
                                   args.format, args.call, args.fmi, args.vendor, args.platform,
-                                  args.python_version, args.compile, args.capture_output)
+                                  args.python_version, args.compile, args.capture_output, args.probe)
     except (FileExistsError, InterfaceError) as e:
         parser.exit(2, f"fmugen: error: {e}\n")
 

@@ -168,7 +168,7 @@ def test_state_with_cloudpickle_when_pickle_fails(tmp_path, make_fmu, adapter):
                 return {"total": self.total}
     ''')
     with isolated_imports():
-        init(str(tmp_path / "lam.py"))
+        init(str(tmp_path / "lam.py"), probe=True)
     assert "save_state" not in (tmp_path / "fmugen.toml").read_text()
     fmu = adapter(make_fmu(tmp_path))
     fmu.initialize()
@@ -195,7 +195,7 @@ def test_state_of_selected_attributes(tmp_path, make_fmu, adapter):
                 return {"total": self.total}
     ''')
     with isolated_imports():
-        _, data = init(str(tmp_path / "res.py"))
+        _, data = init(str(tmp_path / "res.py"), probe=True)
     assert data["model"]["save_state"] == ["total"]
     text = (tmp_path / "fmugen.toml").read_text()
     assert "kept as they are on restore: lock" in text
@@ -225,7 +225,7 @@ def test_unpicklable_attribute_that_changes_is_flagged(tmp_path):
                 self.count = next(self.it)
     ''')
     with isolated_imports():
-        _, data = init(str(tmp_path / "gen.py"))
+        _, data = init(str(tmp_path / "gen.py"), probe=True)
     assert data["model"]["save_state"] == ["count"]
     assert "kept as they are on restore: it. Check those don't change" in (tmp_path / "fmugen.toml").read_text()
 
@@ -313,7 +313,7 @@ def test_setter_method_inputs_and_property_outputs(tmp_path, make_fmu, adapter):
                 self._temp += 0.1 * self._power * dt
     ''')
     from fmugen.__main__ import init
-    _, data = init(tmp_path / "lab.py", tmp_path / "inferred.toml")
+    _, data = init(tmp_path / "lab.py", tmp_path / "inferred.toml", probe=True)
     assert data["outputs"] == {"temperature": {}}       # the property is found by inference
     (tmp_path / "fmugen.toml").write_text(textwrap.dedent('''
         [model]
