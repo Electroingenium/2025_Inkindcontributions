@@ -176,8 +176,12 @@ def simulate_and_publish():
         logger.info("Simulation complete.")
         slave.fmu.terminate()
     finally:
-        slave.fmu.freeInstance()
-        opc.disconnect()
+        # Cleanup must not hide the error that got us here (e.g. a failed instantiate)
+        for cleanup in (slave.fmu.freeInstance, opc.disconnect):
+            try:
+                cleanup()
+            except Exception as e:
+                logger.warning(f"Cleanup failed: {e}")
         shutil.rmtree(unzipdir, ignore_errors=True)
 
         df = pd.DataFrame(results).ffill()

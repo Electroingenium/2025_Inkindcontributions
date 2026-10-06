@@ -8,6 +8,7 @@ Either way the results come back in the run's log (see fmu_runner.py).
 """
 import io
 import os
+import secrets
 import time
 from datetime import datetime
 
@@ -146,22 +147,32 @@ class KubernetesRuns:
 # ---------------------------------------------------------------- helpers
 
 @st.cache_resource
-def get_opc():
-    c = OPCClient(OPCUA_ENDPOINT)
+def _opc_session():
+    """Connected client and {"Inputs": {name: node}, "Outputs": {name: node}} from the OPC UA server."""
+    c = OPCClient(OPCUA_ENDPOINT, timeout=5)
     c.connect()
-    return c
-
-
-@st.cache_resource
-def opc_nodes(_c):
-    """{"Inputs": {name: node}, "Outputs": {name: node}} as published by the OPC UA server."""
-    ns_idx = _c.get_namespace_index(NAMESPACE_URI)
-    objects = _c.get_objects_node()
+    ns_idx = c.get_namespace_index(NAMESPACE_URI)
+    objects = c.get_objects_node()
     nodes = {}
     for folder_name in ("Inputs", "Outputs"):
         folder = objects.get_child([ua.QualifiedName(folder_name, ns_idx)])
         nodes[folder_name] = {ch.get_browse_name().Name: ch for ch in folder.get_children()}
-    return nodes
+    return c, nodes
+
+
+def opc_session():
+    """The cached session, reconnected if the server went away (e.g. its pod restarted)."""
+    c, nodes = _opc_session()
+    try:
+        c.get_node(ua.ObjectIds.Server_ServerStatus_State).get_value()
+    except Exception:
+        try:
+            c.disconnect()
+        except Exception:
+            pass
+        _opc_session.clear()
+        c, nodes = _opc_session()
+    return c, nodes
 
 
 @st.cache_resource
@@ -229,8 +240,7 @@ with st.sidebar:
             help="remote: a Liqo virtual node (a peered cluster); local: this cluster's own nodes; any: either",
         )
 
-client = get_opc()
-nodes = opc_nodes(client)
+client, nodes = opc_session()
 
 colL, colR = st.columns(2)
 
@@ -264,7 +274,8 @@ st.subheader("Run FMU")
 
 c1, c2 = st.columns(2)
 if c1.button("▶️ Run"):
-    name = f"{RUN_PREFIX}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+    # timestamp sorts newest first; the suffix keeps two runs in the same second apart
+    name = f"{RUN_PREFIX}-{datetime.now().strftime('%Y%m%d%H%M%S')}-{secrets.token_hex(2)}"
     env = {
         "RUN_NAME": name,
         "START_TIME": str(START_TIME),
