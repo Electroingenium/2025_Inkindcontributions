@@ -152,6 +152,15 @@ fmugen build examples/simple_pid -o out/pid.fmu --vendor --platform win_amd64 --
 
 Vendoring uses the environment's `pip`, or `uvx pip` when the environment has none (uv venvs).
 
+### Hugging Face models (`--hf-weights`)
+
+Models such as Chronos, TTM or an SB3 policy download their weights from Hugging Face on first use. With `--vendor` or `--compile` (or `--hf-weights` on any build), `fmugen build` puts them into the FMU, in `resources/hf_cache/`:
+
+- every string parameter or constant that is a Hugging Face model id, such as `"amazon/chronos-bolt-tiny"` (`snapshot_download`), and
+- whatever a `{ call = "…" }` constant downloads, such as `huggingface_sb3.load_from_hub(...)`: the call is made once at build time, with Hugging Face's cache inside the FMU.
+
+The FMU then sets `HF_HUB_CACHE` to that folder and `HF_HUB_OFFLINE=1` before importing the model, so it runs without a network connection or the user's cache. The FMU grows by the size of the weights. `--no-hf-weights` turns it off.
+
 ### `--compile`
 
 `fmugen build --compile pyinstaller` (or `nuitka`) freezes UniFMU's backend, fmugen's adapter and runtime, your model and every package it imports, together with the Python interpreter, into `resources/dist/main/`. All `.py` files, `fmugen_model/`, `interface.json` and `requirements.txt` are removed from the FMU; `resources/` keeps only `dist/` and `launch.toml`:
@@ -171,6 +180,8 @@ Install the compiler in your environment first: `pip install fmugen[pyinstaller]
 | **Build time** | about a minute | several minutes or more; needs a C compiler (on Windows, Nuitka downloads one) |
 
 Neither can cross-compile: the executable runs only on the OS and CPU architecture of the machine that built it. To ship for several OSes, build on each one.
+
+With `cwd` set, `fmugen_model/` stays, without its `.py` files, so the model still finds its data files.
 
 fmugen tells the compiler about the modules the runtime imports by name (the model's entry, `setup` calls, enums, references in constants, clock calls) and bundles the model's non-Python files next to its modules. A package that imports parts of itself dynamically may still be missed; the build's error, or the FMU's log, then names the missing module.
 

@@ -11,8 +11,10 @@ works where it was built. Two ways to ship it elsewhere:
   No .py files are shipped and the target needs no Python, but the executable only runs
   on the OS (and architecture) it was built on.
 """
+import ast
 import importlib.util
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -24,7 +26,9 @@ COMPILERS = {"pyinstaller": "PyInstaller", "nuitka": "nuitka"}   # --compile val
 EXE_DIR = "dist/main"   # resources/dist/main/: the frozen backend
 EXE_NAME = "main"
 # What stays in resources/ after compiling; everything else is inside the executable
-KEEP_AFTER_COMPILE = {"dist", "launch.toml"}
+KEEP_AFTER_COMPILE = {"dist", "launch.toml", "hf_cache"}
+HF_CACHE = "hf_cache"   # Hugging Face models inside the FMU, in resources/
+HF_REPO_ID = re.compile(r"^[A-Za-z0-9][\w.-]*/[\w.-]+$")
 
 
 # ---------------- --vendor ----------------
@@ -38,6 +42,66 @@ def _pip():
         return [uvx, "pip"]
     raise InterfaceError("--vendor needs pip: install it in this environment (pip is missing from uv venvs), "
                          "or install uv")
+
+
+def hf_models(interface, base_dir):
+    """Hugging Face model ids ("amazon/chronos-bolt-tiny") among the model's string start values
+    and constants, that aren't paths of files in the project."""
+    texts = [v["start"] for v in interface["variables"] if isinstance(v.get("start"), str)]
+    for value in _constants(interface):
+        if isinstance(value, dict) and "python" in value:
+            try:
+                texts.append(ast.literal_eval(value["python"]))
+            except (ValueError, SyntaxError):
+                continue
+        elif isinstance(value, str):
+            texts.append(value)
+    return sorted({t for t in texts if isinstance(t, str) and HF_REPO_ID.match(t) and not (Path(base_dir) / t).exists()})
+
+
+def bundle_hf_models(interface, base_dir, resources):
+    """Download the Hugging Face models the model loads into resources/hf_cache, so the FMU runs
+    offline. Returns the model ids that were bundled."""
+    ids = hf_models(interface, base_dir)
+    calls = [value["call"] for value in _constants(interface) if isinstance(value, dict) and "call" in value]
+    if not ids and not calls:
+        return []
+    try:
+        from huggingface_hub import constants, snapshot_download
+    except ImportError:
+        return []
+    cache = resources / HF_CACHE
+    bundled = []
+    for repo_id in ids:
+        try:
+            snapshot_download(repo_id, cache_dir=cache)
+        except Exception as e:
+            print(f"note: not bundling {repo_id!r} from Hugging Face ({type(e).__name__}): "
+                  "the FMU will download it on first use if it is a model")
+            continue
+        bundled.append(repo_id)
+    # constants computed by a call, e.g. huggingface_sb3's load_from_hub(repo_id=..., filename=...):
+    # make the call once with the cache inside the FMU, so the same call finds its file there offline
+    from fmugen.templates.fmugen_runtime import call_reference
+    previous = constants.HF_HUB_CACHE
+    constants.HF_HUB_CACHE = str(cache)
+    try:
+        for text in calls:
+            before = set(cache.glob("models--*")) if cache.is_dir() else set()
+            try:
+                call_reference(text)
+            except Exception as e:
+                print(f"note: could not run {text!r} while bundling Hugging Face files ({type(e).__name__})")
+                continue
+            bundled += [p.name.removeprefix("models--").replace("--", "/")
+                        for p in sorted(set(cache.glob("models--*")) - before) if cache.is_dir()]
+    finally:
+        constants.HF_HUB_CACHE = previous
+    return bundled
+
+
+def _constants(interface):
+    return [v for table in ("constants", "call_constants") for v in interface.get(table, {}).values()]
 
 
 def vendor(requirements, wheels_dir, platforms=(), python_versions=()):
