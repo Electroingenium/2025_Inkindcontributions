@@ -37,6 +37,8 @@ INT_RANGES = {
     "Integer": (-2**31, 2**31 - 1),
 }
 FLOAT_TYPES = ("Real", "Float32", "Float64")
+TRUE_STRINGS = ("true", "1", "yes", "on")
+FALSE_STRINGS = ("false", "0", "no", "off", "")
 
 # Interval qualifiers (FMI 3)
 INTERVAL_NOT_YET_KNOWN, INTERVAL_UNCHANGED, INTERVAL_CHANGED = 0, 1, 2
@@ -262,14 +264,16 @@ class Engine:
 
     def set_values(self, references, values):
         values = list(values)
+        cursor = 0
         for r in references:
             var = self.by_reference.get(r)
             if var is None:
                 return self.error(f"unknown value reference {r}")
             n = self.size(var)
-            if len(values) < (n or 1):
+            if len(values) - cursor < (n or 1):
                 return self.error(f"not enough values for {var['name']}")
-            raw = [values.pop(0) for _ in range(n)] if n is not None else values.pop(0)
+            raw = values[cursor:cursor + n] if n is not None else values[cursor]
+            cursor += n or 1
             problem = self._settable(var)
             if problem:
                 return self.error(f"{var['name']} ({var['causality']}) cannot be set {problem}")
@@ -868,6 +872,13 @@ def coerce(fmi_type, value):
             raise ValueError(f"{value} is out of range for {fmi_type}")
         return value
     if fmi_type == "Boolean":
+        if isinstance(value, str):
+            text = value.strip().lower()
+            if text in TRUE_STRINGS:
+                return True
+            if text in FALSE_STRINGS:
+                return False
+            raise ValueError(f"{value!r} is not a Boolean")
         return bool(value)
     if fmi_type == "Binary":
         if isinstance(value, str):

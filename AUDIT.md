@@ -134,8 +134,8 @@ These are the gaps found:
 | **Multiple entry points / composite models** | One entry per FMU | Allow several `[model.<name>]` blocks wired together, or document using an importer for that |
 | **Models that need files** (`weather.csv`) | They must sit under the config dir in `sources`, and the code must open them relative to `__file__` | Add `[model] data = [...]` and a `cwd = "model"` option that `chdir`s to `fmugen_model/` during calls (many research models open relative paths) |
 | **Int outputs** always inferred as Real (by design) | Fine, but surprising | Keep it, and note it in the generated comment (already partly done) |
-| **`Boolean` coercion from strings** (`coerce("Boolean", "false")` gives `True`) | Wrong value if a model returns `"false"` | Parse common string forms, or raise |
-| **Very large arrays** | `set_values` uses `values.pop(0)`, which is O(n²) | Use an index or iterator |
+| ✅ **`Boolean` coercion from strings** (`coerce("Boolean", "false")` gave `True`) | Fixed: `true/false/1/0/yes/no/on/off` are parsed (any case), other strings raise | — |
+| ✅ **Very large arrays** | Fixed: `set_values` reads with an index instead of `values.pop(0)` (was O(n²)) | — |
 | **Stateful module-level globals** (functions with `global` counters) | `fmi2Reset`/`fmi3Reset` don't reload the module, so state survives a reset, and `serialize` doesn't save globals | Document it, or offer `reset = "reload"` that re-imports the model package |
 | ✅ **Models without pickling support** (e.g. anything holding an ONNX Runtime `InferenceSession`: Silero VAD, surfaces) | Was: state save/restore disabled | Fixed: `cloudpickle` fallback, and `save_state = [attributes]` saves only what can be pickled (written by `init`). Silero VAD now rolls back correctly through UniFMU. Still open: `dill`, saving module globals and global RNG states |
 
