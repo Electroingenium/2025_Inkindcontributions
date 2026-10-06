@@ -8,9 +8,9 @@ import sys
 from pathlib import Path
 
 try:
-    from fmugen_runtime import Engine, Status
+    from fmugen_runtime import Status, make_engine
 except ImportError:  # imported from the fmugen package (build probe, tests)
-    from fmugen.templates.fmugen_runtime import Engine, Status
+    from fmugen.templates.fmugen_runtime import Status, make_engine
 
 # Frozen with PyInstaller (fmugen build --compile), data files are in sys._MEIPASS;
 # with Nuitka, next to the compiled modules, as in a normal FMU.
@@ -20,7 +20,7 @@ RESOURCES_DIR = Path(getattr(sys, "_MEIPASS", None) or Path(__file__).resolve().
 class Model:
     def __init__(self, _log_callback, resources_dir=None) -> None:
         self._log_callback = _log_callback # Removing this line will break logging
-        self.engine = Engine(resources_dir or RESOURCES_DIR, self.log, info_category="logAll")
+        self.engine = make_engine(resources_dir or RESOURCES_DIR, self.log, info_category="logAll")
 
     # ================= FMI2 =================
 
