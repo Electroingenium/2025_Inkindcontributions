@@ -1,6 +1,6 @@
 # fmugen project audit
 
-Date: 2026-10-05 · Branch `tomas` @ `30d827b` · Auditor: Claude (Opus 5.5)
+Date: 2026-10-05 · Branch `tomas` @ `30d827b` · Auditor: Claude (Opus 5.5) · Status updated 2026-10-06 @ `8aa4903`
 
 Scope: the whole repository: `src/fmugen` (CLI, config, inference, XML writer, runtime templates), the UniFMU integration, tests, docs, examples, the Docker demo, packaging and repo hygiene. The project is meant to be open source, so the audit focuses on **portability, installability, and how wide a range of models it can handle**.
 
@@ -174,7 +174,7 @@ These are the gaps found:
 - ✅ `stdout` / `print()` in user code can now be forwarded to the importer's log with `build --capture-output` (off by default; see §5.7).
 
 ### 5.5 modelDescription (`description.py`)
-- The GUID or instantiation token comes from `uuid4()` and `generationDateAndTime` from `now()`, so builds are not reproducible. Derive the GUID from a hash of `interface.json` plus the sources, and respect `SOURCE_DATE_EPOCH`. This also gives a stable GUID for unchanged models, which some importers cache on.
+- ✅ Builds are reproducible. The GUID / instantiation token is a UUID5 of a hash of every file in the FMU, so it stays the same for an unchanged model (which some importers cache on) and changes with any edit. `generationDateAndTime` uses `SOURCE_DATE_EPOCH` when set. Zip entries are sorted, with one fixed date and fixed modes. With `SOURCE_DATE_EPOCH` set, two builds are byte-identical [verified]. `--vendor` / `--compile` builds are only as reproducible as pip and PyInstaller/Nuitka.
 - FMI 2 `UnitDefinitions` only declare names. Adding `BaseUnit` (SI exponents) would let importers check and convert units. A small table for common units (K, Pa, W, m, s, kg, …) goes a long way.
 - `displayUnit`, `relativeQuantity`, `unbounded`, `reinit` and `<Annotations>` are not exposed. Allow arbitrary extra attributes per variable as an escape hatch.
 - FMI 3 terminals and icons (`terminalsAndIcons/`) and FMI 3 `<Annotations>` are not supported. Low priority.
@@ -256,18 +256,18 @@ Ordered by value to an open-source user base.
 9. ✅ **Reproducible builds** (done): the GUID / instantiationToken is a UUID5 of the FMU's file contents, `generationDateAndTime` honours `SOURCE_DATE_EPOCH`, and zip entries are sorted with fixed dates and modes.
 
 ### Tier 3: model coverage ("handle every model")
-10. ✅ NamedTuple field names and 0-d arrays (done). Still to do: nested dict and object outputs flattened with dotted names, pandas Series, pint quantities, anything with `__float__` (§4).
-11. **FMI 2 array expansion** (`x[3]` becomes `x_1..x_3`) so array models work for FMI 2 importers too.
-12. **Structured inputs**: build dataclass, pydantic or attrs arguments from flat FMU variables.
+10. ✅ **Richer outputs** (done): NamedTuple field names, 0-d arrays, nested dict and object outputs with dotted names, pandas Series / DataFrame / xarray, pint quantities, anything with `__float__` (§4).
+11. ✅ **FMI 2 array expansion** (done): fixed-size arrays become one scalar per element (`x[1]`, `x[1,2]`, structured naming) (§4).
+12. ✅ **Structured inputs** (done): `to = "arg:u.temp"` builds dataclass, pydantic or attrs arguments from flat FMU variables (§4).
 13. **Generator and async model support.**
-14. **`cwd` / data-file support** for models that open relative paths.
+14. ✅ **`cwd` / data-file support** (done): `[model] cwd`, data files in `sources` (§4).
 15. **Discard support**, so a model can reject a step.
 16. **Tolerance, start-time and stop-time time sources.**
 17. ✅ **Print capture** to the FMI log: `build --capture-output`.
-18. ✅ **Pickling fallbacks** (done: `cloudpickle`, and `save_state = [attributes]` chosen by `init`). Still possible: `dill`, saving module globals and global RNG states.
+18. ✅ **Pickling fallbacks** (done): `cloudpickle`, then `dill`, `save_state = [attributes]` chosen by `init`, module globals and global RNG states saved with the FMU state.
 19. **Model Exchange (FMI 2 and 3) for ODE models**: `[model] kind = "ode"` with `derivatives = "return"` and continuous states. UniFMU's Python backend does not support ME today, so this needs an upstream contribution or a different native wrapper. It is the most-requested FMI capability after co-simulation.
 20. **Internal solver helper**: `[model] integrate = "rk4" | "scipy:RK45"` turns an ODE right-hand side `f(t, x, u)` into a co-simulation FMU, with internal sub-steps and the tolerance passed in. It covers ODE models now without needing ME.
-21. **Wrappers for other model formats**: Jupyter notebooks (`.ipynb` entry via `nbformat`), scikit-learn, ONNX, PyTorch or joblib-pickled ML models (`[model] kind = "sklearn"` calls `predict` with inputs as features). This would be a large draw for data-driven and digital-twin users. Partly done: six published networks on PyTorch and ONNX Runtime work unmodified (factories, computed constants for downloaded weights, tensor conversion, tuple arguments). Still to do: bundling model weights into the FMU, and trying scikit-learn and ONNX models.
+21. **Wrappers for other model formats**: Jupyter notebooks (`.ipynb` entry via `nbformat`), scikit-learn, ONNX, PyTorch or joblib-pickled ML models (`[model] kind = "sklearn"` calls `predict` with inputs as features). This would be a large draw for data-driven and digital-twin users. Partly done: six published networks on PyTorch and ONNX Runtime work unmodified (factories, computed constants for downloaded weights, tensor conversion, tuple arguments). Also done: `--hf-weights` bundles Hugging Face weights into the FMU. Still to do: trying scikit-learn models and standalone ONNX files, and a `kind = "sklearn"` / notebook entry.
 
 ### Tier 4: developer experience
 22. **`fmugen check fmugen.toml`**: validate the config and, on request, run the model once (the old build probe) without packaging, with a readable table of the variables.
