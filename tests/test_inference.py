@@ -258,3 +258,52 @@ def test_table_results_become_named_outputs(tmp_path, kind):
     (tmp_path / "table.py").write_text(f"import pandas\ndef f(x: float = 1.0):\n    return {body}\n")
     data, _ = infer(tmp_path / "table.py")
     assert data["outputs"] == {"p": {}, "q": {}}
+
+
+OBJECT_ARGS = """
+import dataclasses
+from typing import Optional
+
+@dataclasses.dataclass
+class Weather:
+    T: float
+    windy: bool = False
+    label: object = None
+
+@dataclasses.dataclass
+class Plant:
+    gain: float = 2.0
+    lag: int = 3
+    notes: tuple = ("a",)
+
+def f(w: Weather, plant: Plant = Plant(), opt: Optional[Weather] = None):
+    return w.T * plant.gain
+"""
+
+
+def test_object_arguments_become_one_variable_per_field(tmp_path):
+    (tmp_path / "objs.py").write_text(OBJECT_ARGS)
+    data, comments = infer(f"{tmp_path / 'objs.py'}:f", starts={"w.T": 20.0})
+    inputs = data["inputs"]
+    assert inputs["w_T"] == {"start": 20.0, "to": "arg:w.T"}
+    assert inputs["w_windy"] == {"start": False, "to": "arg:w.windy"}
+    assert "w_label" not in inputs and "plant_notes" not in inputs   # not FMI values: defaults kept
+    assert inputs["plant_gain"] == {"start": 2.0, "to": "arg:plant.gain"}
+    assert inputs["plant_lag"] == {"start": 3, "to": "arg:plant.lag"}
+    assert "opt_T" not in inputs   # defaults to None: stays "not given"
+    assert data["outputs"] == {"y": {"from": "return"}}   # the probe call built both objects
+    _, comments = infer(f"{tmp_path / 'objs.py'}:f", probe=False)
+    assert "no default" in comments[("inputs", "w_T")]
+
+
+@pytest.mark.parametrize("library", ["pydantic", "attrs"])
+def test_pydantic_and_attrs_arguments(tmp_path, library):
+    pytest.importorskip(library)
+    source = {
+        "pydantic": "import pydantic\nclass In(pydantic.BaseModel):\n    T: float\n    n: int = 2\n",
+        "attrs": "import attrs\n@attrs.define\nclass In:\n    T: float\n    n: int = 2\n",
+    }[library]
+    (tmp_path / "m.py").write_text(source + "def f(u: In):\n    return u.T * u.n\n")
+    data, _ = infer(f"{tmp_path / 'm.py'}:f", starts={"u.T": 1.5})
+    assert data["inputs"] == {"u_T": {"start": 1.5, "to": "arg:u.T"}, "u_n": {"start": 2, "to": "arg:u.n"}}
+    assert data["outputs"] == {"y": {"from": "return"}}

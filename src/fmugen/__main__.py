@@ -268,7 +268,7 @@ def _parse_starts(items):
     starts = {}
     for item in items:
         name, sep, text = item.partition("=")
-        if not sep or not name.strip().isidentifier():
+        if not sep or not all(part.isidentifier() for part in name.strip().split(".")):   # NAME or ARG.FIELD
             raise InterfaceError(f"--start {item!r}: expected NAME=VALUE")
         text = text.strip()
         if text.startswith("call:"):   # a constant computed by a call, e.g. a downloaded file's path
@@ -297,10 +297,10 @@ def main(argv=None):
     i.add_argument("-o", "--output", help="config path (default: fmugen.toml next to the model; - prints it)")
     i.add_argument("--call", help="method run on each step, for classes (default: step/do_step/update/__call__)")
     i.add_argument("--force", action="store_true", help="overwrite an existing config")
-    i.add_argument("--fmi", type=int, choices=(2, 3), help="target FMI version; 3 also infers arrays and Binary")
+    i.add_argument("--fmi", type=int, choices=(2, 3), help="target FMI version; 3 also infers Binary, Float32 and resizable arrays")
     i.add_argument("--start", action="append", default=[], metavar="NAME=VALUE",
                    help="start/probe value for an argument (a Python literal), e.g. for arguments "
-                        "without a default; repeatable")
+                        "without a default, or ARG.FIELD=VALUE for a field of an object argument; repeatable")
     i.add_argument("--setup", action="append", default=[], metavar="CALL",
                    help="run before the model is used, e.g. 'psychrolib:SetUnitSystem(psychrolib.SI)' "
                         "or 'reset' (a method, after construction); repeatable")

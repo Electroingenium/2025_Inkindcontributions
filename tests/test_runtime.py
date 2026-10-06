@@ -447,3 +447,29 @@ def test_epoch_must_be_a_date_time(tmp_path, make_fmu):
         '[model]\nentry = "clock.py:hour"\n[time]\ntime = { epoch = "yesterday" }\n[outputs]\ny = { from = "return" }\n')
     with pytest.raises(InterfaceError, match="ISO 8601"):
         make_fmu(tmp_path / "fmugen.toml")
+
+
+def test_object_argument_fields_through_an_fmu(tmp_path, make_fmu, adapter):
+    (tmp_path / "objs.py").write_text(textwrap.dedent("""
+        import dataclasses
+
+        @dataclasses.dataclass(frozen=True)
+        class Plant:
+            gain: float = 2.0
+            name: str = "p1"
+            notes: tuple = ("kept",)
+
+        @dataclasses.dataclass
+        class Weather:
+            T: float
+
+        def f(w: Weather, plant: Plant = Plant()):
+            assert plant.notes == ("kept",)          # a field that isn't a variable keeps its default
+            return {"y": w.T * plant.gain}
+    """))
+    init(f"{tmp_path / 'objs.py'}:f", output=tmp_path / "fmugen.toml", starts={"w.T": 1.0})
+    fmu = adapter(make_fmu(tmp_path / "fmugen.toml"))
+    fmu.initialize()
+    assert fmu.set("w_T", 3.0) == OK and fmu.set("plant_gain", 4.0) == OK
+    assert fmu.fmi2DoStep(0.0, 1.0, False) == OK
+    assert fmu.get("y") == 12.0

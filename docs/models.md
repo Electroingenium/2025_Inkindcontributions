@@ -205,6 +205,18 @@ sample_time   = { python = "None" }
 heating_supply_system = { ref = "supply_system:HeatPumpAir" }   # an importable object
 ```
 
+### Objects built from their fields
+
+An argument that is a dataclass, a pydantic model or an attrs class (by its default, or by its annotation when it has no default) becomes one variable per field. For example, pythermalcomfort's `sports_heat_stress_risk(tdb, tr, rh, vr, sport: _SportsValues)`:
+
+```toml
+[inputs]
+sport_clo = { start = 0.37, to = "arg:sport.clo" }
+sport_met = { start = 7.5, to = "arg:sport.met" }
+```
+
+Before each call, fmugen builds `_SportsValues(clo=..., met=..., ...)`. With a default instance, it copies the default with these fields replaced, so fields that aren't FMI values keep their values. Give starts for fields without a default with `init --start sport.clo=0.37`. An argument that defaults to `None` stays a constant: `None` usually means "not given".
+
 ---
 
 ## Enumerations

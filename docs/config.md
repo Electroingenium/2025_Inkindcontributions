@@ -165,8 +165,9 @@ Without `type`, it comes from `start`: `bool` → Boolean, `int` → Integer, `s
 | | | `"pos:<N>"` | Positional argument number N (0, 1, … without gaps) of the function or step method, for positional-only arguments such as those of C extensions. |
 | | | `"attr:<name>"` | Attribute set on the object after construction and before every step (classes); clocked: before every tick. Dotted paths allowed. |
 | | | `"arg:<arg>[<i>]"`, `"arg:<arg>[<key>]"` | Item `i` of a tuple argument, or key `key` of a dict argument: the variables bound to the items of one argument are put together into a tuple (items 0, 1, … without gaps) or a dict, e.g. torchani's `forward((species, coordinates))`. `init` splits a tuple or dict `--start` value this way. Also `"init:<arg>[…]"`. |
+| | | `"arg:<arg>.<field>"` | Field `field` of an object argument (a dataclass, a pydantic model, an attrs class): the variables bound to its fields build it. If the argument has a default instance, that instance is copied with these fields replaced (`dataclasses.replace`, `model_copy`, `attrs.evolve`), so its other fields keep their values; otherwise the class from its annotation is called with the fields. `init` writes one variable per field, `<arg>_<field>`. Also `"init:<arg>.<field>"`. |
 | `from` | outputs, locals, calculated_parameters | `"return"` | The whole return value. |
-| | | `"return:<key>"` | `result[key]` for a dict, `result[int(key)]` for a tuple or list, else `result.key`. |
+| | | `"return:<key>"` | `result[key]` for a dict, `result[int(key)]` for a tuple or list, else `result.key`. A dotted path (`"return:zone.T"`) takes these steps in turn. |
 | | | `"attr:<name>"` | An attribute of the object after the step (classes). Dotted paths allowed. Calculated parameters must use this form. |
 | `next` | states (**required**) | same forms as `from` | Where the state's value for the next step comes from. |
 | `attr` | parameters, structural parameters | string or `false` | Tunable class parameters: the attribute written when the importer changes the value after initialization. Defaults to the parameter's `to` name. `false` means it is passed only to the constructor. |

@@ -19,6 +19,7 @@ import json
 import math
 import sys
 import types
+import typing
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -121,7 +122,8 @@ def infer_config(target, call=None, config_dir=None, fmi_version=None, starts=No
     unused = set(starts) - variables \
         - {n for table in ("constants", "call_constants") for n in data["model"].get(table, {})} \
         - {str(info.get("to", "")).partition(":")[2].partition("[")[0]
-           for sec in ("parameters", "inputs", "states") for info in data.get(sec, {}).values()}
+           for sec in ("parameters", "inputs", "states") for info in data.get(sec, {}).values()}         - {str(info["to"]).partition(":")[2] for sec in ("parameters", "inputs", "states")
+           for info in data.get(sec, {}).values() if "." in str(info.get("to", ""))}
     if unused:
         raise InterfaceError(f"--start names that are not arguments of the model: {sorted(unused)}")
     return data, comments
@@ -322,7 +324,7 @@ def _probe_class(cls, method_name, data, comments, arrays, call_starts, create, 
     try:
         _run_setup(data)
         build = factory or (getattr(cls, create) if create else cls)
-        obj = build(**_probe_constants(data, "constants"), **_probe_args(data, ("parameters",))[1])
+        obj = build(**_probe_constants(data, "constants"), **_probe_args(data, ("parameters",), build)[1])
         _run_setup(data, obj)
     except Exception as e:
         comments[("outputs", None)] = f"probe construction failed ({e!r}); outputs below are read from the code"
@@ -488,7 +490,7 @@ def _probe_call(fn, data, comments, constants_key="constants"):
     """Call fn with the probe inputs. If it fails and array inputs are plain lists, retry with them
     as numpy arrays, then torch tensors (when installed), and keep the first that works."""
     def call():
-        args, kwargs = _probe_args(data, ("inputs",))
+        args, kwargs = _probe_args(data, ("inputs",), fn)
         kwargs.update(_time_kwargs(data.get("time", {})))
         kwargs.update(_probe_constants(data, constants_key))
         return fn(*args, **kwargs)
@@ -634,6 +636,8 @@ def _arguments(fn, section, data, comments, skip_self=False, allow_time=True, co
             continue
         if p.name in starts and _split_items(p, starts[p.name], variables, section, comments, arrays):
             continue
+        if p.name not in starts and _split_fields(fn, p, variables, section, comments, starts, arrays):
+            continue
         if p.name in starts and not arrays and isinstance(starts[p.name], (list, tuple, bytes)):
             raise InterfaceError(f"--start {p.name}: arrays and bytes need --fmi 3 (FMI 2 has only scalar variables)")
         has_default = p.default is not p.empty or p.name in starts
@@ -734,6 +738,70 @@ def _split_items(p, value, variables, section, comments, arrays):
     return True
 
 
+def _object_fields(cls):
+    """[(field, type hint, default or empty)] of a dataclass, pydantic model or attrs class, else None."""
+    if not isinstance(cls, type):
+        return None
+    try:
+        hints = typing.get_type_hints(cls)
+    except Exception:
+        hints = {}
+    empty = inspect.Parameter.empty
+    if dataclasses.is_dataclass(cls):
+        missing = dataclasses.MISSING
+        return [(f.name, hints.get(f.name), empty if f.default is missing and f.default_factory is missing
+                 else (f.default if f.default is not missing else f.default_factory()))
+                for f in dataclasses.fields(cls) if f.init]
+    if hasattr(cls, "model_fields") and isinstance(cls.model_fields, dict):   # pydantic 2
+        return [(name, f.annotation, empty if f.is_required() else f.get_default(call_default_factory=True))
+                for name, f in cls.model_fields.items()]
+    if hasattr(cls, "__attrs_attrs__"):
+        import attrs
+        return [(a.name, hints.get(a.name, a.type), empty if a.default is attrs.NOTHING
+                 else (a.default.factory() if isinstance(a.default, attrs.Factory) else a.default))
+                for a in cls.__attrs_attrs__ if a.init]
+    return None
+
+
+def _split_fields(fn, p, variables, section, comments, starts, arrays):
+    """An argument that is a dataclass / pydantic / attrs object (by its default or its annotation)
+    becomes one variable per field, NAME_FIELD, bound with to = "arg:NAME.FIELD". Fields that aren't
+    FMI values keep the default's value; without a default, they must have their own default."""
+    if p.default is None:
+        return False   # None means "not given" to the model: it stays a constant, as for any argument
+    default = None if p.default is p.empty else p.default
+    try:
+        cls = typing.get_type_hints(fn).get(p.name)
+    except Exception:
+        cls = p.annotation if isinstance(p.annotation, type) else None
+    cls = type(default) if default is not None else static.unwrap_optional(cls)
+    fields = _object_fields(cls)
+    if not fields:
+        return False
+    found = {}
+    for field, hint, field_default in fields:
+        value = getattr(default, field) if default is not None else starts.get(f"{p.name}.{field}", field_default)
+        if value is p.empty:   # a required field without a start: a variable if its annotation is a number
+            if static.unwrap_optional(hint) not in (float, int, bool, str):
+                return False   # can't be built from FMI values
+            value = None
+        elif not isinstance(value, SCALARS) and not (arrays and _array_info(value)):
+            continue   # None or not an FMI value: the default's value (or the field's default) is kept
+        info = _array_info(value, with_start=True) if value is not None and not isinstance(value, SCALARS)             else _type_info(value, static.unwrap_optional(hint))
+        if isinstance(info.get("start"), int) and not isinstance(info["start"], bool)                 and static.unwrap_optional(hint) is float:
+            info["start"] = float(info["start"])
+        info["to"] = f"arg:{p.name}.{field}"
+        found[f"{p.name}_{field}"] = info
+        if value is None:
+            comments[(section, f"{p.name}_{field}")] = f"field {field!r} of {p.name} ({cls.__name__}); no default: check the start value"
+        else:
+            comments[(section, f"{p.name}_{field}")] = f"field {field!r} of {p.name} ({cls.__name__})"
+    if not found:
+        return False
+    variables.update(found)
+    return True
+
+
 def _type_info(value, annotation=inspect.Parameter.empty):
     annotation = static.unwrap_optional(annotation)
     if value is None:
@@ -760,7 +828,7 @@ def _constant(value):
     return None
 
 
-def _probe_args(data, sections):
+def _probe_args(data, sections, fn=None):
     """(positional args, keyword args) for a probe call from the inferred start values."""
     values = _probe_kwargs(data, sections)
     positional = sorted(
@@ -772,10 +840,11 @@ def _probe_args(data, sections):
     from fmugen.templates.fmugen_runtime import assemble_items
     targets = {name: str(info["to"]).partition(":")[2] for section in sections
                for name, info in data.get(section, {}).items()
-               if "[" in str(info.get("to", "")) and str(info["to"]).startswith(("arg:", "init:"))}
+               if any(c in str(info.get("to", "")).partition(":")[2] for c in "[.")
+               and str(info["to"]).startswith(("arg:", "init:"))}
     for name, target in targets.items():
         values[target] = values.pop(name)
-    return args, assemble_items(values)
+    return args, assemble_items(values, fn)
 
 
 def _probe_kwargs(data, sections):

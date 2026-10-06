@@ -10,8 +10,11 @@ FMI calls into the methods of `Engine`.
 """
 import ast
 import contextlib
+import copy
+import dataclasses
 import datetime
 import importlib
+import inspect
 import json
 import logging
 import math
@@ -20,6 +23,8 @@ import pickle
 import sys
 import tempfile
 import traceback
+import types
+import typing
 from collections.abc import Mapping
 from fractions import Fraction
 from pathlib import Path
@@ -599,17 +604,26 @@ class Engine:
         )
         return [value for _, value in bound]
 
+    def _bound_target(self, kind, clock):
+        """The function whose arguments `kind` ("init" or "arg") variables are bound to."""
+        if kind == "init":
+            create = self.interface["entry"].get("create")
+            return getattr(self.entry, create) if create else self.entry
+        return self._target(clock)
+
     def _bound(self, kind, clock=None):
         """{python name: value} of every variable bound to a constructor/call argument.
 
         Variables bound to items (to = "arg:pair[0]", "arg:params[key]") are put together into
         a tuple or dict argument.
         """
-        return assemble_items({
+        bound = {
             v["to"]["name"]: self._to_python(v, self.values[v["name"]])
             for v in self.variables
             if v.get("to", {}).get("kind") == kind and _clock_of(v) == clock
-        })
+        }
+        objects = any("." in name and "[" not in name for name in bound)
+        return assemble_items(bound, self._bound_target(kind, clock) if objects else None)
 
     def _apply_attributes(self, clock=None):
         """Write variables bound to attributes (to = "attr:...") or setter methods (to = "call:...")
@@ -768,7 +782,11 @@ def load_state(data):
 
 
 def split_item(name):
-    """'pair[0]' -> ('pair', 0); 'params[key]' -> ('params', 'key'); 'x' -> ('x', None)."""
+    """'pair[0]' -> ('pair', 0); 'params[key]' -> ('params', 'key'); 'u.temp' -> ('u', Field('temp'));
+    'x' -> ('x', None)."""
+    if "." in name and "[" not in name:
+        base, _, field = name.partition(".")
+        return base, Field(field)
     if not name.endswith("]") or "[" not in name:
         return name, None
     base, _, key = name[:-1].partition("[")
@@ -776,8 +794,14 @@ def split_item(name):
     return base, int(key) if key.isdigit() else key
 
 
-def assemble_items(bound):
-    """Combine {"pair[0]": a, "pair[1]": b, "x": c} into {"pair": (a, b), "x": c}."""
+class Field(str):
+    """The field name in to = "arg:u.temp": u is an object (dataclass, pydantic, attrs) built from its fields."""
+
+
+def assemble_items(bound, fn=None):
+    """Combine {"pair[0]": a, "pair[1]": b, "u.T": c, "x": d} into {"pair": (a, b), "u": U(T=c), "x": d}.
+    Objects are built from fn's signature: its default for that argument with the fields replaced,
+    else the class in its annotation called with the fields."""
     result, items = {}, {}
     for name, value in bound.items():
         base, key = split_item(name)
@@ -786,13 +810,59 @@ def assemble_items(bound):
         else:
             items.setdefault(base, {})[key] = value
     for base, parts in items.items():
-        if all(isinstance(k, int) for k in parts):
+        if all(isinstance(k, Field) for k in parts):
+            result[base] = build_object(fn, base, {str(k): v for k, v in parts.items()})
+        elif any(isinstance(k, Field) for k in parts):
+            raise ValueError(f"{base}: use either fields (arg:{base}.name) or items (arg:{base}[key]), not both")
+        elif all(isinstance(k, int) for k in parts):
             if sorted(parts) != list(range(len(parts))):
                 raise ValueError(f"{base}: tuple items must be numbered 0, 1, 2, ... without gaps")
             result[base] = tuple(parts[i] for i in range(len(parts)))
         else:
             result[base] = parts
     return result
+
+
+_OBJECT_ARGS = {}
+
+
+def object_argument(fn, name):
+    """(default instance or None, class or None) of fn's argument `name`, from its signature."""
+    key = (getattr(fn, "__func__", fn), name)
+    if key not in _OBJECT_ARGS:
+        target = fn.__init__ if isinstance(fn, type) else fn
+        param = inspect.signature(fn).parameters.get(name)
+        default = None if param is None or param.default is inspect.Parameter.empty else param.default
+        try:
+            cls = typing.get_type_hints(target).get(name)
+        except Exception:
+            cls = None
+        if typing.get_origin(cls) in (typing.Union, types.UnionType):   # Optional[Inputs]
+            rest = [a for a in typing.get_args(cls) if a is not type(None)]
+            cls = rest[0] if len(rest) == 1 else None
+        _OBJECT_ARGS[key] = default, cls if isinstance(cls, type) else None
+    return _OBJECT_ARGS[key]
+
+
+def build_object(fn, name, fields):
+    if fn is None:
+        raise ValueError(f"{name}: cannot tell which object to build from {sorted(fields)}")
+    default, cls = object_argument(fn, name)
+    if default is not None:
+        if dataclasses.is_dataclass(default):
+            return dataclasses.replace(default, **fields)
+        if hasattr(default, "model_copy"):          # pydantic 2
+            return default.model_copy(update=fields)
+        if hasattr(type(default), "__attrs_attrs__"):
+            import attrs
+            return attrs.evolve(default, **fields)
+        obj = copy.copy(default)
+        for field, value in fields.items():
+            setattr(obj, field, value)
+        return obj
+    if cls is None:
+        raise ValueError(f"{name}: no default and no class annotation to build it from {sorted(fields)}")
+    return cls(**fields)
 
 
 def resolve_constant(value):
