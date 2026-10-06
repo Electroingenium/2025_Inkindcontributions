@@ -66,8 +66,12 @@ def infer_config(target, call=None, config_dir=None, fmi_version=None, starts=No
     `probe`: also call the model once (setup, construction, one step); otherwise it is never called.
     `converts` ({argument: "module:function" or "numpy"}) sets how arguments are passed in.
     """
-    arrays = fmi_version == 3
+    arrays = True   # FMI 2 writes arrays as one scalar per element; see _fmi2_types
     starts = dict(starts or {})
+    if fmi_version != 3:
+        for name, value in starts.items():
+            if isinstance(value, bytes):
+                raise InterfaceError(f"--start {name}: bytes need --fmi 3 (FMI 2 has no Binary variables)")
     path, module_name, name = parse_target(target)
     try:
         module = load_module(path) if path else importlib.import_module(module_name)
@@ -108,6 +112,8 @@ def infer_config(target, call=None, config_dir=None, fmi_version=None, starts=No
         _infer_function(entry, data, comments, **options)
     if fmi_version == 3:
         _rename_reserved(data, comments, is_class="call" in data["model"] or inspect.isclass(entry))
+    else:
+        _fmi2_types(data, comments)
     variables = {n for sec in ("parameters", "inputs", "states") for n in data.get(sec, {})}
     unknown = set(converts or {}) - variables
     if unknown:
@@ -119,6 +125,30 @@ def infer_config(target, call=None, config_dir=None, fmi_version=None, starts=No
     if unused:
         raise InterfaceError(f"--start names that are not arguments of the model: {sorted(unused)}")
     return data, comments
+
+
+FMI2_TYPES = {"Float32": None, "Float64": None, **{t: "Integer" for t in (
+    "Int8", "UInt8", "Int16", "UInt16", "Int32", "UInt32", "Int64", "UInt64")}}
+
+
+def _fmi2_types(data, comments):
+    """FMI 2 has only Real, Integer, Boolean and String: map the FMI 3 types found, and leave out
+    what FMI 2 can't hold (bytes, arrays sized by structural parameters)."""
+    for section in ("parameters", "inputs", "states", "outputs", "locals"):
+        variables = data.get(section, {})
+        for name, info in list(variables.items()):
+            dims = info.get("dimensions", [])
+            if info.get("type") == "Binary" or any(isinstance(d, str) for d in dims):
+                del variables[name]
+                comments[(section, f"#{name}")] = f"{name}: bytes and resizable arrays need --fmi 3"
+            elif info.get("type") in FMI2_TYPES:
+                if FMI2_TYPES[info["type"]] is None:
+                    del info["type"]
+                else:
+                    info["type"] = FMI2_TYPES[info["type"]]
+        if section in data and not variables:
+            del data[section]
+    data.pop("structural_parameters", None)
 
 
 def _rename_reserved(data, comments, is_class):
@@ -362,7 +392,7 @@ def _add_returned(read, data, comments, is_class, arrays, probe, seen):
                                            "add them by hand, or run init --probe")
         return
     if read.array:
-        if arrays and not probe:   # FMI 3 needs the size; FMI 2 has no array variables at all
+        if arrays and not probe:   # the size can't be read from the code
             comments[("outputs", "#y")] = ('y = { from = "return", dimensions = [...] }  # an array: set its '
                                            'dimensions and uncomment, or run init --probe')
         return
@@ -649,8 +679,7 @@ def _arguments(fn, section, data, comments, skip_self=False, allow_time=True, co
             elif arrays and _array_info(value):
                 variables[name] = _array_info(value, with_start=True)
             else:
-                raise InterfaceError(f"--start {name}: {value!r} is not an FMI value"
-                                     + ("" if arrays else " (arrays need --fmi 3)"))
+                raise InterfaceError(f"--start {name}: {value!r} is not an FMI value")
             comments[(section, name)] = "start from --start (passed through **kwargs)"
     if time_args and allow_time:
         data["time"] = time_args
