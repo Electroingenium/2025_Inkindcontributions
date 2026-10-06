@@ -8,9 +8,9 @@ import sys
 from pathlib import Path
 
 try:
-    from fmugen_runtime import Engine, Status, fraction
+    from fmugen_runtime import Status, make_engine, fraction
 except ImportError:  # imported from the fmugen package (build probe, tests)
-    from fmugen.templates.fmugen_runtime import Engine, Status, fraction
+    from fmugen.templates.fmugen_runtime import Status, make_engine, fraction
 
 # Frozen with PyInstaller (fmugen build --compile), data files are in sys._MEIPASS;
 # with Nuitka, next to the compiled modules, as in a normal FMU.
@@ -35,7 +35,7 @@ class Model:
         self.instantiation_token = instantiation_token
         self.event_mode_used = event_mode_used
         self._log_callback = _log_callback # Removing this line will break logging
-        self.engine = Engine(resources_dir or RESOURCES_DIR, self.log, info_category="logEvents")
+        self.engine = make_engine(resources_dir or RESOURCES_DIR, self.log, info_category="logEvents")
         # Messages are always forwarded; UniFMU filters them by the importer's logging settings.
 
     # ================= doStep and updateDiscreteStates =================

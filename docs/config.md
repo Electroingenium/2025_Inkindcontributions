@@ -179,6 +179,21 @@ Constructor and call arguments named by `init:`, `arg:` and `[time]` must exist 
 
 ---
 
+## `[composite]`
+
+A config with `[composite]` instead of `[model]` builds one FMU from several fmugen configs. See [models.md](models.md#several-models-in-one-fmu).
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `parts` | table `{ name = "path" }` | required | The parts, in the order they run each step. A path is a `fmugen.toml` or a folder containing one, relative to this file. Two or more. |
+| `connections` | list of strings | `[]` | `"part.output -> part.input"`. |
+| `name`, `description`, `author` | string | the folder name, a list of the parts, empty | As in `[model]`. |
+| `fmi_version` | 2 or 3 | 2 | As in `[model]`. |
+
+`[experiment]` may also be given. Other top-level tables are not allowed in a composite config.
+
+---
+
 ## `[clocks.<name>]` (FMI 3)
 
 One table per clock; `<name>` is the FMU clock name. See [fmi.md](fmi.md#clocks-fmi-3) for how clocks behave at runtime.

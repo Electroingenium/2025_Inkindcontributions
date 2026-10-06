@@ -20,6 +20,7 @@ import tempfile
 import zipfile
 from pathlib import Path
 
+from fmugen.compose import PARTS_DIR, Composite, combine, is_composite
 from fmugen.config import MODEL_DIR, Config, InterfaceError, load_config, normalize
 from fmugen.description import write_model_description
 from fmugen.distribute import COMPILERS, bundle_hf_models, compile_fmu, compiled_launch_command, vendor as vendor_wheels
@@ -151,6 +152,40 @@ def _copy_sources(config, model_dir):
             shutil.copy2(src, dest)
 
 
+def _prepare(config, resources, version, model_name, author, capture_output):
+    """Copy a model's code into `resources`, import it and write its interface.json."""
+    resources.mkdir(parents=True, exist_ok=True)
+    _copy_sources(config, resources / MODEL_DIR)
+    module, sys_path = config.entry_import()
+    cwd = config.model_cwd()
+    if cwd:
+        (resources / cwd).mkdir(parents=True, exist_ok=True)
+    with isolated_imports(), contextlib.chdir(resources / cwd if cwd else Path.cwd()):
+        setup_sys_path({"sys_path": sys_path}, resources)
+        try:
+            entry_obj = getattr(importlib.import_module(module), config.entry_name)
+        except (ImportError, AttributeError) as e:
+            hint = " (install the model's requirements in the environment fmugen runs in)"                 if config.requirements else ""
+            raise InterfaceError(f"cannot import {config.model['entry']}: {e!r}{hint}") from e
+        interface = normalize(config, entry_obj, module, sys_path, model_name, author, version)
+        interface["capture_output"] = bool(capture_output)
+        for note in interface.pop("notes"):
+            print(f"note: {note}")
+    write_interface(interface, resources / "interface.json")
+    return interface
+
+
+def _flat(interface, resources):
+    """The parts' variables and constants together (for --hf-weights), for a composite FMU."""
+    if not interface.get("composite"):
+        return interface
+    parts = [json.loads((resources / p["dir"] / "interface.json").read_text()) for p in interface["parts"]]
+    return {"variables": [v for p in parts for v in p["variables"]],
+            "constants": {f"{i}.{k}": v for i, p in enumerate(parts) for k, v in p.get("constants", {}).items()},
+            "call_constants": {f"{i}.{k}": v for i, p in enumerate(parts)
+                               for k, v in p.get("call_constants", {}).items()}}
+
+
 def build(target, output, model_name=None, author=None, output_format="fmu", call=None, fmi_version=None,
           vendor=False, platforms=(), python_versions=(), compiler=None, capture_output=False, probe=False,
           hf_weights=None):
@@ -171,10 +206,20 @@ def build(target, output, model_name=None, author=None, output_format="fmu", cal
     if output_format == "folder" and output.is_file():
         raise FileExistsError(f"{output} is a file; cannot write a folder there")
 
-    config = resolve_target(target, call=call, fmi_version=fmi_version, probe=probe)
-    version = config.fmi_version(fmi_version)
+    composite_path = is_composite(target)
+    if composite_path:
+        if compiler:
+            raise InterfaceError("--compile does not support composite FMUs yet; use --vendor")
+        composite = Composite(composite_path)
+        version = fmi_version or composite.fmi_version
+        configs, base_dir = composite.parts, composite.path.parent
+    else:
+        config = resolve_target(target, call=call, fmi_version=fmi_version, probe=probe)
+        version = config.fmi_version(fmi_version)
+        configs, base_dir = {None: config}, config.base_dir
     if version not in ADAPTERS:
         raise InterfaceError(f"unknown FMI version {version!r}, expected one of {sorted(ADAPTERS)}")
+    requirements = list(dict.fromkeys(r for c in configs.values() for r in c.requirements))
 
     with tempfile.TemporaryDirectory() as tmp:
         fmu_dir = Path(tmp) / "fmu"
@@ -182,38 +227,30 @@ def build(target, output, model_name=None, author=None, output_format="fmu", cal
         resources = fmu_dir / "resources"
         shutil.copy2(ADAPTERS[version], resources / "model.py")
         shutil.copy2(RUNTIME, resources / "fmugen_runtime.py")
-        _copy_sources(config, resources / MODEL_DIR)
-
         (resources / "requirements.txt").write_text(
             "# UniFMU backend\n" + "\n".join(BACKEND_REQUIREMENTS) + "\n"
-            + ("# model requirements\n" + "\n".join(config.requirements) + "\n" if config.requirements else "")
+            + ("# model requirements\n" + "\n".join(requirements) + "\n" if requirements else "")
         )
-        module, sys_path = config.entry_import()
-
-        cwd = config.model_cwd()
-        if cwd:
-            (resources / cwd).mkdir(parents=True, exist_ok=True)
-        with isolated_imports(), contextlib.chdir(resources / cwd if cwd else Path.cwd()):
-            setup_sys_path({"sys_path": sys_path}, resources)
-            try:
-                entry_obj = getattr(importlib.import_module(module), config.entry_name)
-            except (ImportError, AttributeError) as e:
-                hint = " (install the model's requirements in the environment fmugen runs in)" \
-                    if config.requirements else ""
-                raise InterfaceError(f"cannot import {config.model['entry']}: {e!r}{hint}") from e
-            interface = normalize(config, entry_obj, module, sys_path, model_name, author, version)
-            interface["capture_output"] = bool(capture_output)
-            for note in interface.pop("notes"):
-                print(f"note: {note}")
+        if composite_path:
+            parts = list(configs)
+            interfaces = {
+                # output capture redirects the process's console once: the last part's engine does it
+                name: _prepare(cfg, resources / PARTS_DIR / name, version, None, None,
+                               capture_output and name == parts[-1])
+                for name, cfg in configs.items()
+            }
+            interface = combine(composite, interfaces, version, model_name, author)
+        else:
+            interface = _prepare(config, resources, version, model_name, author, capture_output)
         write_interface(interface, resources / "interface.json")
 
         write_model_description(interface, fmu_dir / "modelDescription.xml")
         if hf_weights if hf_weights is not None else (vendor or compiler):   # an FMU meant to run elsewhere
-            for repo_id in bundle_hf_models(interface, config.base_dir, resources):
+            for repo_id in bundle_hf_models(_flat(interface, resources), base_dir, resources):
                 print(f"note: bundled the Hugging Face model {repo_id!r}; the FMU loads it offline")
         if vendor:
             shutil.copy2(LAUNCHER, resources / "fmugen_launch.py")
-            vendor_wheels([*BACKEND_REQUIREMENTS, *config.requirements], resources / "wheels",
+            vendor_wheels([*BACKEND_REQUIREMENTS, *requirements], resources / "wheels",
                           platforms, python_versions)
         if compiler:
             compile_fmu(compiler, resources, interface, Path(tmp) / "compile")

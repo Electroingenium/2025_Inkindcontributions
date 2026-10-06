@@ -101,6 +101,7 @@ These runs were made while `init` always called the model, which is now `init --
 | `pythermalcomfort…sports_heat_stress_risk` | function with a dataclass argument (`sport: _SportsValues`) | `--start tdb=35.0 … --start sport.clo=0.37 --start sport.met=7.5 --start sport.vr=2.0 --start sport.duration=60 --probe` | ✓ | ✓ |
 | `pvlib.iotools:read_tmy3` | function opening a data file by a relative path (pvlib's own `723170TYA.CSV`) | `--start filename=proj/723170TYA.CSV --probe` (writes `sources` and `cwd`) | ✓ | ✓ |
 | `pythermalcomfort.models.jos3:JOS3` | class, `simulate(times, dtime)`, state in a module global (`PRE_SHIV`) | hand-written inputs (`to = "attr:tdb"`, …), `setup = ["options.update({'limit_dshiv/dt': True})"]`; `init` writes `globals` | ✓ | — |
+| `pvlib` irradiance → cell temperature → DC power | **composite FMU** of three functions (`get_total_irradiance`, `sapm_cell`, `pvwatts_dc`), each made with `init` | `[composite]` with 3 connections | ✓ | ✓ |
 
 Each `--start` takes one `NAME=VALUE`; the table groups several per row for brevity.
 
@@ -210,6 +211,7 @@ Passing `fmpy validate` and `fmpy simulate` shows the FMU is well-formed and run
   - **pythermalcomfort heat stress:** with the fields of `Sports.RUNNING` and `Sports.GOLF` as inputs (38 °C air, 40 °C radiant, 30 % RH), the risk level and the three thresholds are identical to calling `sports_heat_stress_risk` with those `Sports` values, in FMI 2 and 3.
   - **pvlib TMY3 file:** run from another folder, the station metadata (latitude 36.1, longitude −79.95, altitude 273 m, time zone −5) is identical to `read_tmy3` called directly, in FMI 2 and 3. The same FMU without `cwd` fails with `FileNotFoundError`.
   - **JOS3 with shivering rate limiting:** 10 °C, 40 one-minute steps: the core temperature (36.3886 °C) is identical to running JOS3 directly. After a rollback (save state at step 20, run 20 steps, restore, run them again), the repeated steps are identical only with `globals`. Without it, `PRE_SHIV` keeps its later value.
+  - **pvlib composite:** for three weather cases (dni 300–950 W/m², 5–38 °C), the plane-of-array irradiance, cell temperature and DC power are identical to calling the three pvlib functions in a chain, in FMI 2 and 3.
   - **pvlib solar position:** Madrid, 21 June 2026 06:00–10:00 UTC, hourly: zenith, azimuth, elevation and equation of time are identical to `get_solarposition` called directly, in FMI 2 and 3.
   - **highway-env:** with `reset(seed=0)`, the reward and the nested `info` values (`y4.speed`, `y4.crashed`, `y4.rewards.*`) are identical to stepping the environment directly, at every step.
   - **TCLab:** at 50 % heater power, T1 rises from 21 °C to 50 °C in 10 minutes, and T2 warms to 26 °C through thermal coupling.

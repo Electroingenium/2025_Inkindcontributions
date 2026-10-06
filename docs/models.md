@@ -561,6 +561,31 @@ Check afterwards:
 
 ---
 
+## Several models in one FMU
+
+To ship several models as one FMU, make a config for each with `fmugen init`, then a composite `fmugen.toml` that lists them and connects them:
+
+```toml
+[composite]
+name = "pv_string"
+parts = { sky = "sky", cell = "cell", dc = "dc" }      # folders or fmugen.toml files, run in this order
+connections = [
+    "sky.poa_global -> cell.poa_global",
+    "sky.poa_global -> dc.effective_irradiance",
+    "cell.y -> dc.temp_cell",
+]
+
+[experiment]          # optional, as in a single model
+```
+
+- **Variables:** the FMU's variables are the parts' variables, named `<part>.<name>` (`sky.dni`, `dc.y`), except the inputs fed by a connection.
+- **Each step:** the parts run in the order of `parts`. Before a part runs, each connected input gets the current value of its source: the value from this step if the source part ran before it, else from the previous step (for a feedback loop, list the parts in the order the values flow).
+- **Sources:** any output or local (`"tank.level -> valve.level"`). Targets are inputs. Sizes must match.
+- **State:** saving and restoring the FMU state covers every part; reset resets them all.
+- **Limits:** parts can't have clocks, structural parameters or `[events]`. All parts run in one Python process, so two local model files can't have the same module name. `--compile` doesn't support composites yet; `--vendor` does.
+
+---
+
 ## Limits
 
 - **Values:** FMI 2 has one value per variable, so fmugen writes an array as one scalar per element (`x[1]`, `x[2]`, …); its size must be fixed. FMI 3 has arrays, also resizable ones. In both versions, callables and objects can't be variables (use `constants`).
