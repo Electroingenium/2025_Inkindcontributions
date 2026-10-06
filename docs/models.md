@@ -529,5 +529,5 @@ Check afterwards:
 
 - **Values:** FMI 2 has one value per variable, so arrays have to be split into scalar variables. FMI 3 has arrays. In both versions, callables and objects can't be variables (use `constants`).
 - **Clocks:** each clocked variable belongs to exactly one clock.
-- **FMU state:** saving and restoring FMU state pickles your object. If it holds something that can't be pickled (an open file, a generator, a socket), the build detects it and turns `canGetAndSetFMUstate` off.
+- **FMU state:** saving and restoring FMU state pickles your object (`cloudpickle` if `pickle` can't). If it holds something that can't be pickled (an ONNX session, an open file, a socket, a generator), `init` writes `save_state` with the attributes that can be saved, or `false`, and a comment saying what was left out. Check it: an attribute left out must not change during a simulation.
 - **Derivatives:** the FMU can't provide them (directional derivatives, input/output derivatives). See [fmi.md](fmi.md#unsupported-functions).

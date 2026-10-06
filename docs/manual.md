@@ -193,7 +193,9 @@ On success it prints the FMU path, the FMI version, and the number of variables 
 Built C:\…\out\rc_building.fmu (FMI 2.0; 12 parameters, 3 calculatedParameters, 3 inputs, 4 locals, 5 outputs)
 ```
 
-It may also print `note:` lines, e.g. when FMU state saving was turned off because the model object can't be pickled, or when `[events]` is ignored for FMI 2.
+It may also print `note:` lines, e.g. when `[events]` is ignored for FMI 2.
+
+`build` imports the model to check the config against its real signatures, but **does not run it**: no object is constructed and no step is made, so models that need hardware, a network or a licence build anywhere. Only `fmugen init` (and `build model.py`, which infers the config the same way) calls the model.
 
 **Examples:**
 
@@ -240,7 +242,7 @@ In `fmugen.toml` the same forms appear as `[model] entry`, with file paths relat
 | Exit code | Meaning |
 |---|---|
 | `0` | Success. |
-| `2` | A usage or config error, printed as `fmugen: error: …`: an unknown key, a bad value, an import failure, a probe failure, or an existing config without `--force`. |
+| `2` | A usage or config error, printed as `fmugen: error: …`: an unknown key, a bad value, an import failure, an `init` probe failure, or an existing config without `--force`. |
 
 Each error names the section and key, e.g. `[inputs] x: unknown key(s) ['strat']`. See [Troubleshooting](#8-troubleshooting).
 
@@ -282,6 +284,7 @@ Each error names the section and key, e.g. `[inputs] x: unknown key(s) ['strat']
 | `call` | string / `false` | `"__call__"` if the class is callable | Classes: the method run on each step. A **function** entry with `call` set is a factory: it is called once, at the end of initialization, with the parameters (like a constructor), and `call` is the method run on each step on the object it returns, e.g. `entry = "silero_vad:load_silero_vad"`, `call = "__call__"`. `false`: nothing runs on a step and only clocks run code (needs `[clocks]`; also allowed for functions). |
 | `kind` | `"function"` | none | Treat a class as a function: construct it with the inputs on every step and read outputs from the new object (`return:<attr>`). |
 | `create` | classmethod name | none | Classes only: build the object with this classmethod instead of calling the class, e.g. `"from_pretrained"`. Parameters bound to `init:` (the default) become its arguments. For models loaded from saved weights or files. |
+| `save_state` | `true`, `false` or list of attribute names | `true` | How the FMU saves and restores its state (rollback). `true`: the whole model object is pickled (with `cloudpickle` when `pickle` can't, e.g. lambdas). `false`: not supported (`canGetAndSetFMUState="false"`), e.g. for hardware. A list such as `["_state", "_context"]`: only those attributes are saved and put back on restore; the rest of the object (an ONNX session, a device handle) is kept as it is. `fmugen init` sets it by trying to pickle the object. |
 | `setup` | list | `[]` | Calls run each time the FMU initializes, before the model is used. See [setup syntax](#value-syntax). |
 | `name` | string | the entry's name | `modelName`. `build --name` overrides it. |
 | `description` | string | first docstring line of the entry, else of its module | FMU description. |
@@ -314,7 +317,7 @@ All keys are optional.
 |---|---|---|
 | `start_time` | number | `<DefaultExperiment startTime>`; also the FMU time until the importer sets one. |
 | `stop_time` | number | `<DefaultExperiment stopTime>`. |
-| `step_size` | number | `<DefaultExperiment stepSize>`. Also used for the initialization call and the build probe (default `1.0`). |
+| `step_size` | number | `<DefaultExperiment stepSize>`. Also used for the initialization call. |
 | `tolerance` | number | `<DefaultExperiment tolerance>`. |
 | `fixed_step` | bool, default `false` | The model only works with `step_size`: declares `canHandleVariableCommunicationStepSize="false"` and rejects any other step size. Requires `step_size`. |
 
@@ -491,8 +494,9 @@ String-form arguments are Python literals or dotted names of importable objects,
 - `pos:` indices have gaps, a state has no `next`, or a clocked input's clock has no `call`;
 - `fixed_step` is set without `step_size`, or `call = false` is set without clocks;
 - it defines no variables at all;
-- an FMI 3-only feature is used in an FMI 2 build;
-- the build probe (one real initialization and step) fails.
+- an FMI 3-only feature is used in an FMI 2 build.
+
+The model itself is not run: errors in the model show up when the FMU runs, or earlier in `fmugen init`.
 
 ---
 
@@ -597,7 +601,7 @@ This config is illustrative: `plant.py` is not part of the repository. Every key
 | Message | Cause | Fix |
 |---|---|---|
 | `cannot import …: No module named …` | The model's package isn't in the environment running fmugen. | `pip install <pkg>` in that environment. |
-| `probe … failed:` followed by a traceback | The model raised an error at the start values (division by zero, `log(0)`, out of range…). | Give realistic `start` values, or `init --start`. |
+| `probe call failed (…)` in the config written by `init` | The model raised an error at the start values (division by zero, `log(0)`, out of range…). | Rerun `init` with realistic `--start` values. |
 | `… must be called first` / `has not been defined` (raised by the model) | The library needs setup. | `[model] setup` / `init --setup`. |
 | `--start NAME: arrays and bytes need --fmi 3` | An array or Binary value in an FMI 2 build. | Use `--fmi 3`. |
 | `--start names that are not arguments of the model` | A typo, or the argument isn't in the inspected signature. | Check the names; for C extensions, write the config by hand. |
@@ -606,7 +610,7 @@ This config is illustrative: `plant.py` is not part of the repository. Every key
 | `cannot inspect the signature of …` (comment in the generated config) | A C extension without signature information. | Hand-written variables with `to = "pos:N"`. |
 | `unknown key(s) [...]` | A typo in a key. | The message lists the allowed keys. |
 | `duplicate variable or clock names` | The same name in two sections, or a variable named like a clock. | Rename one; bind it with `to`/`from`. |
-| `note: the model object cannot be pickled …` | The object holds a file, socket or generator. | Fine for most uses; FMU state saving and restoring is disabled. |
+| `save_state = false` or `save_state = [...]` written by `init`, with a comment | The object holds something that can't be pickled: an ONNX session, a file, a socket, a generator. | Fine for most uses. With a list, check that the attributes named as not saved don't change during a simulation (a session or device handle doesn't; a generator does): if they do, set `save_state = false`. |
 | The FMU fails at runtime with `ModuleNotFoundError` | The environment the FMU was built in has changed or was deleted. | Reinstall the package there, or rebuild the FMU from the environment that has it. |
 | The importer hangs; the console shows `panicked at ... zeromq-0.4.1/src/rep.rs:168:40: not yet implemented` | The model printed more than about 4 KB (warnings, progress bars); UniFMU 0.14 crashes on that. | Rebuild with `--capture-output`. |
 | The simulation hangs or the importer reports an unknown command | The importer called an FMI function the UniFMU backend lacks. | See [fmi.md](fmi.md#unsupported-functions). |

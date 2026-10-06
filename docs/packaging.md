@@ -64,10 +64,9 @@ fmugen build MODEL -o OUTPUT [options]
 2. Runs `unifmu generate python <tmp> fmi2` (or `fmi3`) to get the UniFMU boilerplate for the FMI version. Replaces `resources/model.py` with fmugen's adapter for that version (`src/fmugen/templates/model_fmi2.py` or `model_fmi3.py`), and adds the shared engine `resources/fmugen_runtime.py`.
 3. Copies the entry file and `sources` into `resources/fmugen_model/`, keeping their paths. Writes `resources/requirements.txt`: the backend's packages and `[model] requirements`.
 4. Imports the entry from the copied files, checks the config against it (argument names, function vs class), and writes `resources/interface.json`.
-5. **Probe:** runs the packaged model once through the real adapter: setup, initialization, one tick of every input clock (FMI 3), one `doStep`, then save and restore state. A model that fails here fails the build, with the model's error message. Whether the state could be saved decides `canGetAndSetFMUstate`.
-6. Writes `modelDescription.xml` and `launch.toml`, then zips the result (or copies the folder).
+5. Writes `modelDescription.xml` and `launch.toml`, then zips the result (or copies the folder).
 
-The probe runs the model in the Python running fmugen, the same one the FMU will use.
+`build` imports the model but **never runs it**: no object is constructed, no setup call or step is made. Models that need hardware (TCLab), a network or a licence server build anywhere. `canGetAndSetFMUState` comes from `[model] save_state`, which `fmugen init` sets when it makes its probe call. (`fmugen build model.py`, without a `fmugen.toml`, infers the config like `init`, and so does call the model.)
 
 ---
 
@@ -210,7 +209,7 @@ In the GUI, open the `.fmu`, set start values, press play, and tick outputs to p
 | `src/fmugen/description.py` | `modelDescription.xml` writers (FMI 2 and FMI 3) |
 | `src/fmugen/templates/fmugen_runtime.py` | The engine copied into every FMU: runs the user's code, values, clocks, state |
 | `src/fmugen/templates/model_fmi2.py`, `model_fmi3.py` | The adapters copied into the FMU as `resources/model.py`: FMI calls → engine |
-| `src/fmugen/__main__.py` | CLI, packaging, build probe, UniFMU version check |
+| `src/fmugen/__main__.py` | CLI, packaging, UniFMU version check |
 | `src/fmugen/distribute.py` | `--vendor` and `--compile` |
 | `src/fmugen/templates/fmugen_launch.py` | The launcher of vendored FMUs: offline install into a cached environment |
 | `examples/` | Example models with their `fmugen.toml` |
