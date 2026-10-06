@@ -48,13 +48,16 @@ until kubectl --kubeconfig "$L" get node "$REMOTE" >/dev/null 2>&1; do sleep 2; 
 kubectl --kubeconfig "$L" wait --for=condition=Ready "node/$REMOTE" --timeout 180s
 
 echo "==> Deploying the stack in $LOCAL"
-kubectl --kubeconfig "$L" apply -k "$REPO/docker/k8s"
-kubectl --kubeconfig "$L" -n fmu-sim set image deploy/opcua-server deploy/streamlit-ui "*=$IMAGE"
+# Apply the manifests with $IMAGE in place of the image kustomization.yaml names
+kubectl kustomize "$REPO/docker/k8s" | sed "s#image: fmugen-sim:latest#image: $IMAGE#" \
+  | kubectl --kubeconfig "$L" apply -f -
 
 echo "==> Offloading namespace fmu-sim"
 liqoctl offload namespace fmu-sim --kubeconfig "$L" \
   --namespace-mapping-strategy EnforceSameName --pod-offloading-strategy LocalAndRemote
 
+# Pick up a rebuilt image that kept its tag
+kubectl --kubeconfig "$L" -n fmu-sim rollout restart deploy/opcua-server deploy/streamlit-ui
 kubectl --kubeconfig "$L" -n fmu-sim rollout status deploy/opcua-server deploy/streamlit-ui --timeout 180s
 kubectl --kubeconfig "$L" get nodes
 
