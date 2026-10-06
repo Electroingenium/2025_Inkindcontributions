@@ -10,6 +10,7 @@ FMI calls into the methods of `Engine`.
 """
 import ast
 import contextlib
+import datetime
 import importlib
 import json
 import logging
@@ -618,9 +619,12 @@ class Engine:
         else:
             kwargs = self._bound("arg", clock=clock)
         sources = {"time": time, "step_size": step_size, "end_time": time + step_size}
+        epochs = self.interface.get("time_epochs", {})
         for arg, source in self.interface.get("time_args", {}).items():
             if clock is None or arg in self.clocks[clock].get("time_args", ()):
                 kwargs[arg] = sources[source]
+                if arg in epochs:   # a date-time: the epoch plus the FMU time in seconds
+                    kwargs[arg] = datetime.datetime.fromisoformat(epochs[arg]) + datetime.timedelta(seconds=kwargs[arg])
         self._apply_attributes(clock=clock)
         return self._target(clock)(*self._positional(clock), **kwargs)
 
@@ -827,8 +831,15 @@ def converter(var):
     return resolve_reference(var["convert"])
 
 
+def _labelled(obj):
+    return type(obj).__module__.split(".")[0] in ("pandas", "xarray") and hasattr(obj, "keys")
+
+
 def plain_number(value, unit=None):
-    """A pint quantity (anything with .magnitude and .units) as a number, in `unit` when given."""
+    """A pint quantity (anything with .magnitude and .units) as a number, in `unit` when given;
+    a one-value pandas/xarray column as its value."""
+    if type(value).__module__.split(".")[0] in ("pandas", "xarray") and getattr(value, "size", None) == 1:
+        value = value.item()
     if hasattr(value, "magnitude") and hasattr(value, "units"):
         return value.m_as(unit) if unit and hasattr(value, "m_as") else value.magnitude
     return value
@@ -838,6 +849,8 @@ def get_path(obj, path):
     """Follow a dotted path through attributes, mapping keys and sequence indexes: "state.T", "rewards.speed", "4.x"."""
     for part in path.split("."):
         if isinstance(obj, Mapping):
+            obj = obj[part]
+        elif _labelled(obj) and part in obj.keys():   # pandas Series/DataFrame, xarray Dataset
             obj = obj[part]
         elif part.isdigit() and isinstance(obj, (tuple, list)):
             obj = obj[int(part)]

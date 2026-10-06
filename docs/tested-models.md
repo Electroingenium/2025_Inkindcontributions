@@ -97,6 +97,7 @@ These runs were made while `init` always called the model, which is now `init --
 | `fluids.units:Reynolds` | function taking and returning pint quantities | hand-written: `convert = "pint"` and a `unit` on each input ([below](#what-was-checked)) | ✓ | ✓ |
 | `fluids.units:head_from_P` | as `Reynolds`, dimensional output | as `Reynolds`, output `unit = "cm"` | — | ✓ |
 | `highway_env…highway_env:HighwayEnv` | class, `step(action)`, nested `info` dict (`rewards.*`) | `--fmi 3 --call step --setup reset --start action=1 --probe`, then `setup = ["reset(seed=0)"]` | — | ✓ |
+| `pvlib.solarposition:get_solarposition` | function of a date-time returning a one-row DataFrame | `--start latitude=40.4 --start longitude=-3.7 --probe`, then `time = { source = "end_time", epoch = "…" }` | ✓ | ✓ |
 
 Each `--start` takes one `NAME=VALUE`; the table groups several per row for brevity.
 
@@ -202,6 +203,7 @@ Passing `fmpy validate` and `fmpy simulate` shows the FMU is well-formed and run
   | fluids.units `head_from_P` | P = 100 kPa, ρ = 1000 kg/m³, output in cm | 1019.7 cm | 10.197 m from `fluids.units` directly |
 
 - **Dynamic models over time:**
+  - **pvlib solar position:** Madrid, 21 June 2026 06:00–10:00 UTC, hourly: zenith, azimuth, elevation and equation of time are identical to `get_solarposition` called directly, in FMI 2 and 3.
   - **highway-env:** with `reset(seed=0)`, the reward and the nested `info` values (`y4.speed`, `y4.crashed`, `y4.rewards.*`) are identical to stepping the environment directly, at every step.
   - **TCLab:** at 50 % heater power, T1 rises from 21 °C to 50 °C in 10 minutes, and T2 warms to 26 °C through thermal coupling.
   - **Madgwick:** with `q` [fed back as a state](models.md#what-fmugen-init-infers), turning at 0.1 rad/s for 10 s gives q = [0.878, 0, 0, 0.478]. The analytic value is [0.878, 0, 0, 0.479].

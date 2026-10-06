@@ -88,6 +88,15 @@ Each key is an argument of the step function or method (or of a clock's `call` t
 dt = "step_size"
 ```
 
+For a model that takes a date-time (pvlib, pandas, weather data), write the entry as a table with an `epoch`: the argument then gets `epoch + t` seconds as a `datetime.datetime`. FMU time 0 is the epoch.
+
+```toml
+[time]
+time = { source = "end_time", epoch = "2026-06-21T06:00:00+00:00" }
+```
+
+`source` defaults to `"time"`. For a function of time with no state (a solar position, a weather lookup), use `"end_time"` so each output belongs to the time it is reported at.
+
 ---
 
 ## Variables

@@ -11,6 +11,7 @@ the runtime engine (templates/fmugen_runtime.py) and the XML writer (description
 The spec has the same shape for FMI 2 and FMI 3, except for the type names and the
 FMI 3-only parts (arrays, structural parameters, clocks, events).
 """
+import datetime
 import inspect
 import keyword
 import tomllib
@@ -279,11 +280,25 @@ def normalize(config, entry_obj, module_name, sys_path, model_name=None, author=
                 except (ValueError, SyntaxError) as e:
                     raise InterfaceError(f"[model] {table}.{name}: {e}") from e
 
-    time_args = config.data.get("time", {})
-    for arg, source in time_args.items():
+    time_args, time_epochs = {}, {}
+    for arg, source in config.data.get("time", {}).items():
+        if isinstance(source, dict):   # { source = "time", epoch = "2026-06-21T00:00:00+00:00" }: a datetime
+            unknown = set(source) - {"source", "epoch"}
+            if unknown:
+                raise InterfaceError(f"[time] {arg}: unknown keys {sorted(unknown)}")
+            if "epoch" in source:
+                try:
+                    datetime.datetime.fromisoformat(str(source["epoch"]))
+                except ValueError as e:
+                    raise InterfaceError(f"[time] {arg}: epoch {source['epoch']!r} is not an ISO 8601 date-time") from e
+                time_epochs[arg] = str(source["epoch"])
+            source = source.get("source", "time")
         if source not in TIME_SOURCES:
             raise InterfaceError(f"[time] {arg} = {source!r}: expected one of {TIME_SOURCES}")
+        if arg in time_epochs and source == "step_size":
+            raise InterfaceError(f"[time] {arg}: epoch applies to \"time\" and \"end_time\", not \"step_size\"")
         check_arg(call_sig, arg, f"[time] {arg}")
+        time_args[arg] = source
 
     clock_names = set(config.data.get("clocks", {}))
     structural = set(config.data.get("structural_parameters", {}))
@@ -380,6 +395,7 @@ def normalize(config, entry_obj, module_name, sys_path, model_name=None, author=
         "constants": constants,
         "call_constants": call_constants,
         "time_args": time_args,
+        "time_epochs": time_epochs,
         "experiment": experiment,
         "type_definitions": type_definitions,
         "variables": variables,
