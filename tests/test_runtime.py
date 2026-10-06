@@ -1,6 +1,7 @@
 """The generated adapter, driven through its FMI 2 methods without UniFMU."""
 import importlib.util
 import textwrap
+from pathlib import Path
 
 import pytest
 
@@ -473,3 +474,34 @@ def test_object_argument_fields_through_an_fmu(tmp_path, make_fmu, adapter):
     assert fmu.set("w_T", 3.0) == OK and fmu.set("plant_gain", 4.0) == OK
     assert fmu.fmi2DoStep(0.0, 1.0, False) == OK
     assert fmu.get("y") == 12.0
+
+
+def test_model_reads_data_files_by_relative_path(tmp_path, make_fmu, adapter, monkeypatch):
+    (tmp_path / "data").mkdir()
+    (tmp_path / "data" / "gain.txt").write_text("3.0")
+    (tmp_path / "scaled.py").write_text(textwrap.dedent("""
+        GAIN = float(open("data/gain.txt").read())        # read when imported
+
+        def scaled(x: float = 1.0):
+            with open("data/gain.txt") as f:               # and on every call
+                return {"y": x * float(f.read()), "g": GAIN}
+    """))
+    init(tmp_path / "scaled.py")
+    text = (tmp_path / "fmugen.toml").read_text()
+    assert 'sources = ["data/gain.txt"]' in text and 'cwd = "."' in text
+    fmu_dir = make_fmu(tmp_path / "fmugen.toml")
+    monkeypatch.chdir(tmp_path.parent)                      # the importer runs somewhere else
+    fmu = adapter(fmu_dir)
+    fmu.initialize()
+    assert fmu.set("x", 2.0) == OK
+    assert fmu.fmi2DoStep(0.0, 1.0, False) == OK
+    assert fmu.get("y", "g") == [6.0, 3.0]
+    assert Path.cwd() == tmp_path.parent                   # and gets its working directory back
+
+
+def test_cwd_must_be_a_folder_inside_the_project(tmp_path):
+    from fmugen.config import Config, InterfaceError
+    with pytest.raises(InterfaceError, match="not a folder"):
+        Config({"model": {"entry": "m.py:f", "cwd": "nope"}}, tmp_path)
+    with pytest.raises(InterfaceError, match="must be inside"):
+        Config({"model": {"entry": "m.py:f", "cwd": ".."}}, tmp_path)

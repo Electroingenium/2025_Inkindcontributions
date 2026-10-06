@@ -80,16 +80,19 @@ class Engine:
         self.experiment = self.interface.get("experiment", {})
 
         self.logging_on = True
-        self.module, self.entry = load_entry(self.interface, self.resources_dir)
-        entry = self.interface["entry"]
-        self.is_class = entry["kind"] == "class"
-        self.enums = {
-            name: resolve_reference(td["enum"])
-            for name, td in self.interface.get("type_definitions", {}).items() if td.get("enum")
-        }
-        self.constants = {k: resolve_constant(v) for k, v in self.interface.get("constants", {}).items()}
-        self.call_constants = {k: resolve_constant(v) for k, v in self.interface.get("call_constants", {}).items()}
-        self.converters = {v["name"]: converter(v) for v in self.variables if v.get("convert")}
+        cwd = self.interface.get("cwd")
+        self.cwd = self.resources_dir / cwd if cwd is not None else None
+        with self._in_model_dir():   # the model may read files when it is imported
+            self.module, self.entry = load_entry(self.interface, self.resources_dir)
+            self.enums = {
+                name: resolve_reference(td["enum"])
+                for name, td in self.interface.get("type_definitions", {}).items() if td.get("enum")
+            }
+            self.constants = {k: resolve_constant(v) for k, v in self.interface.get("constants", {}).items()}
+            self.call_constants = {k: resolve_constant(v)
+                                   for k, v in self.interface.get("call_constants", {}).items()}
+            self.converters = {v["name"]: converter(v) for v in self.variables if v.get("convert")}
+        self.is_class = self.interface["entry"]["kind"] == "class"
         self.reset()
         self._forward_output()   # e.g. warnings printed while the model was imported
 
@@ -512,13 +515,27 @@ class Engine:
 
     def run(self, what, fn):
         try:
-            with self._forward_logs():
+            with self._forward_logs(), self._in_model_dir():
                 fn()
         except Exception as e:
             self._forward_output()
             return self.error(f"{what} failed: {e!r}\n{traceback.format_exc()}")
         self._forward_output()
         return Status.ok
+
+    @contextlib.contextmanager
+    def _in_model_dir(self):
+        """With [model] cwd: run model code in that folder of the FMU, so relative paths such as
+        open("weather.csv") find the files copied with `sources`."""
+        if self.cwd is None:
+            yield
+            return
+        previous = os.getcwd()
+        os.chdir(self.cwd)
+        try:
+            yield
+        finally:
+            os.chdir(previous)
 
     def _forward_output(self):
         """Send what the model printed (stdout/stderr, also from C code) to the importer's log."""
