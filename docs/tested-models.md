@@ -118,7 +118,7 @@ Notes:
 
 - **No model code was changed.** What the configs needed is now part of fmugen; see the features listed at the top of this page.
 - **`--capture-output`** was needed whenever a model prints while loading (warnings, progress bars), which hangs UniFMU 0.14 otherwise ([manual](manual.md)).
-- **State save/restore** is disabled for the two ONNX Runtime models (Silero VAD, surfaces): an `InferenceSession` cannot be pickled. fmugen detects this when building and declares `canGetAndSetFMUState="false"`.
+- **State save/restore** for the two ONNX Runtime models: an `InferenceSession` can't be pickled. `init` now saves only the other attributes. For Silero VAD it writes `save_state = ["_state", "_context", "_last_sr", "_last_batch_size", "sample_rates"]`, leaving out the fixed `session`; a rollback through UniFMU (20 chunks, save, 10 chunks, restore, the same 10 again) gives identical probabilities. surfaces was not re-run after this change.
 - **Weights from Hugging Face** (Chronos, TTM, PPO) are downloaded on first use into the user's cache, not put inside the FMU.
 
 ### Chronos-Bolt

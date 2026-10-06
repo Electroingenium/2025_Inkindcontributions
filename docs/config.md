@@ -37,6 +37,7 @@ Unknown keys are rejected with an error, so typos don't go unnoticed. Keys marke
 | `requirements` | list of strings | `[]` | pip requirement specifiers the model needs at runtime. See [packaging.md](packaging.md#the-fmus-python-environment). |
 | `kind` | `"function"` | none | Treat a class as a function: construct it with the inputs on every step and read outputs from the new object (`return:<attr>`). For classes whose constructor does all the work. |
 | `create` | classmethod name | none | Classes only: build the object with this classmethod instead of calling the class, e.g. `"from_pretrained"`. Parameters bound to `init:` (the default) become its arguments. For models loaded from saved weights or files. |
+| `save_state` | `true`, `false` or list of attribute names | `true` | How the FMU saves and restores its state (rollback). `true`: the whole model object is pickled (with `cloudpickle` when `pickle` can't, e.g. lambdas). `false`: not supported (`canGetAndSetFMUState="false"`), e.g. for hardware. A list such as `["_state", "_context"]`: only those attributes are saved and put back on restore; the rest of the object (an ONNX session, a device handle) is kept as it is. `fmugen init` sets it by trying to pickle the object. |
 | `setup` | list | `[]` | Calls run when the FMU initializes, before the model is used. `"module:function"` or `"module:function(args)"` runs before the class is constructed (e.g. `"psychrolib:SetUnitSystem(psychrolib.SI)"`). A bare `"method"` or `"method(args)"` runs on the object right after construction (e.g. `"reset"`). Arguments are Python literals or dotted names of importable objects. The table form `{ call = "...", args = [...], kwargs = {...} }` takes the same values as `[model.constants]`. |
 | `init_call` | bool | `true` for functions with a step, `false` otherwise | Call the function or step method when leaving initialization mode, to compute the initial outputs. States are not advanced by this call. |
 | `terminate` | string | none | Classes only: a method called on `fmi2Terminate`/`fmi3Terminate` (for example `"close"`). |
@@ -66,7 +67,7 @@ All keys are optional.
 |---|---|---|
 | `start_time` | number | `DefaultExperiment startTime`; also the FMU's time before the importer sets one. |
 | `stop_time` | number | `DefaultExperiment stopTime`. |
-| `step_size` | number | `DefaultExperiment stepSize`. Also used for the initialization call and the build probe (default 1.0). |
+| `step_size` | number | `DefaultExperiment stepSize`. Also used for the initialization call. |
 | `tolerance` | number | `DefaultExperiment tolerance`. |
 | `fixed_step` | bool, default `false` | The model only works with `step_size`: writes `canHandleVariableCommunicationStepSize="false"`, and a `doStep` with any other step size returns an error. Requires `step_size`. |
 
@@ -202,7 +203,7 @@ One table per clock; `<name>` is the FMU clock name. See [fmi.md](fmi.md#clocks-
 | — | `guid` | `instantiationToken` |
 | `[experiment]` | `<DefaultExperiment>` | same |
 | `fixed_step` | `canHandleVariableCommunicationStepSize` | same |
-| build probe: can the model be pickled? | `canGetAndSetFMUstate`, `canSerializeFMUstate` | `canGetAndSetFMUState`, `canSerializeFMUState` |
+| `[model] save_state` is not `false` | `canGetAndSetFMUstate`, `canSerializeFMUstate` | `canGetAndSetFMUState`, `canSerializeFMUState` |
 | clocks or `[events]` | — | `hasEventMode="true"` |
 | each variable | `<ScalarVariable>` + `<Real>`/`<Integer>`/... child with start, unit, min, max, nominal, quantity | `<Float64>`/`<Int32>`/`<Binary>`/... element with the same attributes; String and Binary starts as `<Start value=…/>` |
 | `dimensions` | — | `<Dimension start=…/>` or `<Dimension valueReference=…/>` |
