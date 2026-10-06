@@ -58,3 +58,15 @@ def test_compiled_fmu_has_no_sources_and_simulates(tmp_path, compiler):
     assert resources == ["resources/launch.toml"]
     assert not any(n.endswith(".py") for n in names)
     assert _simulate_pid(fmu)[-1] != 0
+
+
+def test_hugging_face_model_ids_are_found(tmp_path):
+    from fmugen.distribute import hf_models
+    (tmp_path / "data").mkdir()
+    (tmp_path / "data" / "x.csv").write_text("1")
+    interface = {
+        "variables": [{"start": "amazon/chronos-bolt-tiny"}, {"start": "data/x.csv"}, {"start": "male"},
+                      {"start": 1.0}],
+        "constants": {"repo": {"python": "'sb3/ppo-CartPole-v1'"}, "n": {"python": "3"}},
+    }
+    assert hf_models(interface, tmp_path) == ["amazon/chronos-bolt-tiny", "sb3/ppo-CartPole-v1"]

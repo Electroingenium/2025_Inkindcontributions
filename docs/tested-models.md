@@ -134,7 +134,8 @@ Notes:
 - **No model code was changed.** What the configs needed is now part of fmugen; see the features listed at the top of this page.
 - **`--capture-output`** was needed whenever a model prints while loading (warnings, progress bars), which hangs UniFMU 0.14 otherwise ([manual](manual.md)).
 - **State save/restore** for the two ONNX Runtime models: an `InferenceSession` can't be pickled. `init` now saves only the other attributes. For Silero VAD it writes `save_state = ["_state", "_context", "_last_sr", "_last_batch_size", "sample_rates"]`, leaving out the fixed `session`; a rollback through UniFMU (20 chunks, save, 10 chunks, restore, the same 10 again) gives identical probabilities. surfaces was not re-run after this change.
-- **Weights from Hugging Face** (Chronos, TTM, PPO) are downloaded on first use into the user's cache, not put inside the FMU.
+- **Weights from Hugging Face** (Chronos, TTM, PPO) are downloaded on first use into the user's cache, unless the FMU is built with `--hf-weights` (automatic with `--vendor` / `--compile`), which puts them inside it. Checked offline, with an empty cache, for Chronos-Bolt and the PPO policy.
+- **Stochastic policies:** with `deterministic = false`, the PPO FMU samples its action from torch's global random generator. Saving and restoring the FMU state now also restores that generator: after a restore, 20 sampled actions repeat exactly (they didn't before).
 
 ### Chronos-Bolt
 
@@ -182,7 +183,7 @@ Checked with FMPy (`FMU3Slave`), feeding 24 hourly values of a daily temperature
 
 Limits:
 
-- The weights are downloaded from Hugging Face on first use and cached in the user's Hugging Face cache. They are not inside the FMU: an FMU built with `--vendor` or `--compile` still needs network access (or a filled cache) on the target the first time.
+- By default, the weights are downloaded from Hugging Face on first use and cached in the user's Hugging Face cache. Built with `--hf-weights` (automatic with `--vendor` / `--compile`), they are inside the FMU, which adds about 33 MB, and the FMU runs offline: checked with an empty Hugging Face cache and `HF_HUB_OFFLINE=1`.
 - `--vendor` and `--compile` were not tried with this model. PyTorch makes either one large (hundreds of MB).
 
 ---

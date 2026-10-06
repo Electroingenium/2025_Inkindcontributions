@@ -20,6 +20,7 @@ import logging
 import math
 import os
 import pickle
+import random
 import sys
 import tempfile
 import traceback
@@ -80,6 +81,9 @@ class Engine:
         self.experiment = self.interface.get("experiment", {})
 
         self.logging_on = True
+        hf_cache = self.resources_dir / "hf_cache"
+        if hf_cache.is_dir():   # Hugging Face models bundled by fmugen build: load them from the FMU, offline
+            os.environ.update(HF_HUB_CACHE=str(hf_cache), HF_HUB_OFFLINE="1", TRANSFORMERS_OFFLINE="1")
         cwd = self.interface.get("cwd")
         self.cwd = self.resources_dir / cwd if cwd is not None else None
         with self._in_model_dir():   # the model may read files when it is imported
@@ -484,7 +488,7 @@ class Engine:
             "values": self.values, "obj": obj, "time": self.time, "mode": self.mode,
             "clock_active": self.clock_active, "clock_interval": self.clock_interval,
             "clock_shift": self.clock_shift, "terminate_requested": self.terminate_requested,
-            "clock_last_tick": self.clock_last_tick, "globals": self._read_globals(),
+            "clock_last_tick": self.clock_last_tick, "globals": self._read_globals(), "rng": rng_states(),
         }
         try:
             return Status.ok, dump_state(state)
@@ -511,6 +515,7 @@ class Engine:
         self.terminate_requested = state.get("terminate_requested", False)
         self.clock_last_tick = dict(state.get("clock_last_tick", {}))
         self._write_globals(copy.deepcopy(state.get("globals", {})))
+        set_rng_states(state.get("rng", {}))
         return Status.ok
 
     def _read_globals(self):
@@ -777,6 +782,34 @@ def load_entry(interface, resources_dir):
     return module, getattr(module, entry["name"])
 
 
+def rng_states():
+    """States of the global random number generators the model may draw from (random, numpy,
+    torch), so a rolled-back step draws the same numbers again."""
+    states = {"random": random.getstate()}
+    numpy = sys.modules.get("numpy")
+    if numpy is not None:
+        states["numpy"] = numpy.random.get_state()
+    torch = sys.modules.get("torch")
+    if torch is not None and hasattr(torch, "get_rng_state"):
+        states["torch"] = torch.get_rng_state()
+        if torch.cuda.is_available() and torch.cuda.is_initialized():
+            states["torch.cuda"] = torch.cuda.get_rng_state_all()
+    return states
+
+
+def set_rng_states(states):
+    if "random" in states:
+        random.setstate(states["random"])
+    if "numpy" in states and "numpy" in sys.modules:
+        sys.modules["numpy"].random.set_state(states["numpy"])
+    torch = sys.modules.get("torch")
+    if torch is not None:
+        if "torch" in states:
+            torch.set_rng_state(states["torch"])
+        if "torch.cuda" in states:
+            torch.cuda.set_rng_state_all(states["torch.cuda"])
+
+
 def split_global(ref):
     """'package.module:NAME' -> (module, 'NAME') for [model] globals."""
     module_name, _, name = ref.partition(":")
@@ -802,21 +835,29 @@ def resolve_reference(ref):
 
 
 def dump_state(state):
-    """pickle, else cloudpickle (lambdas, local functions); the first byte says which."""
+    """pickle, else cloudpickle (lambdas, local functions), else dill (when installed); the first
+    byte says which."""
     try:
         return b"P" + pickle.dumps(state)
-    except Exception as first:
+    except Exception as e:
+        error = e
+    for prefix, name in ((b"C", "cloudpickle"), (b"D", "dill")):
         try:
-            import cloudpickle
+            return prefix + importlib.import_module(name).dumps(state)
         except ImportError:
-            raise first from None
-        return b"C" + cloudpickle.dumps(state)
+            continue
+        except Exception as e:
+            error = e
+    raise error
 
 
 def load_state(data):
     kind, payload = data[:1], data[1:]
     if kind == b"C":
         import cloudpickle   # noqa: F401  (its pickles load with pickle once it is importable)
+    elif kind == b"D":
+        import dill
+        return dill.loads(payload)
     elif kind != b"P":
         raise ValueError("not an FMU state saved by this FMU")
     return pickle.loads(payload)

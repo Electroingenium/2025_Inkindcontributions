@@ -22,7 +22,7 @@ from pathlib import Path
 
 from fmugen.config import MODEL_DIR, Config, InterfaceError, load_config, normalize
 from fmugen.description import write_model_description
-from fmugen.distribute import COMPILERS, compile_fmu, compiled_launch_command, vendor as vendor_wheels
+from fmugen.distribute import COMPILERS, bundle_hf_models, compile_fmu, compiled_launch_command, vendor as vendor_wheels
 from fmugen.interface import infer_config, parse_target, render_toml
 from fmugen.templates.fmugen_runtime import setup_sys_path
 
@@ -152,7 +152,8 @@ def _copy_sources(config, model_dir):
 
 
 def build(target, output, model_name=None, author=None, output_format="fmu", call=None, fmi_version=None,
-          vendor=False, platforms=(), python_versions=(), compiler=None, capture_output=False, probe=False):
+          vendor=False, platforms=(), python_versions=(), compiler=None, capture_output=False, probe=False,
+          hf_weights=None):
     """Build an FMU. `vendor` (with `platforms`/`python_versions`) or `compiler` ("pyinstaller"
     or "nuitka") make it run on other machines; see distribute.py. `capture_output` sends what
     the model prints to the importer's log instead of the console."""
@@ -207,6 +208,9 @@ def build(target, output, model_name=None, author=None, output_format="fmu", cal
         write_interface(interface, resources / "interface.json")
 
         write_model_description(interface, fmu_dir / "modelDescription.xml")
+        if hf_weights if hf_weights is not None else (vendor or compiler):   # an FMU meant to run elsewhere
+            for repo_id in bundle_hf_models(interface, config.base_dir, resources):
+                print(f"note: bundled the Hugging Face model {repo_id!r}; the FMU loads it offline")
         if vendor:
             shutil.copy2(LAUNCHER, resources / "fmugen_launch.py")
             vendor_wheels([*BACKEND_REQUIREMENTS, *config.requirements], resources / "wheels",
@@ -344,6 +348,10 @@ def main(argv=None):
                    help="freeze the model, its packages and Python into an executable: the FMU contains no "
                         "source code and needs no Python, but only runs on this OS")
     b.add_argument("--fmi", type=int, choices=(2, 3), help="FMI version (default: [model] fmi_version, else 2)")
+    b.add_argument("--hf-weights", action=argparse.BooleanOptionalAction, default=None,
+                   help="put the Hugging Face models the model loads (string parameters such as "
+                        "\"amazon/chronos-bolt-tiny\") into the FMU, which then loads them offline "
+                        "(default: on with --vendor and --compile)")
     b.add_argument("--capture-output", action="store_true",
                    help="send what the model prints (stdout/stderr) to the importer's log instead of the "
                         "console; use it when the model prints more than a few KB, which hangs UniFMU 0.14")
@@ -359,7 +367,8 @@ def main(argv=None):
             return
         output, interface = build(args.model, args.output, args.name, args.author,
                                   args.format, args.call, args.fmi, args.vendor, args.platform,
-                                  args.python_version, args.compile, args.capture_output, args.probe)
+                                  args.python_version, args.compile, args.capture_output, args.probe,
+                                  args.hf_weights)
     except (FileExistsError, InterfaceError) as e:
         parser.exit(2, f"fmugen: error: {e}\n")
 

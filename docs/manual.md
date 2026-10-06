@@ -181,7 +181,7 @@ Packages the model into an FMU. Before writing the FMU, it runs the packaged mod
 fmugen build MODEL -o OUTPUT [--fmi {2,3}] [--format {fmu,folder}]
                    [--name NAME] [--author AUTHOR] [--call METHOD]
                    [--vendor [--platform TAG ...] [--python-version X.Y ...] | --compile {pyinstaller,nuitka}]
-                   [--capture-output]
+                   [--capture-output] [--hf-weights | --no-hf-weights]
 ```
 
 | Option | Default | Description |
@@ -197,6 +197,7 @@ fmugen build MODEL -o OUTPUT [--fmi {2,3}] [--format {fmu,folder}]
 | `--platform TAG` | this machine | With `--vendor`: also vendor wheels for this platform, e.g. `win_amd64`, `manylinux2014_x86_64`, `macosx_11_0_arm64`. Repeatable. |
 | `--python-version X.Y` | this Python | With `--vendor`: vendor wheels for this Python version. Repeatable. |
 | `--compile {pyinstaller,nuitka}` | off | Freeze the model, its packages and Python into an executable (`resources/dist/main/`). The FMU contains no source code and needs no Python, but only runs on the OS it was built on. Needs `pip install fmugen[pyinstaller]` or `fmugen[nuitka]`. |
+| `--hf-weights` | on with `--vendor` / `--compile` | Put the Hugging Face models the model loads into the FMU, which then loads them offline. See [packaging.md](packaging.md#hugging-face-models---hf-weights). |
 | `--capture-output` | off | Send what the model prints (stdout and stderr, also from C code) to the importer's log, prefixed `[output]`, instead of the console. Use it for models that print more than a few KB (warnings, progress bars): UniFMU 0.14 crashes when the FMU's Python writes that much to the console, and the importer hangs. The importer may only show these messages with debug logging on. |
 
 On success it prints the FMU path, the FMI version, and the number of variables per causality (and clocks):

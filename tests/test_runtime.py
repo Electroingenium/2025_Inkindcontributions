@@ -551,3 +551,23 @@ def test_globals_must_exist(tmp_path, make_fmu):
         '[model]\nentry = "counter.py:tick"\nglobals = ["counter:NOPE"]\n[outputs]\ny = {}\n')
     with pytest.raises(InterfaceError, match="NOPE"):
         make_fmu(tmp_path / "fmugen.toml")
+
+
+def test_rollback_repeats_random_draws(tmp_path, make_fmu, adapter):
+    (tmp_path / "noisy.py").write_text(textwrap.dedent("""
+        import random
+        import numpy as np
+
+        def noisy(x: float = 0.0):
+            return {"a": x + random.random(), "b": x + float(np.random.normal())}
+    """))
+    init(tmp_path / "noisy.py")
+    fmu = adapter(make_fmu(tmp_path / "fmugen.toml"))
+    fmu.initialize()
+    _, state = fmu.fmi2SerializeFmuState()
+    assert fmu.fmi2DoStep(0.0, 1.0, False) == OK
+    first = fmu.get("a", "b")
+    assert fmu.fmi2DeserializeFmuState(state) == OK
+    assert fmu.fmi2DoStep(0.0, 1.0, False) == OK
+    assert fmu.get("a", "b") == first
+
