@@ -1,0 +1,40 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: opcua-server
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: opcua-server}
+  template:
+    metadata:
+      labels: {app: opcua-server}
+    spec:
+      # Stays in this cluster; with Liqo, only the runs are offloaded.
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - {key: liqo.io/type, operator: NotIn, values: [virtual-node]}
+      containers:
+        - name: opcua-server
+          image: fmugen-sim
+          imagePullPolicy: IfNotPresent
+          command: ["python", "opcua_server.py"]
+          ports:
+            - containerPort: 4840
+          readinessProbe:
+            tcpSocket: {port: 4840}
+---
+# Reflected by Liqo into the peered clusters, so offloaded runs reach it by this name.
+apiVersion: v1
+kind: Service
+metadata:
+  name: opcua-server
+spec:
+  selector: {app: opcua-server}
+  ports:
+    - name: opcua
+      port: 4840
+      targetPort: 4840
