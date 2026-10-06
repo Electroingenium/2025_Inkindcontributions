@@ -115,7 +115,7 @@ def test_no_source_says_so(tmp_path):
     assert "no Python source" in comments[("outputs", None)] and "--probe" in comments[("outputs", None)]
 
 
-def test_arrays_only_mentioned_for_fmi3(tmp_path):
+def test_arrays_of_unknown_size_are_left_to_fill_in(tmp_path):
     model = write(tmp_path, '''
         import numpy as np
 
@@ -134,9 +134,8 @@ def test_arrays_only_mentioned_for_fmi3(tmp_path):
     assert 'y = { from = "return", dimensions = [...] }' in text3 and "history = { dimensions = [...] }" in text3
     assert data3["locals"] == {"gain": {}}
 
-    data2, comments2 = infer(model)
-    text2 = render_toml(data2, comments2)
-    assert "dimensions" not in text2 and "history" not in text2 and data2["locals"] == {"gain": {}}
+    data2, comments2 = infer(model)                       # FMI 2 too: one scalar per element once sized
+    assert render_toml(data2, comments2).count("dimensions = [...]") == 2 and data2["locals"] == {"gain": {}}
 
 
 def test_factory_without_a_return_annotation(tmp_path):

@@ -381,7 +381,7 @@ These keys apply to every section, unless marked.
 | `items` | list of strings | none | Enumeration items, numbered from 1; the model receives the integer. |
 | `enum` | string | none | `"module:EnumClass"`; the model receives and returns enum members. |
 | `dimensions` **FMI 3** | list | none | Array: sizes (`[3]`) and/or structural parameter names (`["n", 2]`). |
-| `numpy` **FMI 3** | bool | `false` | Arrays passed into the model are `numpy.ndarray` instead of nested lists. |
+| `numpy` | bool | `false` | Arrays passed into the model are `numpy.ndarray` instead of nested lists. |
 | `convert` | `"module:function"` | none | Values passed to the model (parameters, inputs, states): call this function on the value first, e.g. `"torch:tensor"`, `"jax.numpy:asarray"`. `init` sets it from `torch.Tensor`, JAX and TensorFlow annotations. |
 | `clocks` **FMI 3** | list of one clock name | none | Inputs, outputs and locals: the variable belongs to that clock. |
 | `to` | binding | see table above | Where an input-like value goes. See [Bindings](#bindings-to-from-next). |

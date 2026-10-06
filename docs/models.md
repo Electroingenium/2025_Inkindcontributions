@@ -355,7 +355,7 @@ rho = { from = "return:rho", unit = "kg/m3" }
 
 ## Arrays and structural parameters (FMI 3)
 
-FMI 3 variables can be arrays. Give a variable `dimensions`, and your code exchanges lists or numpy arrays with the FMU:
+Give a variable `dimensions`, and your code exchanges lists or numpy arrays with the FMU. In FMI 3 the FMU has real array variables. FMI 2 has none, so the FMU gets one scalar per element (`q[1]` … `q[4]`), while the model still gets the whole array. Structural parameters (resizable arrays) need FMI 3.
 
 ```python
 class KalmanFilter:                       # filterpy, unchanged
@@ -490,7 +490,7 @@ Reading the code is enough for most plain-Python models. On the published models
 
 | Option | Use |
 |---|---|
-| `--start NAME=VALUE` | A realistic start value (a Python literal; a list for an FMI 3 array), also used by `--probe`. Repeatable. |
+| `--start NAME=VALUE` | A realistic start value (a Python literal; a list for an array), also used by `--probe`. Repeatable. |
 | `--setup CALL` | A [setup call](#libraries-that-need-setup-first), written to the config; with `--probe`, also run before the probe. Repeatable. |
 | `--kind function` | For [constructors that do the work](#constructors-that-do-the-work). |
 | `--probe` | Call the model once to find what the code doesn't show. |
@@ -535,7 +535,7 @@ Check afterwards:
 
 ## Limits
 
-- **Values:** FMI 2 has one value per variable, so arrays have to be split into scalar variables. FMI 3 has arrays. In both versions, callables and objects can't be variables (use `constants`).
+- **Values:** FMI 2 has one value per variable, so fmugen writes an array as one scalar per element (`x[1]`, `x[2]`, …); its size must be fixed. FMI 3 has arrays, also resizable ones. In both versions, callables and objects can't be variables (use `constants`).
 - **Clocks:** each clocked variable belongs to exactly one clock.
 - **FMU state:** saving and restoring FMU state pickles your object (`cloudpickle` if `pickle` can't). If it holds something that can't be pickled (an ONNX session, an open file, a socket, a generator), `init` writes `save_state` with the attributes that can be saved, or `false`, and a comment saying what was left out. Check it: an attribute left out must not change during a simulation.
 - **Derivatives:** the FMU can't provide them (directional derivatives, input/output derivatives). See [fmi.md](fmi.md#unsupported-functions).

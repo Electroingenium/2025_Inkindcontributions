@@ -145,8 +145,8 @@ Without `type`, it comes from `start`: `bool` → Boolean, `int` → Integer, `s
 | `initial` | string | see below | Overrides the FMI `initial` attribute where FMI allows a choice. |
 | `items` | list of strings | none | Enumeration items, numbered from 1. The model receives the integer. |
 | `enum` | string | none | `"module:EnumClass"`: items are the enum's members, and the model receives and returns members. |
-| `dimensions` **FMI 3** | list | none | Makes the variable an array. Each entry is a size (`3`) or the name of a structural parameter (`"n"`). |
-| `numpy` **FMI 3** | bool | `false` | Arrays only: pass the value to the model as a `numpy.ndarray` instead of nested lists. Values coming back are accepted either way. |
+| `dimensions` | list | none | Makes the variable an array. Each entry is a size (`3`) or, in FMI 3, the name of a structural parameter (`"n"`). FMI 2 has no arrays: the FMU has one scalar per element, `x[1]`, `x[2]`, … (`x[1,2]` for a matrix), and the model still gets the whole array. |
+| `numpy` | bool | `false` | Arrays only: pass the value to the model as a `numpy.ndarray` instead of nested lists. Values coming back are accepted either way. |
 | `convert` | `"module:function"` or `"pint"` | none | Values passed to the model (parameters, inputs, states): call this function on the value first, e.g. `"torch:tensor"`, `"jax.numpy:asarray"`. `init` sets it from `torch.Tensor`, JAX and TensorFlow annotations. `"pint"` passes a pint quantity in the variable's `unit` (from pint's application registry), for models such as `fluids.units` that only accept quantities. |
 | `clocks` **FMI 3** | list with one clock name | none | Inputs, outputs and locals: the variable belongs to that clock (see [`[clocks.<name>]`](#clocksname-fmi-3)). |
 

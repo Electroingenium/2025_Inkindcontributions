@@ -126,7 +126,7 @@ A fmugen FMI 3 FMU always has the independent variable `time` (`Float64`, `causa
 
 ### Structural parameters and arrays
 
-Variables with `dimensions` are FMI 3 arrays. A dimension can be a fixed size or a **structural parameter**: a `UInt64` (by default) `structuralParameter`, typically a constructor argument such as `n_nodes`. Structural parameters can only be set in configuration mode, or in reconfiguration mode if `tunable`. See [models.md](models.md#arrays-and-structural-parameters-fmi-3).
+Variables with `dimensions` are FMI 3 arrays (in FMI 2, one scalar per element: `x[1]`, `x[2]`, …). A dimension can be a fixed size or a **structural parameter**: a `UInt64` (by default) `structuralParameter`, typically a constructor argument such as `n_nodes`. Structural parameters can only be set in configuration mode, or in reconfiguration mode if `tunable`. See [models.md](models.md#arrays-and-structural-parameters-fmi-3).
 
 ---
 

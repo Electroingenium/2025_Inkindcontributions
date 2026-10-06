@@ -5,7 +5,7 @@ import textwrap
 from ctypes import c_double, c_int, c_uint64
 
 import pytest
-from fmpy import read_model_description
+from fmpy import read_model_description, simulate_fmu
 from fmpy.fmi3 import FMU3Slave, fmi3ValueReference
 from fmpy.validation import validate_fmu
 
@@ -192,14 +192,33 @@ def test_output_clock_and_terminate(tmp_path, make_fmu, adapter):
     assert fmu.fmi3DoStep(4.0, 2.0, False)[2] is True                 # level 6 = 2 * capacity
 
 
-def test_fmi3_only_features_are_rejected_for_fmi2(tmp_path):
-    write(tmp_path, "def f(v=(1.0, 2.0)):\n    return {'s': sum(v)}\n", '''
+def test_fmi2_arrays_are_one_scalar_per_element(tmp_path):
+    write(tmp_path, "def f(v=(1.0, 2.0)):\n    return {'s': sum(v), 'w': [x * 10 for x in v]}\n", '''
         [model]
         entry = "m.py:f"
         [inputs]
         v = { dimensions = [2], start = [1.0, 2.0] }
         [outputs]
         s = {}
+        w = { dimensions = [2] }
+    ''')
+    build(tmp_path, tmp_path / "out.fmu")
+    assert validate_fmu(str(tmp_path / "out.fmu")) == []
+    md = read_model_description(str(tmp_path / "out.fmu"))
+    assert md.variableNamingConvention == "structured"
+    assert [v.name for v in md.modelVariables] == ["v[1]", "v[2]", "s", "w[1]", "w[2]"]
+    result = simulate_fmu(str(tmp_path / "out.fmu"), stop_time=1.0, output_interval=1.0, start_values={"v[2]": 5.0})
+    assert list(result[-1])[1:] == [6.0, 10.0, 50.0]
+
+
+def test_fmi3_only_features_are_rejected_for_fmi2(tmp_path):
+    write(tmp_path, "def f(b=b'x'):\n    return {'n': len(b)}\n", '''
+        [model]
+        entry = "m.py:f"
+        [inputs]
+        b = { type = "Binary", start = "78" }
+        [outputs]
+        n = {}
     ''')
     with pytest.raises(InterfaceError, match="requires FMI 3"):
         build(tmp_path, tmp_path / "out.fmu")
