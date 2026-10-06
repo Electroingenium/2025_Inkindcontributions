@@ -411,3 +411,39 @@ def test_nested_outputs_through_an_fmu(tmp_path, make_fmu, adapter):
     assert fmu.set("x", 3.0) == OK
     assert fmu.fmi2DoStep(0.0, 1.0, False) == OK
     assert fmu.get("zone.T", "zone.air.rh") == [6.0, 0.5]
+
+
+def test_table_values_are_read_by_label():
+    pandas = pytest.importorskip("pandas")
+    from fmugen.templates.fmugen_runtime import coerce, pick, plain_number
+    frame = pandas.DataFrame({"zenith": [33.3], "azimuth": [120.0]})
+    assert coerce("Real", plain_number(pick(frame, "zenith"))) == 33.3
+    assert coerce("Real", plain_number(pick(pandas.Series({"a": 1.5}), "a"))) == 1.5
+
+
+def test_time_argument_with_an_epoch_is_a_datetime(tmp_path, make_fmu, adapter):
+    (tmp_path / "clock.py").write_text(textwrap.dedent("""
+        def hour(time):
+            return {"hour": time.hour + time.minute / 60}
+    """))
+    (tmp_path / "fmugen.toml").write_text(textwrap.dedent("""
+        [model]
+        entry = "clock.py:hour"
+        [time]
+        time = { source = "end_time", epoch = "2026-06-21T06:00:00+00:00" }
+        [outputs]
+        hour = {}
+    """))
+    fmu = adapter(make_fmu(tmp_path / "fmugen.toml"))
+    fmu.initialize()
+    assert fmu.fmi2DoStep(0.0, 5400.0, False) == OK
+    assert fmu.get("hour") == 7.5
+
+
+def test_epoch_must_be_a_date_time(tmp_path, make_fmu):
+    from fmugen.config import InterfaceError
+    (tmp_path / "clock.py").write_text("def hour(time):\n    return time\n")
+    (tmp_path / "fmugen.toml").write_text(
+        '[model]\nentry = "clock.py:hour"\n[time]\ntime = { epoch = "yesterday" }\n[outputs]\ny = { from = "return" }\n')
+    with pytest.raises(InterfaceError, match="ISO 8601"):
+        make_fmu(tmp_path / "fmugen.toml")

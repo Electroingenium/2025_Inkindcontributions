@@ -73,6 +73,7 @@ energy_balance = { unit = "W" }
 | a tuple or list | `"return:0"`, `"return:1"`, … |
 | a single number | `"return"` |
 | an object or dataclass | `"return:<attribute>"` |
+| a pandas Series, a one-row DataFrame, an xarray Dataset | `"return:<label>"` (index label, column, data variable) |
 | something nested | a dotted path: `"return:zone.T"`, `"return:4.rewards.speed"`. Each step is a dict key, a tuple/list position or an attribute. |
 
 Values nested in dicts, NamedTuples, dataclasses and `SimpleNamespace`s become outputs named with dots: `{"zone": {"T": 21}}` gives the output `"zone.T"` (quoted in TOML). `init` finds them in dict literals in the code, and with `--probe` in the actual result (up to 4 levels deep).
