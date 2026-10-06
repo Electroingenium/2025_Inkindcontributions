@@ -372,6 +372,8 @@ def _add_returned(read, data, comments, is_class, arrays, probe, seen):
     for name in read.names:
         if name in taken or name in parents:
             continue
+        if probe and read.sources[name] == "return" and data.get("outputs"):
+            continue   # the probe already split the whole return value (a table, an object) into outputs
         kind = read.types.get(name)
         source = read.sources[name]
         copied = None
@@ -796,6 +798,8 @@ def _outputs_from_return(result, data, comments, default_name, is_class, arrays=
     outputs = data.setdefault("outputs", {})
     if isinstance(result, Mapping):
         items = [(str(k), v, f"return:{k}") for k, v in result.items()]
+    elif _table_children(result) is not None:   # pandas Series / one-row DataFrame, xarray Dataset
+        items = [(k, v, f"return:{k}") for k, v in _table_children(result)]
     elif arrays and _array_info(result):
         items = [(default_name, result, "return")]
     elif isinstance(result, tuple) and hasattr(result, "_fields"):   # NamedTuple: use the field names
@@ -839,6 +843,9 @@ def _nested(name, value, source, arrays, depth=0):
 
 
 def _children(value):
+    table = _table_children(value)
+    if table is not None:
+        return table
     if isinstance(value, Mapping):
         return [(k, v) for k, v in value.items() if isinstance(k, str)]
     if isinstance(value, tuple) and hasattr(value, "_fields"):
@@ -848,6 +855,25 @@ def _children(value):
     if isinstance(value, types.SimpleNamespace):
         return list(vars(value).items())
     return []
+
+
+def _table_children(value):
+    """[(label, scalar)] for a pandas Series, a one-row pandas DataFrame or an xarray Dataset of
+    single values (labels that are strings); None for anything else."""
+    kind = type(value).__name__
+    library = type(value).__module__.split(".")[0]
+    try:
+        if library == "pandas" and kind == "Series":
+            pairs = list(value.items())
+        elif library == "pandas" and kind == "DataFrame" and len(value) == 1:
+            pairs = [(c, value[c].iloc[0]) for c in value.columns]
+        elif library == "xarray" and kind == "Dataset":
+            pairs = [(k, v.item()) for k, v in value.data_vars.items() if v.size == 1]
+        else:
+            return None
+    except Exception:
+        return None
+    return [(k, v) for k, v in pairs if isinstance(k, str)]
 
 
 def _dotted_name(name):

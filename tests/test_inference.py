@@ -239,3 +239,18 @@ def test_fmi3_time_attribute_is_renamed(tmp_path):
     data, _ = infer(tmp_path / "clock.py", fmi_version=3)
     assert "time" not in data.get("locals", {})
     assert data["locals"]["model_time"] == {"from": "attr:time"}
+
+
+@pytest.mark.parametrize("kind", ["series", "frame", "xarray"])
+def test_table_results_become_named_outputs(tmp_path, kind):
+    pytest.importorskip("pandas")
+    if kind == "xarray":
+        pytest.importorskip("xarray")
+    body = {
+        "series": "pandas.Series({'p': x, 'q': 2 * x})",
+        "frame": "pandas.DataFrame({'p': [x], 'q': [2 * x]})",
+        "xarray": "__import__('xarray').Dataset({'p': x, 'q': 2 * x})",
+    }[kind]
+    (tmp_path / "table.py").write_text(f"import pandas\ndef f(x: float = 1.0):\n    return {body}\n")
+    data, _ = infer(tmp_path / "table.py")
+    assert data["outputs"] == {"p": {}, "q": {}}
