@@ -30,7 +30,7 @@ The main risks for an open-source release are **distribution and portability**, 
 | 6 | ✅ Fixed | The model was always run to build and to infer the config, which was unsafe for hardware or network models (e.g. tclab). Now neither `fmugen build` nor `fmugen init` runs it: `init` reads the source code, and only calls the model with `--probe` |
 | 7 | 🟢 Mostly fixed | The inference gaps of §4 are closed, each checked with a published model, except generators/`async` models (no published model found to test against) and `--compile` of composite FMUs |
 | 8 | 🟢 Partly fixed | `.idea/` is no longer tracked, and `tools/unifmu.exe` is removed from the `tomas` branch history (not pushed yet). The pack is still large because of old generated `.fmu`/`.zip` files and a 71 MB `unifmu.so` in early commits on `main` |
-| 9 | 🟢 Low | Builds are not reproducible (random GUID and current timestamp), there is no CI, and a few docstrings are stale |
+| 9 | 🟢 Low | ✅ Builds are reproducible (content-hashed GUID, `SOURCE_DATE_EPOCH`, fixed zip dates and modes). There is no CI, and a few docstrings are stale |
 | 10 | 🟠 High | **UniFMU 0.14 crashes when the FMU's Python prints more than about 4 KB**, and the importer hangs forever. Worked around with `build --capture-output` (§5.7); still needs an upstream fix |
 
 ---
@@ -253,7 +253,7 @@ Ordered by value to an open-source user base.
 6. ✅ **Self-provisioning FMU runtime from vendored wheels.** Done: `--vendor` (§3.1).
 7. ✅ **Multi-platform vendoring.** Done: `--platform` / `--python-version` (§3.1). Also done: `--compile pyinstaller|nuitka`. Next: merging compiled builds from several OSes into one FMU.
 8. **`--embed-python`** (opt-in): a python-build-standalone interpreter for fully offline, self-contained FMUs.
-9. **Reproducible builds**: a deterministic GUID, `SOURCE_DATE_EPOCH`, and sorted zip entries with fixed timestamps.
+9. ✅ **Reproducible builds** (done): the GUID / instantiationToken is a UUID5 of the FMU's file contents, `generationDateAndTime` honours `SOURCE_DATE_EPOCH`, and zip entries are sorted with fixed dates and modes.
 
 ### Tier 3: model coverage ("handle every model")
 10. ✅ NamedTuple field names and 0-d arrays (done). Still to do: nested dict and object outputs flattened with dotted names, pandas Series, pint quantities, anything with `__float__` (§4).

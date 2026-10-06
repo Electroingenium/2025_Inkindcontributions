@@ -77,3 +77,15 @@ def test_tunable_parameter_and_rollback_through_unifmu(fmus, tmp_path):
 def _csv(path):
     import numpy as np
     return np.genfromtxt(path, delimiter=",", names=True, dtype=None)
+
+
+def test_builds_are_reproducible(tmp_path, monkeypatch):
+    monkeypatch.setenv("SOURCE_DATE_EPOCH", "1767225600")   # 2026-01-01T00:00:00Z
+    first = build(EXAMPLES / "simple_pid", tmp_path / "a.fmu")[0].read_bytes()
+    second = build(EXAMPLES / "simple_pid", tmp_path / "b.fmu")[0].read_bytes()
+    assert first == second
+    md = read_model_description(str(tmp_path / "a.fmu"))
+    assert md.generationDateAndTime == "2026-01-01T00:00:00Z"
+    assert md.guid != "{00000000-0000-0000-0000-000000000000}"
+    other = build(EXAMPLES / "psychrometry", tmp_path / "c.fmu")[0]
+    assert read_model_description(str(other)).guid != md.guid

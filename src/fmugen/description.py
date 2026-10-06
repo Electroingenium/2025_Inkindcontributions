@@ -1,6 +1,8 @@
 """modelDescription.xml (FMI 2.0 or 3.0 Co-Simulation) from a fmugen interface spec."""
 import itertools
 import math
+import hashlib
+import os
 import uuid
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
@@ -18,12 +20,23 @@ LOG_CATEGORIES = [
      "Enabling this category is required for distributed UniFMUs."),
 ]
 
+# Replaced after the FMU's files are written by a token derived from their content (stamp_guid),
+# so an unchanged model rebuilds to the same GUID / instantiationToken.
+GUID_PLACEHOLDER = "{00000000-0000-0000-0000-000000000000}"
+GUID_NAMESPACE = uuid.UUID("6f3c1d52-8a4e-4b7a-9d0e-2f5c8b1a7e43")
+
 FLOAT_TYPES = ("Real", "Float32", "Float64")
 
 EXPERIMENT_ATTRIBUTES = {
     "start_time": "startTime", "stop_time": "stopTime",
     "tolerance": "tolerance", "step_size": "stepSize",
 }
+
+
+def build_time():
+    """The build time: SOURCE_DATE_EPOCH when set (reproducible builds), else now."""
+    epoch = os.environ.get("SOURCE_DATE_EPOCH")
+    return datetime.fromtimestamp(int(epoch), timezone.utc) if epoch else datetime.now(timezone.utc)
 
 
 def _format_value(fmi_type, value):
@@ -47,11 +60,11 @@ def build_model_description(interface, model_name=None, author=None):
     root = ET.Element("fmiModelDescription", {
         "fmiVersion": "2.0",
         "modelName": model_name or interface["model_name"],
-        "guid": "{" + str(uuid.uuid4()) + "}",
+        "guid": GUID_PLACEHOLDER,
         "description": interface.get("description", ""),
         "author": interface.get("author", "") if author is None else author,
         "generationTool": "fmugen + unifmu",
-        "generationDateAndTime": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "generationDateAndTime": build_time().strftime("%Y-%m-%dT%H:%M:%SZ"),
         "variableNamingConvention": "structured" if any(v.get("dimensions") for v in variables) else "flat",
     })
 
@@ -192,11 +205,11 @@ def build_model_description_fmi3(interface, model_name=None, author=None):
     root = ET.Element("fmiModelDescription", {
         "fmiVersion": "3.0",
         "modelName": model_name or interface["model_name"],
-        "instantiationToken": "{" + str(uuid.uuid4()) + "}",
+        "instantiationToken": GUID_PLACEHOLDER,
         "description": interface.get("description", ""),
         "author": interface.get("author", "") if author is None else author,
         "generationTool": "fmugen + unifmu",
-        "generationDateAndTime": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "generationDateAndTime": build_time().strftime("%Y-%m-%dT%H:%M:%SZ"),
         "variableNamingConvention": "flat",
     })
 
@@ -314,3 +327,16 @@ def write_model_description(interface, path, **kwargs):
     build = build_model_description_fmi3 if interface.get("fmi_version", 2) == 3 else build_model_description
     tree = build(interface, **kwargs)
     tree.write(Path(path), encoding="utf-8", xml_declaration=True)
+
+
+def stamp_guid(fmu_dir):
+    """Replace GUID_PLACEHOLDER in fmu_dir's modelDescription.xml by a UUID hashed from every file of the FMU."""
+    fmu_dir = Path(fmu_dir)
+    digest = hashlib.sha256()
+    for file in sorted(f for f in fmu_dir.rglob("*") if f.is_file() and "__pycache__" not in f.parts):
+        digest.update(file.relative_to(fmu_dir).as_posix().encode() + b"/")
+        digest.update(hashlib.sha256(file.read_bytes()).digest())
+    description = fmu_dir / "modelDescription.xml"
+    token = "{" + str(uuid.uuid5(GUID_NAMESPACE, digest.hexdigest())) + "}"
+    description.write_bytes(description.read_bytes().replace(GUID_PLACEHOLDER.encode(), token.encode()))
+    return token
