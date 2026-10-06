@@ -136,7 +136,7 @@ These are the gaps found:
 | **Int outputs** always inferred as Real (by design) | Fine, but surprising | Keep it, and note it in the generated comment (already partly done) |
 | ✅ **`Boolean` coercion from strings** (`coerce("Boolean", "false")` gave `True`) | Fixed: `true/false/1/0/yes/no/on/off` are parsed (any case), other strings raise | — |
 | ✅ **Very large arrays** | Fixed: `set_values` reads with an index instead of `values.pop(0)` (was O(n²)) | — |
-| **Stateful module-level globals** (functions with `global` counters) | `fmi2Reset`/`fmi3Reset` don't reload the module, so state survives a reset, and `serialize` doesn't save globals | Document it, or offer `reset = "reload"` that re-imports the model package |
+| ✅ **Stateful module-level globals** (functions with `global` counters) | Fixed: `[model] globals = ["module:NAME"]` are put back to their import-time values on reset and saved with the FMU state. `init` lists the number/string/array globals that the modules reached from the entry rebind. Checked with pythermalcomfort JOS3 (`PRE_SHIV`): rollback repeats exactly only with it. Instances in one process still share globals | — |
 | ✅ **Models without pickling support** (e.g. anything holding an ONNX Runtime `InferenceSession`: Silero VAD, surfaces) | Was: state save/restore disabled | Fixed: `cloudpickle` fallback, and `save_state = [attributes]` saves only what can be pickled (written by `init`). Silero VAD now rolls back correctly through UniFMU. Still open: `dill`, saving module globals and global RNG states |
 
 ---

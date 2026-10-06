@@ -505,3 +505,49 @@ def test_cwd_must_be_a_folder_inside_the_project(tmp_path):
         Config({"model": {"entry": "m.py:f", "cwd": "nope"}}, tmp_path)
     with pytest.raises(InterfaceError, match="must be inside"):
         Config({"model": {"entry": "m.py:f", "cwd": ".."}}, tmp_path)
+
+
+def test_dotted_path_reaches_methods_of_a_dict():
+    from fmugen.templates.fmugen_runtime import get_path
+    options = {"a": 1}
+    assert get_path({"options": options}, "options.update") == options.update
+    assert get_path({"keys": 5}, "keys") == 5   # a key wins over a method of the same name
+
+
+COUNTER = """
+CALLS = 0
+SCALE = 2.0
+
+def tick(x: float = 1.0):
+    global CALLS
+    CALLS += 1
+    return {"y": x * SCALE, "calls": CALLS}
+"""
+
+
+def test_module_globals_are_reset_and_saved(tmp_path, make_fmu, adapter):
+    (tmp_path / "counter.py").write_text(COUNTER)
+    _, data = init(tmp_path / "counter.py")
+    assert data["model"]["globals"] == ["counter:CALLS"]          # SCALE is never rebound
+    fmu = adapter(make_fmu(tmp_path / "fmugen.toml"))
+    fmu.initialize()
+    for t in range(3):
+        assert fmu.fmi2DoStep(float(t), 1.0, False) == OK
+    calls = fmu.get("calls")
+    status, state = fmu.fmi2SerializeFmuState()
+    assert fmu.fmi2DoStep(3.0, 1.0, False) == OK and fmu.get("calls") == calls + 1
+    assert fmu.fmi2DeserializeFmuState(state) == OK
+    assert fmu.fmi2DoStep(3.0, 1.0, False) == OK and fmu.get("calls") == calls + 1   # rolled back first
+    assert fmu.fmi2Reset() == OK
+    fmu.initialize()
+    assert fmu.fmi2DoStep(0.0, 1.0, False) == OK
+    assert fmu.get("calls") == calls - 2   # counted from the import-time value again
+
+
+def test_globals_must_exist(tmp_path, make_fmu):
+    from fmugen.config import InterfaceError
+    (tmp_path / "counter.py").write_text(COUNTER)
+    (tmp_path / "fmugen.toml").write_text(
+        '[model]\nentry = "counter.py:tick"\nglobals = ["counter:NOPE"]\n[outputs]\ny = {}\n')
+    with pytest.raises(InterfaceError, match="NOPE"):
+        make_fmu(tmp_path / "fmugen.toml")

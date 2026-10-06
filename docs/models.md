@@ -565,5 +565,6 @@ Check afterwards:
 
 - **Values:** FMI 2 has one value per variable, so fmugen writes an array as one scalar per element (`x[1]`, `x[2]`, …); its size must be fixed. FMI 3 has arrays, also resizable ones. In both versions, callables and objects can't be variables (use `constants`).
 - **Clocks:** each clocked variable belongs to exactly one clock.
+- **Module globals:** state kept in module-level variables is only reset and saved if it is listed in `[model] globals` (`init` finds the usual ones). Two instances of one FMU in the same process share them.
 - **FMU state:** saving and restoring FMU state pickles your object (`cloudpickle` if `pickle` can't). If it holds something that can't be pickled (an ONNX session, an open file, a socket, a generator), `init` writes `save_state` with the attributes that can be saved, or `false`, and a comment saying what was left out. Check it: an attribute left out must not change during a simulation.
 - **Derivatives:** the FMU can't provide them (directional derivatives, input/output derivatives). See [fmi.md](fmi.md#unsupported-functions).

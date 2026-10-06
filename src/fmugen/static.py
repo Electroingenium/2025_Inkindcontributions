@@ -95,6 +95,25 @@ def _hint_type(hint):
 OPTIONAL_NAMES = {"float": float, "int": int, "bool": bool, "str": str}
 
 
+def written_globals(module):
+    """Names of module-level variables that a function of `module` rebinds (`global X; X = ...`):
+    state kept outside the model object, e.g. pythermalcomfort's PRE_SHIV."""
+    try:
+        tree = ast.parse(inspect.getsource(module))
+    except (OSError, TypeError, SyntaxError, UnicodeDecodeError):
+        return []
+    found = []
+    for fn in ast.walk(tree):
+        if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        declared = {n for node in ast.walk(fn) if isinstance(node, ast.Global) for n in node.names}
+        assigned = {t.id for node in ast.walk(fn) if isinstance(node, (ast.Assign, ast.AugAssign, ast.AnnAssign))
+                    for t in (node.targets if isinstance(node, ast.Assign) else [node.target])
+                    if isinstance(t, ast.Name)}
+        found += [n for n in sorted(declared & assigned) if n not in found]
+    return found
+
+
 def unwrap_optional(hint):
     """X for Optional[X] / X | None / Union[X, None] (also written as strings), else hint unchanged."""
     if isinstance(hint, str):

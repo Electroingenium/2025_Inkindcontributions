@@ -51,7 +51,7 @@ SECTIONS = {
 MODEL_KEYS = {
     "entry", "call", "name", "description", "author", "sources", "requirements",
     "constants", "call_constants", "init_call", "terminate", "fmi_version", "setup", "kind", "create",
-    "save_state", "cwd",
+    "save_state", "cwd", "globals",
 }
 EXPERIMENT_KEYS = {"start_time", "stop_time", "step_size", "tolerance", "fixed_step"}
 TIME_SOURCES = ("time", "step_size", "end_time")
@@ -405,6 +405,7 @@ def normalize(config, entry_obj, module_name, sys_path, model_name=None, author=
         },
         "sys_path": sys_path,
         "cwd": config.model_cwd(),
+        "globals": _globals(model.get("globals", [])),
         "setup": _setup(model.get("setup", []), is_class),
         "constants": constants,
         "call_constants": call_constants,
@@ -543,6 +544,22 @@ def _clock(name, info, entry_obj, is_class, time_args):
         clock["_signature"] = signature = _signature(target)
         clock["time_args"] = [arg for arg in time_args if signature is None or _accepts(signature, arg)]
     return clock
+
+
+def _globals(refs):
+    """[model] globals = ["package.module:NAME", ...]: module-level state of the model."""
+    if not isinstance(refs, list) or not all(isinstance(r, str) for r in refs):
+        raise InterfaceError('[model] globals must be a list like ["package.module:NAME"]')
+    from fmugen.templates.fmugen_runtime import split_global
+    for ref in refs:
+        module, sep, name = ref.partition(":")
+        if not sep or not module or not name.isidentifier():
+            raise InterfaceError(f"[model] globals: {ref!r} must look like 'package.module:NAME'")
+        try:
+            split_global(ref)
+        except Exception as e:
+            raise InterfaceError(f"[model] globals: cannot find {ref!r}: {e!r}") from e
+    return list(refs)
 
 
 def element_count(var):

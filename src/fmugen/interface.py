@@ -124,6 +124,7 @@ def _infer_config(target, call, config_dir, fmi_version, starts, setup, kind, cr
             raise InterfaceError("--call and --create only apply to classes")
         _infer_function(entry, data, comments, **options)
     _add_data_files(data, comments, config_dir, Path(path).resolve() if path else None)
+    _add_globals(data, comments, module, config_dir if path else None)
     if fmi_version == 3:
         _rename_reserved(data, comments, is_class="call" in data["model"] or inspect.isclass(entry))
     else:
@@ -247,6 +248,37 @@ def _add_data_files(data, comments, config_dir, entry_file):
         data["model"]["cwd"] = "."
         comments[("model", "cwd")] = (f"the model opens {', '.join(found)} by a relative path: "
                                       "they are copied into the FMU and the model runs in that folder")
+
+
+def _add_globals(data, comments, entry_module, local_dir=None):
+    """[model] globals: module-level variables holding numbers or arrays that the model's own
+    package rebinds while it runs. They are put back on reset and saved with the FMU state."""
+    top = entry_module.__name__.split(".")[0]
+    def local(m):   # a module of the user's project (next to the config), not an installed one
+        file = getattr(m, "__dict__", {}).get("__file__")
+        return local_dir is not None and file and Path(file).resolve().is_relative_to(local_dir)             and "site-packages" not in Path(file).parts
+
+    def ours(m):
+        return m.__name__ == top or m.__name__.startswith(top + ".") or local(m)
+
+    # the entry module, and the package's modules it uses (as modules, or by their functions and classes)
+    reached, todo = {entry_module.__name__: entry_module}, [entry_module]
+    while todo:
+        for value in list(vars(todo.pop()).values()):
+            used = value if isinstance(value, types.ModuleType) else sys.modules.get(getattr(value, "__module__", None) or "")
+            if isinstance(used, types.ModuleType) and used.__name__ not in reached and ours(used):
+                reached[used.__name__] = used
+                todo.append(used)
+    found = []
+    for module in reached.values():
+        for name in static.written_globals(module):
+            value = module.__dict__.get(name)
+            if isinstance(value, (bool, int, float, str)) or _number_like(value) or _array_info(value) is not None:
+                found.append(f"{module.__name__}:{name}")
+    if found:
+        data["model"]["globals"] = sorted(set(found))
+        comments[("model", "globals")] = ("module-level state the model changes while it runs: "
+                                          "put back on reset and saved with the FMU state")
 
 
 def _pick_entry(module, name):
