@@ -33,7 +33,7 @@ def test_factory_function_with_a_computed_constant(tmp_path, make_fmu, adapter):
             return "weights.bin"
     ''')
     with isolated_imports():
-        init(f"{model}:make", call="step", starts=_parse_starts(["path=call:lib:weights_file()", "u=1.0"]))
+        init(f"{model}:make", call="step", probe=True, starts=_parse_starts(["path=call:lib:weights_file()", "u=1.0"]))
     text = (tmp_path / "fmugen.toml").read_text()
     assert 'call = "step"' in text and "[model.constants]" in text and 'path = { call = "lib:weights_file()" }' in text
     assert "k = { start = 2.0 }" in text and "verbose = { start = false }" in text
@@ -58,14 +58,14 @@ def test_tuple_argument_namedtuple_and_0d_results_numpy_retry(tmp_path, make_fmu
             return Result(np.array(offset + scale * values.sum()), values.size)   # values must be an ndarray
     ''')
     with isolated_imports():
-        data, comments = infer_config(f"{model}:combine", fmi_version=3, starts={"pair": (1.0, [1.0, 2.0, 3.0])})
+        data, comments = infer_config(f"{model}:combine", fmi_version=3, probe=True, starts={"pair": (1.0, [1.0, 2.0, 3.0])})
     assert data["inputs"]["pair_0"] == {"start": 1.0, "to": "arg:pair[0]"}
     assert data["inputs"]["pair_1"] == {"dimensions": [3], "start": [1.0, 2.0, 3.0], "to": "arg:pair[1]", "numpy": True}
     assert "the probe failed with lists" in comments[("inputs", "pair_1")]
     assert data["outputs"] == {"total": {}, "count": {}}    # functions: from = "return:<name>" is the default
 
     with isolated_imports():
-        init(f"{model}:combine", fmi_version=3, starts={"pair": (1.0, [1.0, 2.0, 3.0])})
+        init(f"{model}:combine", fmi_version=3, probe=True, starts={"pair": (1.0, [1.0, 2.0, 3.0])})
     fmu = adapter(make_fmu(tmp_path), fmi=3)
     fmu.initialize()
     assert fmu.get("total") == 7.0
@@ -103,5 +103,5 @@ def test_only_the_models_own_properties_become_outputs(tmp_path):
                 return None
     ''')
     with isolated_imports():
-        data, _ = infer_config(f"{model}:Sensor", call="step")
+        data, _ = infer_config(f"{model}:Sensor", call="step", probe=True)
     assert set(data["outputs"]) == {"reading"}
