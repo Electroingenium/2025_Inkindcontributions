@@ -92,6 +92,9 @@ class Engine:
             self.call_constants = {k: resolve_constant(v)
                                    for k, v in self.interface.get("call_constants", {}).items()}
             self.converters = {v["name"]: converter(v) for v in self.variables if v.get("convert")}
+            # [model] globals: module-level state, put back to its import-time value on reset
+            self.globals = [split_global(ref) for ref in self.interface.get("globals", [])]
+            self.global_starts = copy.deepcopy(self._read_globals())
         self.is_class = self.interface["entry"]["kind"] == "class"
         self.reset()
         self._forward_output()   # e.g. warnings printed while the model was imported
@@ -99,6 +102,8 @@ class Engine:
     # ================= life cycle =================
 
     def reset(self):
+        if getattr(self, "global_starts", None):
+            self._write_globals(copy.deepcopy(self.global_starts))
         self.values = {}
         for v in self.variables:
             if v["causality"] != "independent" and not v.get("dimensions"):
@@ -479,7 +484,7 @@ class Engine:
             "values": self.values, "obj": obj, "time": self.time, "mode": self.mode,
             "clock_active": self.clock_active, "clock_interval": self.clock_interval,
             "clock_shift": self.clock_shift, "terminate_requested": self.terminate_requested,
-            "clock_last_tick": self.clock_last_tick,
+            "clock_last_tick": self.clock_last_tick, "globals": self._read_globals(),
         }
         try:
             return Status.ok, dump_state(state)
@@ -505,7 +510,17 @@ class Engine:
         self.clock_shift = dict(state.get("clock_shift", self.clock_shift))
         self.terminate_requested = state.get("terminate_requested", False)
         self.clock_last_tick = dict(state.get("clock_last_tick", {}))
+        self._write_globals(copy.deepcopy(state.get("globals", {})))
         return Status.ok
+
+    def _read_globals(self):
+        return {f"{module.__name__}:{name}": getattr(module, name) for module, name in self.globals}
+
+    def _write_globals(self, values):
+        for module, name in self.globals:
+            key = f"{module.__name__}:{name}"
+            if key in values:
+                setattr(module, name, values[key])
 
     # ================= running user code =================
 
@@ -762,6 +777,15 @@ def load_entry(interface, resources_dir):
     return module, getattr(module, entry["name"])
 
 
+def split_global(ref):
+    """'package.module:NAME' -> (module, 'NAME') for [model] globals."""
+    module_name, _, name = ref.partition(":")
+    module = importlib.import_module(module_name)
+    if not hasattr(module, name):
+        raise AttributeError(f"module {module_name} has no global {name!r}")
+    return module, name
+
+
 def resolve_reference(ref):
     """'package.module:attr.path' (or dotted 'package.module.attr') -> the object."""
     if ":" in ref:
@@ -946,7 +970,7 @@ def plain_number(value, unit=None):
 def get_path(obj, path):
     """Follow a dotted path through attributes, mapping keys and sequence indexes: "state.T", "rewards.speed", "4.x"."""
     for part in path.split("."):
-        if isinstance(obj, Mapping):
+        if isinstance(obj, Mapping) and (part in obj or not hasattr(obj, part)):   # "options.update": the method
             obj = obj[part]
         elif _labelled(obj) and part in obj.keys():   # pandas Series/DataFrame, xarray Dataset
             obj = obj[part]
