@@ -27,7 +27,7 @@ The main risks for an open-source release are **distribution and portability**, 
 | 3 | ✅ Fixed | The FMU's Python was unclear. By default the FMU runs with the model's venv; `--vendor` (offline wheels, needs Python) and `--compile pyinstaller/nuitka` (no Python, no sources, one OS) make FMUs for other machines |
 | 4 | ✅ Fixed | Placeholder package metadata and bloated dependencies. The package is now `fmugen`, depending only on what the FMU's backend needs |
 | 5 | 🟡 Medium | `requires-python >= 3.13` excludes many users. The code needs about 3.11 (`tomllib`) and the FMU runtime needs 3.10 (`match` in the backend) |
-| 6 | 🟡 Medium | The build-time probe always runs the model. That is unsafe for hardware or network models (e.g. tclab) and there is no `--no-probe` option |
+| 6 | ✅ Fixed | The build-time probe always ran the model, which was unsafe for hardware or network models (e.g. tclab). `fmugen build` now never runs the model; `[model] save_state` (set by `init`) declares state support |
 | 7 | 🟡 Medium | Some inference gaps reduce the "works on any model" coverage (see §4) |
 | 8 | 🟡 Medium | An 89 MB `.git` history (the removed `unifmu.exe` and binaries are still in it). `.idea/` is tracked even though `.gitignore` lists it |
 | 9 | 🟢 Low | Builds are not reproducible (random GUID and current timestamp), there is no CI, and a few docstrings are stale |
@@ -137,15 +137,14 @@ These are the gaps found:
 | **`Boolean` coercion from strings** (`coerce("Boolean", "false")` gives `True`) | Wrong value if a model returns `"false"` | Parse common string forms, or raise |
 | **Very large arrays** | `set_values` uses `values.pop(0)`, which is O(n²) | Use an index or iterator |
 | **Stateful module-level globals** (functions with `global` counters) | `fmi2Reset`/`fmi3Reset` don't reload the module, so state survives a reset, and `serialize` doesn't save globals | Document it, or offer `reset = "reload"` that re-imports the model package |
-| **Models without pickling support** (e.g. anything holding an ONNX Runtime `InferenceSession`: Silero VAD, surfaces) | State save/restore is disabled (handled well by the probe) | Try `copy.deepcopy` and `dill`/`cloudpickle` as fallbacks before giving up. Add a `__getstate__` hook option in the config (`state = "attr:a,b,c"` to snapshot only some attributes) |
+| ✅ **Models without pickling support** (e.g. anything holding an ONNX Runtime `InferenceSession`: Silero VAD, surfaces) | Was: state save/restore disabled | Fixed: `cloudpickle` fallback, and `save_state = [attributes]` saves only what can be pickled (written by `init`). Silero VAD now rolls back correctly through UniFMU. Still open: `dill`, saving module globals and global RNG states |
 
 ---
 
 ## 5. Correctness and robustness (code-level)
 
 ### 5.1 CLI and build (`__main__.py`)
-- The **probe always executes user code at build time**, both in `infer_config` and in `_probe`. For hardware (tclab), network or licence-server models, or slow models, this has side effects or hangs. Add `--no-probe` (assume `can_get_and_set_state = false` or let the config decide) and a probe timeout.
-- `build()` writes `interface.json` twice: once before the probe and once after it with `can_get_and_set_state`. That is fine, but if the probe raises, the error has no "the model built but the probe failed" context. Point to `--no-probe`.
+- ✅ Fixed: `build` no longer runs user code. It imports the model to check the config, but constructs nothing and makes no step, so hardware (tclab), network and licence-server models build anywhere. `fmugen init` still calls the model, by design: it is how outputs are discovered. A probe timeout for `init` would still help with slow models.
 - Missing commands that users will expect (see §8): `fmugen check`, `fmugen run`, `fmugen inspect`.
 - `main()` only catches `FileExistsError` and `InterfaceError`. An exception from user code during `build` (e.g. at import) prints a raw traceback. That is acceptable, but a `--debug` flag would let the default path show a short message.
 
@@ -199,7 +198,7 @@ Found while testing Chronos-Bolt. When the FMU's Python process writes more than
 
 Still open:
 - Report it upstream to UniFMU, with the small reproduction (a function that prints 5 KB).
-- The default is still exposed: a model that prints a lot hangs unless built with the flag. `init` or `build` could suggest the flag when the probe prints a lot.
+- The default is still exposed: a model that prints a lot hangs unless built with the flag. `init` could suggest the flag when its probe call prints a lot.
 
 ---
 
@@ -247,7 +246,7 @@ Ordered by value to an open-source user base.
 1. ✅ Rename the distribution and trim dependencies (done). **Add a LICENSE** and third-party notices (§2.5), then publish to PyPI.
 2. **CI matrix** on 3 OSes × Python 3.10–3.13, plus a "build from installed wheel" smoke test.
 3. **Lower `requires-python`** to 3.10 or 3.11.
-4. **`--no-probe`** and a probe timeout.
+4. ✅ **The build no longer runs the model** (done). Still useful: a timeout for `init`'s probe call.
 5. **Reject model module names that shadow the standard library.**
 
 ### Tier 2: portability ("an FMU that runs anywhere")
@@ -265,13 +264,13 @@ Ordered by value to an open-source user base.
 15. **Discard support**, so a model can reject a step.
 16. **Tolerance, start-time and stop-time time sources.**
 17. ✅ **Print capture** to the FMI log: `build --capture-output`.
-18. **Pickling fallbacks** (`dill`, `cloudpickle`, `deepcopy`, or user-selected attributes) so more models keep rollback support.
+18. ✅ **Pickling fallbacks** (done: `cloudpickle`, and `save_state = [attributes]` chosen by `init`). Still possible: `dill`, saving module globals and global RNG states.
 19. **Model Exchange (FMI 2 and 3) for ODE models**: `[model] kind = "ode"` with `derivatives = "return"` and continuous states. UniFMU's Python backend does not support ME today, so this needs an upstream contribution or a different native wrapper. It is the most-requested FMI capability after co-simulation.
 20. **Internal solver helper**: `[model] integrate = "rk4" | "scipy:RK45"` turns an ODE right-hand side `f(t, x, u)` into a co-simulation FMU, with internal sub-steps and the tolerance passed in. It covers ODE models now without needing ME.
 21. **Wrappers for other model formats**: Jupyter notebooks (`.ipynb` entry via `nbformat`), scikit-learn, ONNX, PyTorch or joblib-pickled ML models (`[model] kind = "sklearn"` calls `predict` with inputs as features). This would be a large draw for data-driven and digital-twin users. Partly done: six published networks on PyTorch and ONNX Runtime work unmodified (factories, computed constants for downloaded weights, tensor conversion, tuple arguments). Still to do: bundling model weights into the FMU, and trying scikit-learn and ONNX models.
 
 ### Tier 4: developer experience
-22. **`fmugen check fmugen.toml`**: validate the config and run the probe without packaging, with a readable table of the variables.
+22. **`fmugen check fmugen.toml`**: validate the config and, on request, run the model once (the old build probe) without packaging, with a readable table of the variables.
 23. **`fmugen run model.fmu --stop-time … --input in.csv --plot`**: a thin FMPy wrapper so users don't need to learn FMPy to try their FMU.
 24. **`fmugen inspect model.fmu`**: show `interface.json`, variables, platforms, Python requirements and the fmugen version that built it.
 25. **`fmugen init --interactive`**: a TUI or questions that ask about the ambiguous choices (which method, units, which attributes are outputs) instead of making the user edit TOML.
@@ -289,7 +288,7 @@ Ordered by value to an open-source user base.
 - **Not changing the user's code** is the right core principle, and the code sticks to it. Every adaptation (positional-only args, setters, `kind = "function"`, setup calls) is done in config, never in the user's code.
 - **One engine and two thin adapters.** FMI 2 and FMI 3 behaviour can't drift apart.
 - **Errors explain what to do**, e.g. "pass --call METHOD", "use model.py:Name", "arrays need --fmi 3".
-- **The build probe** catches broken configs and pickling problems before the user ships an FMU.
+- **`fmugen init`'s probe call** discovers outputs and pickling problems; `build` checks the config against the imported code without running it.
 - **`isolated_imports()`** keeps repeated builds and tests clean.
 - **Generated configs are commented** and explain each guess.
 - **Documentation**: function-by-function FMI behaviour, packaging internals, a tested-models log. This is better than most comparable tools.
