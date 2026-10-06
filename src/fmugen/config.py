@@ -517,8 +517,10 @@ def _clock(name, info, entry_obj, is_class, time_args):
 
 def _variable(section, causality, name, info, is_class, type_definitions, version=2, structural=(), clocks=()):
     where = f"[{section}] {name}"
-    if not name.isidentifier() or keyword.iskeyword(name):
-        raise InterfaceError(f"{where}: variable names must be valid Python identifiers")
+    parts = name.split(".") if section in ("outputs", "locals") else [name]   # outputs may be "zone.T"
+    if not all(p.isidentifier() and not keyword.iskeyword(p) for p in parts):
+        raise InterfaceError(f"{where}: variable names must be valid Python identifiers"
+                             + (" or dotted ones (zone.T)" if section in ("outputs", "locals") else ""))
 
     config_type = _type(where, info, section)
     fmi_type = TYPE_NAMES[version].get(config_type)

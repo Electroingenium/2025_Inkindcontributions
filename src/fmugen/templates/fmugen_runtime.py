@@ -835,8 +835,14 @@ def plain_number(value, unit=None):
 
 
 def get_path(obj, path):
+    """Follow a dotted path through attributes, mapping keys and sequence indexes: "state.T", "rewards.speed", "4.x"."""
     for part in path.split("."):
-        obj = getattr(obj, part)
+        if isinstance(obj, Mapping):
+            obj = obj[part]
+        elif part.isdigit() and isinstance(obj, (tuple, list)):
+            obj = obj[int(part)]
+        else:
+            obj = getattr(obj, part)
     return obj
 
 
@@ -850,10 +856,8 @@ def set_path(obj, path, value):
 def pick(result, key):
     if key is None:
         return result
-    if isinstance(result, Mapping):
+    if isinstance(result, Mapping) and key in result:   # a key that itself contains dots
         return result[key]
-    if key.isdigit() and isinstance(result, (tuple, list)):
-        return result[int(key)]
     return get_path(result, key)
 
 

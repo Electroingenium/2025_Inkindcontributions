@@ -168,7 +168,8 @@ def returned(fn, namespace=None):
                 isinstance(value, ast.Name) and value.id == self_name:
             continue
         if isinstance(value, ast.Dict) and _str_keys(value):
-            shapes.append(("keys", _str_keys(value), {k: kind(v) for k, v in zip(_str_keys(value), value.values)}))
+            leaves = _dict_leaves(value, kind)
+            shapes.append(("keys", list(leaves), leaves))
         elif isinstance(value, ast.Name) and value.id in dict_vars:
             shapes.append(("keys", dict_vars[value.id], {}))
         elif isinstance(value, ast.Tuple):
@@ -192,6 +193,17 @@ def returned(fn, namespace=None):
         sources = {n: f"return:{i}" for i, n in enumerate(names)} if kind == "tuple" else {"y": "return"}
         return Returned(names, sources, {k: t for k, t in types.items() if t})
     return Returned(unknown="its return statements return different shapes")
+
+
+def _dict_leaves(node, kind, prefix="", depth=0):
+    """{name: type} for a dict literal, with dict literals inside it named with dots: {"zone": {"T": t}} -> zone.T"""
+    leaves = {}
+    for key, value in zip(_str_keys(node), node.values):
+        if isinstance(value, ast.Dict) and _str_keys(value) and depth < 3:
+            leaves.update(_dict_leaves(value, kind, f"{prefix}{key}.", depth + 1))
+        else:
+            leaves[prefix + key] = kind(value)
+    return leaves
 
 
 def _str_keys(node):

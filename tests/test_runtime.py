@@ -389,3 +389,25 @@ def test_pint_quantities_in_and_out():
     assert q == pint.get_application_registry().Quantity(100.0, "kPa")
     assert plain_number(q, "Pa") == pytest.approx(1e5)
     assert plain_number(q) == 100.0
+
+
+def test_dotted_paths_walk_mappings_sequences_and_attributes():
+    from types import SimpleNamespace
+    from fmugen.templates.fmugen_runtime import pick
+    result = (0, {"rewards": {"speed": 1.5}, "a.b": 2}, SimpleNamespace(state={"T": 3}))
+    assert pick(result, "1.rewards.speed") == 1.5
+    assert pick(result[1], "a.b") == 2
+    assert pick(result, "2.state.T") == 3
+
+
+def test_nested_outputs_through_an_fmu(tmp_path, make_fmu, adapter):
+    (tmp_path / "nested.py").write_text(textwrap.dedent("""
+        def f(x: float = 1.0):
+            return {"zone": {"T": 2 * x, "air": {"rh": 0.5}}}
+    """))
+    init(tmp_path / "nested.py", output=tmp_path / "fmugen.toml")
+    fmu = adapter(make_fmu(tmp_path / "fmugen.toml"))
+    fmu.initialize()
+    assert fmu.set("x", 3.0) == OK
+    assert fmu.fmi2DoStep(0.0, 1.0, False) == OK
+    assert fmu.get("zone.T", "zone.air.rh") == [6.0, 0.5]

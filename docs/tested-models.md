@@ -96,6 +96,7 @@ These runs were made while `init` always called the model, which is now `init --
 | `ahrs.filters:Mahony` | as Madgwick | as Madgwick | ✗ array input | ✓ |
 | `fluids.units:Reynolds` | function taking and returning pint quantities | hand-written: `convert = "pint"` and a `unit` on each input ([below](#what-was-checked)) | ✓ | ✓ |
 | `fluids.units:head_from_P` | as `Reynolds`, dimensional output | as `Reynolds`, output `unit = "cm"` | — | ✓ |
+| `highway_env…highway_env:HighwayEnv` | class, `step(action)`, nested `info` dict (`rewards.*`) | `--fmi 3 --call step --setup reset --start action=1 --probe`, then `setup = ["reset(seed=0)"]` | — | ✓ |
 
 Each `--start` takes one `NAME=VALUE`; the table groups several per row for brevity.
 
@@ -201,6 +202,7 @@ Passing `fmpy validate` and `fmpy simulate` shows the FMU is well-formed and run
   | fluids.units `head_from_P` | P = 100 kPa, ρ = 1000 kg/m³, output in cm | 1019.7 cm | 10.197 m from `fluids.units` directly |
 
 - **Dynamic models over time:**
+  - **highway-env:** with `reset(seed=0)`, the reward and the nested `info` values (`y4.speed`, `y4.crashed`, `y4.rewards.*`) are identical to stepping the environment directly, at every step.
   - **TCLab:** at 50 % heater power, T1 rises from 21 °C to 50 °C in 10 minutes, and T2 warms to 26 °C through thermal coupling.
   - **Madgwick:** with `q` [fed back as a state](models.md#what-fmugen-init-infers), turning at 0.1 rad/s for 10 s gives q = [0.878, 0, 0, 0.478]. The analytic value is [0.878, 0, 0, 0.479].
   - **CartPole and Pendulum:** their observations evolve step by step.
