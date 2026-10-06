@@ -202,12 +202,29 @@ def show_value(name, value):
         st.metric(name, f"{value:.3f}" if isinstance(value, float) else str(value))
 
 
+def parse_item(text, vtype):
+    """One element of an edited array, typed like the OPC UA variable."""
+    if vtype == ua.VariantType.Boolean:
+        lowered = text.strip().lower()
+        if lowered not in ("true", "false", "1", "0"):
+            raise ValueError(f"{text!r} is not a Boolean: use true/false or 1/0")
+        return lowered in ("true", "1")
+    if vtype in (ua.VariantType.Double, ua.VariantType.Float):
+        return float(text)
+    return int(text)
+
+
 def edit_value(name, value, vtype):
     key = f"sp-{name}"
     if isinstance(value, list):
-        text = st.text_input(f"{name} (space-separated)", value=" ".join(map(str, value)), key=key)
-        cast = float if vtype in (ua.VariantType.Double, ua.VariantType.Float) else int
-        return [cast(x) for x in text.split()]
+        if vtype == ua.VariantType.String:   # strings may contain spaces: one per line
+            items = st.text_area(f"{name} (one per line)", value="\n".join(value), key=key).split("\n")
+        else:
+            text = st.text_input(f"{name} (space-separated)", value=" ".join(map(str, value)), key=key)
+            items = [parse_item(x, vtype) for x in text.split()]
+        if len(items) != len(value):   # the FMU's array has a fixed size
+            raise ValueError(f"needs {len(value)} values, got {len(items)}")
+        return items
     if vtype == ua.VariantType.Boolean:
         return st.checkbox(name, value=bool(value), key=key)
     if vtype == ua.VariantType.String:
@@ -261,7 +278,11 @@ with colR:
         except Exception as e:
             st.text(f"{n}: (NA) {e}")
             continue
-        newv = edit_value(n, cur, vtype)
+        try:
+            newv = edit_value(n, cur, vtype)
+        except ValueError as e:
+            st.error(f"{n}: {e}")
+            continue
         if st.button(f"Update {n}", key=f"btn-{n}"):
             try:
                 nd.set_value(ua.Variant(newv, vtype))

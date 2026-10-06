@@ -48,8 +48,9 @@ until kubectl --kubeconfig "$L" get node "$REMOTE" >/dev/null 2>&1; do sleep 2; 
 kubectl --kubeconfig "$L" wait --for=condition=Ready "node/$REMOTE" --timeout 180s
 
 echo "==> Deploying the stack in $LOCAL"
-# Apply the manifests with $IMAGE in place of the image kustomization.yaml names
-kubectl kustomize "$REPO/docker/k8s" | sed "s#image: fmugen-sim:latest#image: $IMAGE#" \
+# Apply the manifests with $IMAGE in place of whatever image kustomization.yaml names
+# (every container in docker/k8s runs the stack's image)
+kubectl kustomize "$REPO/docker/k8s" | sed -E "s#^([[:space:]]*image:).*#\1 $IMAGE#" \
   | kubectl --kubeconfig "$L" apply -f -
 
 echo "==> Offloading namespace fmu-sim"
