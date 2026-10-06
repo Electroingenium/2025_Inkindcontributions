@@ -29,7 +29,7 @@ The main risks for an open-source release are **distribution and portability**, 
 | 5 | 🟡 Medium | `requires-python >= 3.13` excludes many users. The code needs about 3.11 (`tomllib`) and the FMU runtime needs 3.10 (`match` in the backend) |
 | 6 | ✅ Fixed | The model was always run to build and to infer the config, which was unsafe for hardware or network models (e.g. tclab). Now neither `fmugen build` nor `fmugen init` runs it: `init` reads the source code, and only calls the model with `--probe` |
 | 7 | 🟡 Medium | Some inference gaps reduce the "works on any model" coverage (see §4) |
-| 8 | 🟡 Medium | An 89 MB `.git` history (the removed `unifmu.exe` and binaries are still in it). `.idea/` is tracked even though `.gitignore` lists it |
+| 8 | 🟢 Partly fixed | `.idea/` is no longer tracked, and `tools/unifmu.exe` is removed from the `tomas` branch history (not pushed yet). The pack is still large because of old generated `.fmu`/`.zip` files and a 71 MB `unifmu.so` in early commits on `main` |
 | 9 | 🟢 Low | Builds are not reproducible (random GUID and current timestamp), there is no CI, and a few docstrings are stale |
 | 10 | 🟠 High | **UniFMU 0.14 crashes when the FMU's Python prints more than about 4 KB**, and the importer hangs forever. Worked around with `build --capture-output` (§5.7); still needs an upstream fix |
 
@@ -223,8 +223,8 @@ Gaps:
 
 ## 7. Repository hygiene and documentation
 
-- `.git` is 89 MB, mostly the removed `tools/unifmu.exe` and UniFMU binaries. Consider rewriting history (`git filter-repo`) before going public so clones stay small.
-- `.idea/` is partly tracked even though `.gitignore` lists it. Remove it with `git rm -r --cached .idea`.
+- `.git` is 91 MB (a 75 MB pack). ✅ `tools/unifmu.exe` (23 MB) was removed from every commit of `tomas` with `git filter-branch` (same final tree, `main` untouched); it takes effect for others only after a force-push of `tomas`. Most of the size is older: seven generated `.fmu`/`.zip` files of ~26 MB and a 71 MB `FMUs/ORIGINAL.fmu/binaries/linux64/unifmu.so` in early commits shared with `main`. Removing those means rewriting `main` too, or publishing from a fresh history.
+- ✅ `.idea/` is no longer tracked (`git rm -r --cached .idea`); the files stay local and ignored.
 - `image.png` (75 KB) at the root isn't referenced obviously. Move it to `docs/img/` or delete it.
 - `.gitignore`: add `.venv/`, `dist/`, `build/`, `*.egg-info`, `.pytest_cache/`, `*.fmu` (outside examples).
 - The `src/fmugen/__init__.py` docstring still says "UniFMU (FMI 2.0 Co-Simulation) FMUs". Update it for FMI 3. Also expose `__version__`.
