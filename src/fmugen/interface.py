@@ -10,6 +10,7 @@ fmugen.toml) plus comments explaining each guess; `render_toml()` writes it out 
 user to review. `fmugen build model.py` runs the same inference in memory.
 """
 import ast
+import contextlib
 import dataclasses
 import enum
 import importlib
@@ -66,7 +67,19 @@ def infer_config(target, call=None, config_dir=None, fmi_version=None, starts=No
     `create` names a classmethod that builds the object (e.g. "from_pretrained").
     `probe`: also call the model once (setup, construction, one step); otherwise it is never called.
     `converts` ({argument: "module:function" or "numpy"}) sets how arguments are passed in.
+
+    The model is imported (and probed) in config_dir, as it will run inside the FMU with
+    [model] cwd, so files it opens by a relative path are found.
     """
+    path, module_name, name = parse_target(target)
+    config_dir = Path(config_dir or (path.parent if path else ".")).resolve()
+    if path:
+        target = f"{path.resolve()}" + (f":{name}" if name else "")
+    with contextlib.chdir(config_dir):
+        return _infer_config(target, call, config_dir, fmi_version, starts, setup, kind, create, probe, converts)
+
+
+def _infer_config(target, call, config_dir, fmi_version, starts, setup, kind, create, probe, converts):
     arrays = True   # FMI 2 writes arrays as one scalar per element; see _fmi2_types
     starts = dict(starts or {})
     if fmi_version != 3:
@@ -79,7 +92,6 @@ def infer_config(target, call=None, config_dir=None, fmi_version=None, starts=No
     except ImportError as e:
         raise InterfaceError(f"cannot import {target}: {e} (is it installed in this environment?)") from e
     entry = _pick_entry(module, name)
-    config_dir = Path(config_dir or (path.parent if path else ".")).resolve()
 
     if path:
         rel = Path(path).resolve().relative_to(config_dir).as_posix()
@@ -111,6 +123,7 @@ def infer_config(target, call=None, config_dir=None, fmi_version=None, starts=No
         if call or create:
             raise InterfaceError("--call and --create only apply to classes")
         _infer_function(entry, data, comments, **options)
+    _add_data_files(data, comments, config_dir, Path(path).resolve() if path else None)
     if fmi_version == 3:
         _rename_reserved(data, comments, is_class="call" in data["model"] or inspect.isclass(entry))
     else:
@@ -200,6 +213,42 @@ def _local_sources(entry_file, config_dir):
     return sorted(sources)
 
 
+def _add_data_files(data, comments, config_dir, entry_file):
+    """Files next to the config that the model opens by a relative path, found as string start
+    values (a file name argument) or string literals in the entry file: copied with `sources`, and
+    `cwd = "."` so the model finds them inside the FMU."""
+    texts = [info["start"] for section in ("parameters", "inputs") for info in data.get(section, {}).values()
+             if isinstance(info.get("start"), str)]
+    texts += [c["python"] for table in ("constants", "call_constants")
+              for c in data["model"].get(table, {}).values() if isinstance(c, dict) and "python" in c]
+    if entry_file is not None:
+        try:
+            tree = ast.parse(entry_file.read_text(encoding="utf-8"))
+            texts += [n.value for n in ast.walk(tree) if isinstance(n, ast.Constant) and isinstance(n.value, str)]
+        except (OSError, SyntaxError, UnicodeDecodeError):
+            pass
+    sources = data["model"].get("sources", [])
+    found = []
+    for text in dict.fromkeys(t.strip("'\"") for t in texts):
+        if not text or len(text) > 255 or "\n" in text or Path(text).is_absolute():
+            continue
+        try:
+            file = (config_dir / text).resolve()
+            is_file = file.is_file()
+        except (OSError, ValueError):
+            continue
+        if not is_file or not file.is_relative_to(config_dir) or file.suffix == ".py" or file == entry_file:
+            continue
+        rel = file.relative_to(config_dir).as_posix()
+        if not any(rel == s or rel.startswith(f"{s}/") for s in sources + found):
+            found.append(rel)
+    if found:
+        data["model"]["sources"] = sources + found
+        data["model"]["cwd"] = "."
+        comments[("model", "cwd")] = (f"the model opens {', '.join(found)} by a relative path: "
+                                      "they are copied into the FMU and the model runs in that folder")
+
+
 def _pick_entry(module, name):
     if name:
         if not hasattr(module, name):
@@ -234,8 +283,7 @@ def _infer_function(fn, data, comments, arrays=False, starts=None, probe=False, 
         except Exception as e:
             comments[("outputs", None)] = f"probe call failed ({e!r}); outputs below are read from the code"
         else:
-            _outputs_from_return(result, data, comments, default_name="y", is_class=False, arrays=arrays)
-            seen = set(result) if isinstance(result, Mapping) else set(data.get("outputs", {}))
+            seen = _outputs_from_return(result, data, comments, default_name="y", is_class=False, arrays=arrays)
             returned_names |= seen
     if inspect.isclass(fn):   # kind = "function": the new object is the result; its constructor sets the outputs
         kinds = static.class_attributes(fn, "__init__")[0]
@@ -358,8 +406,9 @@ def _probe_class(cls, method_name, data, comments, arrays, call_starts, create, 
     after = _numeric_attributes(obj, arrays)
     _check_picklable(obj, data, comments)
 
+    returned = set()
     if result is not None and result is not obj:
-        _outputs_from_return(result, data, comments, default_name="y", is_class=True, arrays=arrays)
+        returned = _outputs_from_return(result, data, comments, default_name="y", is_class=True, arrays=arrays)
     taken = {*data.get("parameters", {}), *data.get("inputs", {}), *data.get("outputs", {})}
     for attr, value in _property_values(obj, arrays).items():   # read-only views such as T1 = sensor reading
         if attr not in taken:
@@ -375,7 +424,6 @@ def _probe_class(cls, method_name, data, comments, arrays, call_starts, create, 
         elif not _same(before[attr], value):
             data.setdefault("locals", {})[attr] = _typed({}, value, arrays)
             comments[("locals", attr)] = f"changed by {method_name}()"
-    returned = set(result) if isinstance(result, Mapping) else set()
     return obj, returned, set(getattr(obj, "__dict__", {})) | set(_property_values(obj, arrays))
 
 
@@ -893,6 +941,8 @@ def _typed(info, value, arrays=False):
 
 
 def _outputs_from_return(result, data, comments, default_name, is_class, arrays=False):
+    """Outputs from a probe result. Returns the names of the parts it looked at (dict keys,
+    tuple positions y0, y1, ...), also those left out because they aren't FMI values."""
     outputs = data.setdefault("outputs", {})
     if isinstance(result, Mapping):
         items = [(str(k), v, f"return:{k}") for k, v in result.items()]
@@ -910,6 +960,7 @@ def _outputs_from_return(result, data, comments, default_name, is_class, arrays=
         items = [(k, v, f"return:{k}") for k, v in vars(result).items() if not k.startswith("_")]
     else:
         items = []
+    looked_at = {name for name, _, _ in items}
     items = [leaf for name, value, source in items for leaf in _nested(name, value, source, arrays)]
     taken = {n for section in ("parameters", "inputs", "states") for n in data.get(section, {})}
     for name, value, source in items:
@@ -923,6 +974,7 @@ def _outputs_from_return(result, data, comments, default_name, is_class, arrays=
         outputs[name] = _typed(info, value, arrays)
     if not outputs:
         data.pop("outputs")
+    return looked_at
 
 
 MAX_NESTING = 4

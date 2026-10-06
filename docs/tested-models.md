@@ -99,6 +99,7 @@ These runs were made while `init` always called the model, which is now `init --
 | `highway_env…highway_env:HighwayEnv` | class, `step(action)`, nested `info` dict (`rewards.*`) | `--fmi 3 --call step --setup reset --start action=1 --probe`, then `setup = ["reset(seed=0)"]` | — | ✓ |
 | `pvlib.solarposition:get_solarposition` | function of a date-time returning a one-row DataFrame | `--start latitude=40.4 --start longitude=-3.7 --probe`, then `time = { source = "end_time", epoch = "…" }` | ✓ | ✓ |
 | `pythermalcomfort…sports_heat_stress_risk` | function with a dataclass argument (`sport: _SportsValues`) | `--start tdb=35.0 … --start sport.clo=0.37 --start sport.met=7.5 --start sport.vr=2.0 --start sport.duration=60 --probe` | ✓ | ✓ |
+| `pvlib.iotools:read_tmy3` | function opening a data file by a relative path (pvlib's own `723170TYA.CSV`) | `--start filename=proj/723170TYA.CSV --probe` (writes `sources` and `cwd`) | ✓ | ✓ |
 
 Each `--start` takes one `NAME=VALUE`; the table groups several per row for brevity.
 
@@ -205,6 +206,7 @@ Passing `fmpy validate` and `fmpy simulate` shows the FMU is well-formed and run
 
 - **Dynamic models over time:**
   - **pythermalcomfort heat stress:** with the fields of `Sports.RUNNING` and `Sports.GOLF` as inputs (38 °C air, 40 °C radiant, 30 % RH), the risk level and the three thresholds are identical to calling `sports_heat_stress_risk` with those `Sports` values, in FMI 2 and 3.
+  - **pvlib TMY3 file:** run from another folder, the station metadata (latitude 36.1, longitude −79.95, altitude 273 m, time zone −5) is identical to `read_tmy3` called directly, in FMI 2 and 3. The same FMU without `cwd` fails with `FileNotFoundError`.
   - **pvlib solar position:** Madrid, 21 June 2026 06:00–10:00 UTC, hourly: zenith, azimuth, elevation and equation of time are identical to `get_solarposition` called directly, in FMI 2 and 3.
   - **highway-env:** with `reset(seed=0)`, the reward and the nested `info` values (`y4.speed`, `y4.crashed`, `y4.rewards.*`) are identical to stepping the environment directly, at every step.
   - **TCLab:** at 50 % heater power, T1 rises from 21 °C to 50 °C in 10 minutes, and T2 warms to 26 °C through thermal coupling.

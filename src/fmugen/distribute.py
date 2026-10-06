@@ -102,9 +102,20 @@ def compile_fmu(compiler, resources, interface, work):
         raise InterfaceError(f"--compile {compiler} failed:\n{result.stdout[-4000:]}{result.stderr[-4000:]}")
 
     for item in resources.iterdir():
-        if item.name not in KEEP_AFTER_COMPILE:
+        if item.name == MODEL_DIR and interface.get("cwd"):
+            _remove_code(item)   # the model reads its data files from here ([model] cwd)
+        elif item.name not in KEEP_AFTER_COMPILE:
             shutil.rmtree(item) if item.is_dir() else item.unlink()
     shutil.move(str(built), str(resources / EXE_DIR))
+
+
+def _remove_code(folder):
+    """Delete the Python files of a folder (they are inside the executable), keeping its data files."""
+    for file in sorted(folder.rglob("*"), key=lambda p: len(p.parts), reverse=True):
+        if file.is_dir() and file.name == "__pycache__":
+            shutil.rmtree(file)
+        elif file.is_file() and file.suffix in (".py", ".pyc"):
+            file.unlink()
 
 
 def compiled_launch_command(system):

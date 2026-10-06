@@ -256,6 +256,22 @@ Both import styles work:
 
 `fmugen init` fills `sources` from the local modules the model actually imported.
 
+### Data files
+
+A model that opens files by a relative path (`open("data/weather.csv")`, `pd.read_csv("prices.csv")`, a file name passed as an argument) would look for them in whatever folder the importer runs in. List the files in `sources` and set `cwd`:
+
+```toml
+[model]
+entry = "pvlib.iotools:read_tmy3"
+sources = ["proj/723170TYA.CSV"]
+cwd = "."                       # the model runs in the FMU's copy of the config folder
+
+[inputs]
+filename = { start = "proj/723170TYA.CSV" }
+```
+
+`fmugen init` writes both when a string literal in the model's file, or a `--start` value, names a file next to `fmugen.toml`. `init` itself also runs in that folder.
+
 Some module names are already taken by UniFMU's backend and fmugen: `model`, `backend`, `main`, `abstract_backend`, `schemas` and `fmugen_runtime`. Your entry module can't use them; rename the file.
 
 ---

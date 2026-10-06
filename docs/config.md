@@ -33,7 +33,8 @@ Unknown keys are rejected with an error, so typos don't go unnoticed. Keys marke
 | `name` | string | the entry's name | `modelName` in `modelDescription.xml`. `fmugen build --name` overrides it. |
 | `description` | string | first line of the entry's docstring, else the module's | `description` in `modelDescription.xml`. |
 | `author` | string | `""` | `author` in `modelDescription.xml`. `fmugen build --author` overrides it. |
-| `sources` | list of strings | `[]` | Extra files and directories to copy into the FMU, keeping their paths. A file entry is always copied. |
+| `sources` | list of strings | `[]` | Extra files and directories to copy into the FMU, keeping their paths. A file entry is always copied. Data files (CSV, EPW, JSON, …) too. |
+| `cwd` | string | none | A folder, relative to `fmugen.toml`, that the model's code runs in (its working directory), inside the FMU's copy of `sources`. For models that open files by a relative path, such as `open("data/weather.csv")`: use `"."` and list the files in `sources`. It applies to the import, setup, construction and every call, and the importer's working directory is put back afterwards. `fmugen init` sets both when a string in the model or a `--start` value names a file next to the config. |
 | `requirements` | list of strings | `[]` | pip requirement specifiers the model needs at runtime. See [packaging.md](packaging.md#the-fmus-python-environment). |
 | `kind` | `"function"` | none | Treat a class as a function: construct it with the inputs on every step and read outputs from the new object (`return:<attr>`). For classes whose constructor does all the work. |
 | `create` | classmethod name | none | Classes only: build the object with this classmethod instead of calling the class, e.g. `"from_pretrained"`. Parameters bound to `init:` (the default) become its arguments. For models loaded from saved weights or files. |

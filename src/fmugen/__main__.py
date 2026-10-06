@@ -189,7 +189,10 @@ def build(target, output, model_name=None, author=None, output_format="fmu", cal
         )
         module, sys_path = config.entry_import()
 
-        with isolated_imports():
+        cwd = config.model_cwd()
+        if cwd:
+            (resources / cwd).mkdir(parents=True, exist_ok=True)
+        with isolated_imports(), contextlib.chdir(resources / cwd if cwd else Path.cwd()):
             setup_sys_path({"sys_path": sys_path}, resources)
             try:
                 entry_obj = getattr(importlib.import_module(module), config.entry_name)
