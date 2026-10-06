@@ -439,30 +439,37 @@ def _save_state(model):
 
 
 def parse_call(text):
-    """'module:function(arg, ...)' or 'method(arg, ...)' -> {call, args}.
+    """'module:function(arg, ..., key=arg, ...)' or 'method(...)' -> {call, args, kwargs}.
 
     Arguments are Python literals or dotted references to importable objects
     (e.g. psychrolib.SI); references are resolved when the FMU initializes.
     """
     import ast
+
+    def argument(node):
+        try:
+            value = ast.literal_eval(node)
+            return value if isinstance(value, (bool, int, float, str)) else {"python": ast.unparse(node)}
+        except ValueError:
+            if not isinstance(node, (ast.Attribute, ast.Name)):
+                raise InterfaceError(f"[model] setup {text!r}: arguments must be literals or names")
+            return {"ref": ast.unparse(node)}
+
     call, paren, rest = text.partition("(")
-    args = []
+    args, kwargs = [], {}
     if paren:
         if not rest.endswith(")"):
             raise InterfaceError(f"[model] setup {text!r}: missing ')'")
         try:
-            nodes = ast.parse(f"_({rest}", mode="eval").body.args
+            parsed = ast.parse(f"_({rest}", mode="eval").body
         except SyntaxError as e:
             raise InterfaceError(f"[model] setup {text!r}: {e.msg}") from e
-        for node in nodes:
-            try:
-                value = ast.literal_eval(node)
-                args.append(value if isinstance(value, (bool, int, float, str)) else {"python": ast.unparse(node)})
-            except ValueError:
-                if not isinstance(node, (ast.Attribute, ast.Name)):
-                    raise InterfaceError(f"[model] setup {text!r}: arguments must be literals or names")
-                args.append({"ref": ast.unparse(node)})
-    return {"call": call.strip(), "args": args}
+        args = [argument(node) for node in parsed.args]
+        for keyword in parsed.keywords:
+            if keyword.arg is None:
+                raise InterfaceError(f"[model] setup {text!r}: **kwargs is not supported")
+            kwargs[keyword.arg] = argument(keyword.value)
+    return {"call": call.strip(), "args": args, "kwargs": kwargs}
 
 
 def _setup(steps, is_class):

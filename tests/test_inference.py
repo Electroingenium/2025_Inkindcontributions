@@ -6,7 +6,7 @@ import pytest
 
 from conftest import EXAMPLES
 from fmugen.__main__ import init, isolated_imports
-from fmugen.config import Config, InterfaceError, load_config
+from fmugen.config import Config, InterfaceError, load_config, parse_call
 from fmugen.interface import infer_config, render_toml
 
 
@@ -318,3 +318,12 @@ def test_int_results_are_real_with_a_note(tmp_path):
     data, comments = infer(tmp_path / "m.py")
     assert data["outputs"]["count"] == {} and "Integer" in comments[("outputs", "count")]
     assert ("outputs", "y") not in comments
+
+
+def test_setup_call_keeps_keyword_arguments():
+    # setup = ["reset(seed=0)"] must seed the reset, not call reset() (Gymnasium envs)
+    assert parse_call("reset(seed=0)") == {"call": "reset", "args": [], "kwargs": {"seed": 0}}
+    assert parse_call("psychrolib:SetUnitSystem(psychrolib.SI, strict=True)") == {
+        "call": "psychrolib:SetUnitSystem", "args": [{"ref": "psychrolib.SI"}], "kwargs": {"strict": True}}
+    with pytest.raises(InterfaceError, match=r"\*\*kwargs"):
+        parse_call("reset(**opts)")
