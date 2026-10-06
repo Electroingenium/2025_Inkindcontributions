@@ -359,3 +359,16 @@ def test_build_does_not_run_the_model(tmp_path, make_fmu):
     ''')
     fmu_dir = make_fmu(tmp_path)
     assert 'canGetAndSetFMUstate="false"' in (fmu_dir / "modelDescription.xml").read_text()
+
+
+@pytest.mark.parametrize("text, expected", [("true", True), ("False", False), (" 1 ", True), ("0", False),
+                                            ("yes", True), ("off", False)])
+def test_boolean_from_strings(text, expected):
+    from fmugen.templates.fmugen_runtime import coerce
+    assert coerce("Boolean", text) is expected
+
+
+def test_boolean_from_unknown_string_is_an_error():
+    from fmugen.templates.fmugen_runtime import coerce
+    with pytest.raises(ValueError):
+        coerce("Boolean", "maybe")
