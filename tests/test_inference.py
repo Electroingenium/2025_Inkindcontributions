@@ -177,3 +177,28 @@ def test_optional_from_typing_objects():
     assert unwrap_optional(typing.Optional[bool]) is bool
     assert unwrap_optional(int | None) is int
     assert unwrap_optional(int | str) == int | str
+
+
+def test_number_like_outputs_are_kept(tmp_path):
+    (tmp_path / "nums.py").write_text(textwrap.dedent("""
+        from decimal import Decimal
+        from fractions import Fraction
+        import numpy
+        def f(x: float = 1.0):
+            return {"d": Decimal("1.5"), "q": Fraction(1, 3), "h": numpy.float16(2.0), "c": 1j}
+    """))
+    data, _ = infer(tmp_path / "nums.py")
+    assert list(data["outputs"]) == ["d", "q", "h"]   # complex is not an FMI value
+
+
+def test_pint_outputs_get_their_unit(tmp_path):
+    pytest.importorskip("pint")
+    (tmp_path / "q.py").write_text(textwrap.dedent("""
+        import pint
+        u = pint.get_application_registry()
+        def f(x: float = 1.0):
+            return {"v": u.Quantity(x, "m/s"), "n": u.Quantity(2.0, "")}
+    """))
+    data, _ = infer(tmp_path / "q.py")
+    assert data["outputs"]["v"]["unit"] == "m/s"
+    assert "unit" not in data["outputs"]["n"]

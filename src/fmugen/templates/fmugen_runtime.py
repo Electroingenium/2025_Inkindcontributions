@@ -79,7 +79,7 @@ class Engine:
         }
         self.constants = {k: resolve_constant(v) for k, v in self.interface.get("constants", {}).items()}
         self.call_constants = {k: resolve_constant(v) for k, v in self.interface.get("call_constants", {}).items()}
-        self.converters = {v["name"]: resolve_reference(v["convert"]) for v in self.variables if v.get("convert")}
+        self.converters = {v["name"]: converter(v) for v in self.variables if v.get("convert")}
         self.reset()
         self._forward_output()   # e.g. warnings printed while the model was imported
 
@@ -566,7 +566,7 @@ class Engine:
                 return list(enum).index(value) + 1
         if value is None:
             raise TypeError(f"{var['name']} is None")
-        return coerce(var["type"], value)
+        return coerce(var["type"], plain_number(value, var.get("unit")))
 
     def _run_setup(self, after_construction):
         """[model] setup: "module:function" calls run before construction, method names after it."""
@@ -816,6 +816,22 @@ def call_reference(text):
             return resolve_reference(ast.unparse(node))
 
     return resolve_reference(target)(*[value(a) for a in args], **{k: value(v) for k, v in kwargs.items()})
+
+
+def converter(var):
+    """The function applied to a value before the model gets it (`convert`)."""
+    if var["convert"] == "pint":   # a quantity in the variable's unit, from pint's application registry
+        import pint
+        registry, unit = pint.get_application_registry(), var.get("unit", "")
+        return lambda value: registry.Quantity(value, unit)
+    return resolve_reference(var["convert"])
+
+
+def plain_number(value, unit=None):
+    """A pint quantity (anything with .magnitude and .units) as a number, in `unit` when given."""
+    if hasattr(value, "magnitude") and hasattr(value, "units"):
+        return value.m_as(unit) if unit and hasattr(value, "m_as") else value.magnitude
+    return value
 
 
 def get_path(obj, path):

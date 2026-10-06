@@ -94,6 +94,8 @@ These runs were made while `init` always called the model, which is now `init --
 | `gymnasium…pendulum:PendulumEnv` | class, array action, setup | `--fmi 3 --call step --setup reset --start "u=[0.5]"` | ✗ array input | ✓ |
 | `ahrs.filters:Madgwick` | class, `updateIMU(q, gyr, acc)` arrays | `--fmi 3 --call updateIMU --start "q=[1.0, 0.0, 0.0, 0.0]" "gyr=[0.0, 0.0, 0.01]" "acc=[0.0, 0.0, 9.81]"` | ✗ array input | ✓ |
 | `ahrs.filters:Mahony` | as Madgwick | as Madgwick | ✗ array input | ✓ |
+| `fluids.units:Reynolds` | function taking and returning pint quantities | hand-written: `convert = "pint"` and a `unit` on each input ([below](#what-was-checked)) | ✓ | ✓ |
+| `fluids.units:head_from_P` | as `Reynolds`, dimensional output | as `Reynolds`, output `unit = "cm"` | — | ✓ |
 
 Each `--start` takes one `NAME=VALUE`; the table groups several per row for brevity.
 
@@ -195,6 +197,8 @@ Passing `fmpy validate` and `fmpy simulate` shows the FMU is well-formed and run
   | fluids `Reynolds` | V = 1 m/s, D = 0.1 m, ρ = 1000, μ = 0.001 | 1.0 × 10⁵ | ρVD/μ |
   | fluids `friction_factor` | Re = 10⁵, smooth pipe | 0.0180 | Moody chart |
   | ht `Nu_conv_internal` | Re = 10⁴, Pr = 0.7 | 30.3 | turbulent pipe-flow correlations |
+  | fluids.units `Reynolds` | V = 5 m/s, D = 0.25 m, ρ = 1.1613 kg/m³, μ = 1.9 × 10⁻⁵ Pa·s | 76401.3 | `fluids.units.Reynolds` called directly with the same quantities |
+  | fluids.units `head_from_P` | P = 100 kPa, ρ = 1000 kg/m³, output in cm | 1019.7 cm | 10.197 m from `fluids.units` directly |
 
 - **Dynamic models over time:**
   - **TCLab:** at 50 % heater power, T1 rises from 21 °C to 50 °C in 10 minutes, and T2 warms to 26 °C through thermal coupling.
