@@ -1004,6 +1004,9 @@ def _outputs_from_return(result, data, comments, default_name, is_class, arrays=
         # from = "return:<name>" is the default for functions
         info = {} if source == f"return:{name}" and not is_class else {"from": source}
         outputs[name] = _typed(info, value, arrays)
+        scalar = _scalar_of(value)
+        if isinstance(scalar, int) and not isinstance(scalar, bool) and "type" not in outputs[name]:
+            comments[("outputs", name)] = 'an int in the probe; Real, since results often vary: type = "Integer" if it is a count'
     if not outputs:
         data.pop("outputs")
     return looked_at

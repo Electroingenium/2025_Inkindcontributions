@@ -307,3 +307,14 @@ def test_pydantic_and_attrs_arguments(tmp_path, library):
     data, _ = infer(f"{tmp_path / 'm.py'}:f", starts={"u.T": 1.5})
     assert data["inputs"] == {"u_T": {"start": 1.5, "to": "arg:u.T"}, "u_n": {"start": 2, "to": "arg:u.n"}}
     assert data["outputs"] == {"y": {"from": "return"}}
+
+
+
+def test_int_results_are_real_with_a_note(tmp_path):
+    (tmp_path / "m.py").write_text(textwrap.dedent("""
+        def f(x: float = 1.0):
+            return {"count": 3, "y": x}
+    """))
+    data, comments = infer(tmp_path / "m.py")
+    assert data["outputs"]["count"] == {} and "Integer" in comments[("outputs", "count")]
+    assert ("outputs", "y") not in comments
