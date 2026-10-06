@@ -351,9 +351,11 @@ def normalize(config, entry_obj, module_name, sys_path, model_name=None, author=
             raise InterfaceError("FMI 3 reserves the variable name 'time' for the independent variable; rename it")
         variables.append({"name": "time", "causality": "independent", "variability": "continuous",
                           "type": "Float64", "description": "Simulation time"})
-    for vr, var in enumerate(variables):
+    vr = 0
+    for var in variables:
         var["valueReference"] = vr
-    for vr, clock in enumerate(clocks, start=len(variables)):
+        vr += element_count(var) if version == 2 else 1   # FMI 2: an array takes one reference per element
+    for vr, clock in enumerate(clocks, start=vr):
         clock["valueReference"] = vr
 
     inputs = {v["name"] for v in variables if v["causality"] == "input"}
@@ -531,6 +533,14 @@ def _clock(name, info, entry_obj, is_class, time_args):
     return clock
 
 
+def element_count(var):
+    """Number of elements of a fixed-size array variable (1 for a scalar)."""
+    n = 1
+    for d in var.get("dimensions", ()):
+        n *= d
+    return n
+
+
 def _variable(section, causality, name, info, is_class, type_definitions, version=2, structural=(), clocks=()):
     where = f"[{section}] {name}"
     parts = name.split(".") if section in ("outputs", "locals") else [name]   # outputs may be "zone.T"
@@ -545,9 +555,7 @@ def _variable(section, causality, name, info, is_class, type_definitions, versio
     var = {"name": name, "causality": causality, "type": fmi_type}
     is_float = fmi_type in FLOAT_TYPES
 
-    if "dimensions" in info:
-        if version == 2:
-            raise InterfaceError(f"{where}: arrays (dimensions) {FMI3_ONLY}")
+    if "dimensions" in info:   # FMI 2 has no arrays: one scalar variable per element, x[1], x[2], ...
         dims = info["dimensions"]
         if section == "structural_parameters":
             raise InterfaceError(f"{where}: structural parameters are scalars")

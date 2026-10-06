@@ -92,7 +92,7 @@ These runs were made while `init` always called the model, which is now `init --
 | `tclab:TCLabModel` | class, `update(t)`, properties, setter methods | — (heater input: [`to = "call:Q1"`](models.md#setter-methods-and-properties) by hand) | ✓ | ✓ |
 | `gymnasium…cartpole:CartPoleEnv` | class, `step(action)`, setup, tuple result | `--call step --setup reset --start action=1` | ✓ (no observation output: it is an array) | ✓ |
 | `gymnasium…pendulum:PendulumEnv` | class, array action, setup | `--fmi 3 --call step --setup reset --start "u=[0.5]"` | ✗ array input | ✓ |
-| `ahrs.filters:Madgwick` | class, `updateIMU(q, gyr, acc)` arrays | `--fmi 3 --call updateIMU --start "q=[1.0, 0.0, 0.0, 0.0]" "gyr=[0.0, 0.0, 0.01]" "acc=[0.0, 0.0, 9.81]"` | ✗ array input | ✓ |
+| `ahrs.filters:Madgwick` | class, `updateIMU(q, gyr, acc)` arrays | `--fmi 3 --call updateIMU --start "q=[1.0, 0.0, 0.0, 0.0]" "gyr=[0.0, 0.0, 0.01]" "acc=[0.0, 0.0, 9.81]"` | ✓ (rerun: arrays are one scalar per element, `q[1]` … `q[4]`) | ✓ |
 | `ahrs.filters:Mahony` | as Madgwick | as Madgwick | ✗ array input | ✓ |
 | `fluids.units:Reynolds` | function taking and returning pint quantities | hand-written: `convert = "pint"` and a `unit` on each input ([below](#what-was-checked)) | ✓ | ✓ |
 | `fluids.units:head_from_P` | as `Reynolds`, dimensional output | as `Reynolds`, output `unit = "cm"` | — | ✓ |
@@ -206,7 +206,7 @@ Passing `fmpy validate` and `fmpy simulate` shows the FMU is well-formed and run
   - **pvlib solar position:** Madrid, 21 June 2026 06:00–10:00 UTC, hourly: zenith, azimuth, elevation and equation of time are identical to `get_solarposition` called directly, in FMI 2 and 3.
   - **highway-env:** with `reset(seed=0)`, the reward and the nested `info` values (`y4.speed`, `y4.crashed`, `y4.rewards.*`) are identical to stepping the environment directly, at every step.
   - **TCLab:** at 50 % heater power, T1 rises from 21 °C to 50 °C in 10 minutes, and T2 warms to 26 °C through thermal coupling.
-  - **Madgwick:** with `q` [fed back as a state](models.md#what-fmugen-init-infers), turning at 0.1 rad/s for 10 s gives q = [0.878, 0, 0, 0.478]. The analytic value is [0.878, 0, 0, 0.479].
+  - **Madgwick:** with `q` [fed back as a state](models.md#what-fmugen-init-infers), turning at 0.1 rad/s for 10 s gives q = [0.878, 0, 0, 0.479], the analytic value. Rerun after FMI 2 got arrays: FMI 2 and FMI 3 both give exactly what calling `updateIMU` 1000 times directly gives.
   - **CartPole and Pendulum:** their observations evolve step by step.
   - **GH filter:** it tracks its input.
 - **Results not checked:** the pvlib and chemicals runs used only the code defaults (zeros where there are none), so they show that the FMUs run, not that the numbers mean anything.

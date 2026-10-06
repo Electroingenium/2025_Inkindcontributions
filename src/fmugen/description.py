@@ -1,4 +1,5 @@
 """modelDescription.xml (FMI 2.0 or 3.0 Co-Simulation) from a fmugen interface spec."""
+import itertools
 import math
 import uuid
 import xml.etree.ElementTree as ET
@@ -51,7 +52,7 @@ def build_model_description(interface, model_name=None, author=None):
         "author": interface.get("author", "") if author is None else author,
         "generationTool": "fmugen + unifmu",
         "generationDateAndTime": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "variableNamingConvention": "flat",
+        "variableNamingConvention": "structured" if any(v.get("dimensions") for v in variables) else "flat",
     })
 
     ET.SubElement(root, "CoSimulation", {
@@ -93,12 +94,14 @@ def build_model_description(interface, model_name=None, author=None):
         ET.SubElement(root, "DefaultExperiment", experiment_attrs)
 
     model_variables = ET.SubElement(root, "ModelVariables")
-    index_of = {}
-    for index, var in enumerate(variables, start=1):
-        index_of[var["name"]] = index
+    index_of = {}   # name -> indexes of its ScalarVariables (several for an array)
+    index = 0
+    for var, element, name in _scalars(variables):
+        index += 1
+        index_of.setdefault(var["name"], []).append(index)
         attrs = {
-            "name": var["name"],
-            "valueReference": str(var["valueReference"]),
+            "name": name,
+            "valueReference": str(var["valueReference"] + element),
             "causality": var["causality"],
             "variability": var["variability"],
         }
@@ -120,7 +123,8 @@ def build_model_description(interface, model_name=None, author=None):
             if key in var:
                 type_attrs[key] = _format_value(var["type"], var[key])
         if "start" in var:
-            type_attrs["start"] = _format_value(var["type"], var["start"])
+            start = var["start"][element] if isinstance(var["start"], list) else var["start"]
+            type_attrs["start"] = _format_value(var["type"], start)
         ET.SubElement(scalar, var["type"], type_attrs)
 
     # Omitting "dependencies" means an output may depend on all inputs.
@@ -129,7 +133,8 @@ def build_model_description(interface, model_name=None, author=None):
     if outputs:
         outputs_el = ET.SubElement(structure, "Outputs")
         for var in outputs:
-            ET.SubElement(outputs_el, "Unknown", _unknown(var, index_of))
+            for index in index_of[var["name"]]:
+                ET.SubElement(outputs_el, "Unknown", _unknown(var, index, index_of))
     initial_unknowns = [
         v for v in variables
         if (v["causality"] == "output" and v.get("initial") != "exact")
@@ -137,19 +142,31 @@ def build_model_description(interface, model_name=None, author=None):
     ]
     if initial_unknowns:
         initial_el = ET.SubElement(structure, "InitialUnknowns")
-        for var in sorted(initial_unknowns, key=lambda v: index_of[v["name"]]):
-            ET.SubElement(initial_el, "Unknown", {"index": str(index_of[var["name"]])})
+        for index in sorted(i for v in initial_unknowns for i in index_of[v["name"]]):
+            ET.SubElement(initial_el, "Unknown", {"index": str(index)})
 
     tree = ET.ElementTree(root)
     ET.indent(tree, space="  ")
     return tree
 
 
-def _unknown(var, index_of):
-    attrs = {"index": str(index_of[var["name"]])}
+def _unknown(var, index, index_of):
+    attrs = {"index": str(index)}
     if "depends_on" in var:
-        attrs["dependencies"] = " ".join(str(index_of[name]) for name in var["depends_on"])
+        attrs["dependencies"] = " ".join(str(i) for name in var["depends_on"] for i in index_of[name])
     return attrs
+
+
+def _scalars(variables):
+    """(variable, element, name) for each FMI 2 ScalarVariable: an array x with dimensions [2, 3]
+    becomes x[1,1], x[1,2], ... x[2,3] (row-major, 1-based, FMI 2 "structured" naming)."""
+    for var in variables:
+        dims = var.get("dimensions")
+        if not dims:
+            yield var, 0, var["name"]
+            continue
+        for element, position in enumerate(itertools.product(*(range(1, d + 1) for d in dims))):
+            yield var, element, f"{var['name']}[{','.join(map(str, position))}]"
 
 
 LOG_CATEGORIES_FMI3 = [

@@ -27,7 +27,9 @@ def test_installed_class_with_time_argument():
     data, comments = infer("simple_pid:PID")
     assert data["time"] == {"dt": "step_size"}
     assert data["inputs"] == {"input_": {"start": 0.0}}
-    assert data["outputs"] == {"y": {"from": "return"}}
+    # components and tunings are 3-tuples: arrays, one scalar per element in FMI 2
+    assert data["outputs"] == {"y": {"from": "return"}, "components": {"dimensions": [3]},
+                               "tunings": {"dimensions": [3]}}
     assert data["parameters"]["Kp"] == {"start": 1.0}
     assert "tunable" in comments[("parameters", "Kp")]
     assert comments[("model", "constants.output_limits")] == {"python": "(None, None)"}
@@ -59,7 +61,7 @@ def test_rendered_config_round_trips(tmp_path):
     output, data = init(tmp_path / "tank.py")
     text = output.read_text()
     assert tomllib.loads(text)["model"] == {"entry": "tank.py:Tank", "call": "step"}
-    assert "# limits = { python = \"(0, 5)\" }" in text
+    assert tomllib.loads(text)["parameters"]["limits"] == {"dimensions": [2], "start": [0.0, 5.0]}
     assert data["outputs"] == {"y": {"from": "return"}, "overflow": {"type": "Boolean"}}
     assert data["locals"] == {"level": {}}
     assert load_config(output).entry_name == "Tank"
@@ -111,8 +113,10 @@ def test_fmi3_infers_arrays_binary_and_float32(tmp_path):
     assert data["outputs"]["out"] == {"type": "Float32"}
     assert "[clocks.sample]" in render_toml(data, comments)
 
-    data2, _ = infer(tmp_path / "filt.py")                     # FMI 2: no arrays
-    assert "weights" not in data2.get("parameters", {})
+    data2, comments2 = infer(tmp_path / "filt.py")              # FMI 2: arrays, but no Binary or Float32
+    assert data2["parameters"]["weights"] == {"dimensions": [3], "start": [0.5, 0.25, 0.25]}
+    assert "tag" not in data2["parameters"] and "--fmi 3" in comments2[("parameters", "#tag")]
+    assert data2["outputs"]["out"] == {}
 
 
 def test_start_setup_kind_and_errors(tmp_path):
@@ -150,8 +154,8 @@ def test_start_setup_kind_and_errors(tmp_path):
     assert data["model"]["kind"] == "function"
     assert data["inputs"] == {"T": {"start": 300.0}} and data["outputs"] == {"double": {}}
 
-    with pytest.raises(InterfaceError, match="arrays and bytes need --fmi 3"):
-        infer(f"{tmp_path / 'gh.py'}:Filter", starts={"x": [0.0, 1.0], "g": 0.5})
+    with pytest.raises(InterfaceError, match="bytes need --fmi 3"):
+        infer(f"{tmp_path / 'gh.py'}:Filter", starts={"x": b"", "g": 0.5})
     with pytest.raises(InterfaceError, match="not arguments"):
         infer(f"{tmp_path / 'gh.py'}:start", starts={"nope": 1.0})
 

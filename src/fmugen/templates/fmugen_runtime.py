@@ -65,6 +65,10 @@ class Engine:
         self.variables = self.interface["variables"]
         self.by_name = {v["name"]: v for v in self.variables}
         self.by_reference = {v["valueReference"]: v for v in self.variables}
+        # FMI 2 has no arrays: element k of an array has its own reference, the array's + k
+        self.elements = {} if self.interface.get("fmi_version") != 2 else {
+            v["valueReference"] + k: (v, k) for v in self.variables if v.get("dimensions")
+            for k in range(math.prod(v["dimensions"]))}
         self.clocks = {c["name"]: c for c in self.interface.get("clocks", [])}
         self.clock_by_reference = {c["valueReference"]: c for c in self.clocks.values()}
         self.events = self.interface.get("events", {})
@@ -252,6 +256,10 @@ class Engine:
         """Return (status, flat list of values)."""
         values = []
         for r in references:
+            if r in self.elements:
+                var, k = self.elements[r]
+                values.append(self.values[var["name"]][k])
+                continue
             var = self.by_reference.get(r)
             if var is None:
                 return self.error(f"unknown value reference {r}"), []
@@ -267,19 +275,22 @@ class Engine:
         values = list(values)
         cursor = 0
         for r in references:
-            var = self.by_reference.get(r)
+            var, element = self.elements.get(r, (self.by_reference.get(r), None))
             if var is None:
                 return self.error(f"unknown value reference {r}")
-            n = self.size(var)
+            n = self.size(var) if element is None else None
             if len(values) - cursor < (n or 1):
                 return self.error(f"not enough values for {var['name']}")
             raw = values[cursor:cursor + n] if n is not None else values[cursor]
             cursor += n or 1
+            if element is not None:   # one element of an FMI 2 array
+                current = self.values[var["name"]]
+                raw = [*current[:element], raw, *current[element + 1:]]
             problem = self._settable(var)
             if problem:
                 return self.error(f"{var['name']} ({var['causality']}) cannot be set {problem}")
             try:
-                value = [coerce(var["type"], x) for x in raw] if n is not None else coerce(var["type"], raw)
+                value = [coerce(var["type"], x) for x in raw] if isinstance(raw, list) else coerce(var["type"], raw)
             except (TypeError, ValueError) as e:
                 return self.error(f"{var['name']}: {e}")
             name = var["name"]
