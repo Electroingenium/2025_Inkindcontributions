@@ -4,7 +4,8 @@
 #
 # The FMU is built here, with fmugen installed in /opt/venv, so its launch.toml points at
 # /opt/venv/bin/python and the model's requirements are installed next to it.
-#   MODEL=examples/simple_pid        build another model (a folder with fmugen.toml)
+#   MODEL=examples/simple_pid        build another model (a folder with fmugen.toml),
+#                                    e.g. docker/models/cartpole
 #   FMUGEN_ARGS="--fmi 3"            extra `fmugen build` options
 #   PREBUILT=1                       use docker/model/model.fmu instead of building one;
 #                                    it must run on Linux (fmugen build --vendor ... or --compile on Linux)
@@ -27,6 +28,7 @@ COPY src /src/fmugen/src
 RUN pip install --no-cache-dir /src/fmugen
 
 COPY examples /src/examples
+COPY docker/models /src/docker/models
 COPY docker/model /src/docker/model
 COPY docker/build_fmu.py /src/docker/build_fmu.py
 RUN python /src/docker/build_fmu.py
