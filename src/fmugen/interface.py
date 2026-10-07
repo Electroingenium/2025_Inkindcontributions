@@ -565,6 +565,7 @@ def _add_attributes(cls, method_name, data, comments, arrays, probe, seen):
                                                  "uncomment if it is a number, or run init --probe")
 
 
+DATETIME_BY_NAME = ("init", "date-time by name")   # comments key (not rendered): [time] args only named like one
 START_ERRORS = ("init", "start errors")   # comments key (not rendered): {--start name: why it can't be used}
 
 
@@ -610,6 +611,46 @@ def _probe_constants(data, table):
 
 
 def _probe_call(fn, data, comments, constants_key="constants"):
+    """Call fn with the probe inputs (see _probe_once). Arguments taken as date-times only by their
+    name are checked: the call is also made with the number 0.0 there. Works only as a date-time:
+    confirmed; only as a number: an ordinary input instead; both or neither: left as a guess."""
+    guessed = [arg for arg in comments.get(DATETIME_BY_NAME, []) if isinstance(data.get("time", {}).get(arg), dict)]
+    if not guessed:
+        return _probe_once(fn, data, comments, constants_key)
+    try:
+        result, error = _probe_once(fn, data, comments, constants_key), None
+    except Exception as e:
+        result, error = None, e
+    for arg in guessed:
+        source = data["time"].pop(arg)
+        data.setdefault("inputs", {})[arg] = {"start": 0.0}
+        try:
+            number_result = _probe_once(fn, data, comments, constants_key)
+            number_ok = True
+        except Exception:
+            number_ok = False
+        if error is not None and number_ok:   # not a date-time: keep it an input
+            comments.pop(("time", arg), None)
+            comments[("inputs", arg)] = (f"its name {arg!r} suggests a date-time, but the probe failed with one "
+                                         "and worked with a number")
+            result, error = number_result, None
+            continue
+        del data["inputs"][arg]
+        if not data["inputs"]:
+            del data["inputs"]
+        data["time"][arg] = source
+        if error is None and not number_ok:
+            comments[("time", arg)] = comments[("time", arg)].replace(
+                f"taken as a date-time from its name {arg!r} (not annotated): check it, or replace this with an "
+                "input; ", "a date-time argument (the probe worked with one, not with a number): ")
+    if not data.get("time"):
+        data.pop("time", None)
+    if error is not None:
+        raise error
+    return result
+
+
+def _probe_once(fn, data, comments, constants_key="constants"):
     """Call fn with the probe inputs. If it fails and array inputs are plain lists, retry with them
     as numpy arrays, then torch tensors (when installed), and keep the first that works."""
     def call():
@@ -772,6 +813,8 @@ def _arguments(fn, section, data, comments, skip_self=False, allow_time=True, co
             time_args[p.name] = TIME_NAMES[p.name]
             continue
         how = _is_datetime(fn, p) if allow_time and p.name not in starts else None
+        if how == "name":
+            comments.setdefault(DATETIME_BY_NAME, []).append(p.name)
         if how:
             today = datetime.datetime.now(datetime.UTC).date().isoformat()
             time_args[p.name] = {"source": "end_time", "epoch": f"{today}T00:00:00"}   # naive: some models need it
