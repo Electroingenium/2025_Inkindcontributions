@@ -125,12 +125,20 @@ def isolated_imports():
     finally:
         added = [Path(p).resolve() for p in sys.path if p and p not in saved_path]
         sys.path[:] = saved_path
+        # Find every module to forget before deleting any: a namespace package's __path__
+        # looks its parent up in sys.modules when read, so it fails once the parent is gone
+        to_forget = []
         for name in set(sys.modules) - saved_modules:
             # Read __dict__, not getattr: lazy modules (e.g. transformers) import on attribute access
             attrs = getattr(sys.modules[name], "__dict__", {})
-            locations = [attrs.get("__file__"), *(attrs.get("__path__") or [])]
+            try:
+                locations = [attrs.get("__file__"), *(attrs.get("__path__") or [])]
+            except KeyError:  # a namespace path whose parent the model removed itself
+                locations = [attrs.get("__file__")]
             if any(loc and Path(loc).resolve().is_relative_to(p) for loc in locations for p in added):
-                del sys.modules[name]
+                to_forget.append(name)
+        for name in to_forget:
+            del sys.modules[name]
 
 
 def resolve_target(target, call=None, fmi_version=None, probe=False):
