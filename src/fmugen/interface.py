@@ -12,6 +12,7 @@ user to review. `fmugen build model.py` runs the same inference in memory.
 import ast
 import contextlib
 import dataclasses
+import datetime
 import enum
 import importlib
 import importlib.util
@@ -138,6 +139,13 @@ def _infer_config(target, call, config_dir, fmi_version, starts, setup, kind, cr
         - {str(info.get("to", "")).partition(":")[2].partition("[")[0]
            for sec in ("parameters", "inputs", "states") for info in data.get(sec, {}).values()}         - {str(info["to"]).partition(":")[2] for sec in ("parameters", "inputs", "states")
            for info in data.get(sec, {}).values() if "." in str(info.get("to", ""))}
+    fields = sorted(n for n in unused if "." in n)
+    if fields:
+        bases = sorted({n.partition(".")[0] for n in fields})
+        raise InterfaceError(
+            f"--start {', '.join(fields)}: cannot tell the class of {', '.join(bases)} (no default and no "
+            "dataclass, pydantic, attrs or namedtuple annotation) to build it from fields; give the whole "
+            "argument instead, e.g. --start=NAME=call:module:Class(...)")
     if unused:
         raise InterfaceError(f"--start names that are not arguments of the model: {sorted(unused)}")
     return data, comments
@@ -408,7 +416,8 @@ def _probe_class(cls, method_name, data, comments, arrays, call_starts, create, 
     try:
         _run_setup(data)
         build = factory or (getattr(cls, create) if create else cls)
-        obj = build(**_probe_constants(data, "constants"), **_probe_args(data, ("parameters",), build)[1])
+        args, kwargs = _probe_args(data, ("parameters",), build)
+        obj = build(*args, **_probe_constants(data, "constants"), **kwargs)
         _run_setup(data, obj)
     except Exception as e:
         comments[("outputs", None)] = f"probe construction failed ({e!r}); outputs below are read from the code"
@@ -582,6 +591,23 @@ def _probe_call(fn, data, comments, constants_key="constants"):
     try:
         return call()
     except Exception:
+        # A date-time epoch is naive (some models refuse time zones); others need one: retry in UTC
+        naive = [source for source in data.get("time", {}).values()
+                 if isinstance(source, dict) and datetime.datetime.fromisoformat(source["epoch"]).tzinfo is None]
+        if naive:
+            for source in naive:
+                source["epoch"] += "+00:00"
+            try:
+                result = call()
+            except Exception:
+                for source in naive:
+                    source["epoch"] = source["epoch"].removesuffix("+00:00")
+            else:
+                for arg, source in data["time"].items():
+                    if any(source is s for s in naive):
+                        comments[("time", arg)] = ("a date-time argument (in UTC: the probe failed without a time "
+                                                   "zone): the epoch plus the simulation time; check the epoch")
+                return result
         plain = [info for info in data.get("inputs", {}).values()
                  if "dimensions" in info and not info.get("numpy") and not info.get("convert")]
         if not plain:
@@ -654,7 +680,8 @@ def _assign_starts(init, method, starts):
     init_p, call_p = params(init), params(method)
     init_starts, call_starts = {}, {}
     for name, value in starts.items():
-        in_init, in_call = init_p.get(name), call_p.get(name)
+        base = name.partition(".")[0]   # ARG.FIELD goes where ARG goes
+        in_init, in_call = init_p.get(base), call_p.get(base)
         if in_init and in_call:
             target = init_starts if (in_init.default is in_init.empty and in_call.default is not in_call.empty) \
                 else call_starts
@@ -662,7 +689,7 @@ def _assign_starts(init, method, starts):
             target = init_starts if in_init else call_starts
         elif any(p.kind is p.VAR_KEYWORD for p in call_p.values()):
             target = call_starts
-        elif any(p.kind is p.VAR_KEYWORD for p in init_p.values()):
+        elif any(p.kind in (p.VAR_KEYWORD, p.VAR_POSITIONAL) for p in init_p.values()):
             target = init_starts
         else:
             continue  # reported as unused
@@ -715,6 +742,11 @@ def _arguments(fn, section, data, comments, skip_self=False, allow_time=True, co
         if allow_time and p.name in TIME_NAMES and p.name not in starts:
             time_args[p.name] = TIME_NAMES[p.name]
             continue
+        if allow_time and p.name not in starts and _is_datetime(fn, p):
+            today = datetime.datetime.now(datetime.UTC).date().isoformat()
+            time_args[p.name] = {"source": "end_time", "epoch": f"{today}T00:00:00"}   # naive: some models need it
+            comments[("time", p.name)] = "a date-time argument: the epoch plus the simulation time; check the epoch"
+            continue
         if isinstance(starts.get(p.name), dict) and "call" in starts[p.name]:
             data["model"].setdefault(constants_key, {})[p.name] = dict(starts[p.name])
             continue
@@ -757,22 +789,36 @@ def _arguments(fn, section, data, comments, skip_self=False, allow_time=True, co
         if p.kind is p.POSITIONAL_ONLY and len(variables) > before:
             variables[p.name]["to"] = f"pos:{position}"
             position += 1
-    if any(p.kind is p.VAR_KEYWORD for p in params):  # **kwargs: --start values become keyword arguments
-        names = {p.name for p in params}
-        for name, value in starts.items():
-            if name in names:
-                continue
-            if isinstance(value, SCALARS):
-                variables[name] = _type_info(value)
-            elif arrays and _array_info(value):
-                variables[name] = _array_info(value, with_start=True)
-            else:
-                raise InterfaceError(f"--start {name}: {value!r} is not an FMI value")
+    names = {p.name for p in params}
+    extra = [name for name in starts
+             if name not in names and "." not in name   # ARG.FIELD: a field of an object argument, not a keyword
+             and name not in time_args]
+    if extra and section == "parameters" and any(p.kind is p.VAR_POSITIONAL for p in params) \
+            and all(p.kind in (p.VAR_POSITIONAL, p.VAR_KEYWORD) for p in params):
+        # A constructor that only declares (*args, **kwargs), e.g. StateSpace(A, B, C, D):
+        # the --start values go by position, in the order given.
+        for name in extra:
+            variables[name] = _extra_info(name, starts[name], arrays)
+            variables[name]["to"] = f"pos:{position}"
+            position += 1
+            comments[(section, name)] = "start from --start, passed by position to *args: check the order"
+    elif any(p.kind is p.VAR_KEYWORD for p in params):  # **kwargs: --start values become keyword arguments
+        for name in extra:
+            variables[name] = _extra_info(name, starts[name], arrays)
             comments[(section, name)] = "start from --start (passed through **kwargs)"
     if time_args and allow_time:
         data["time"] = time_args
     if not variables:
         data.pop(section)
+
+
+def _extra_info(name, value, arrays):
+    """The variable for a --start value that no declared argument takes (*args, **kwargs)."""
+    if isinstance(value, SCALARS):
+        return _type_info(value)
+    if arrays and _array_info(value):
+        return _array_info(value, with_start=True)
+    raise InterfaceError(f"--start {name}: {value!r} is not an FMI value")
 
 
 ARRAY_CONVERTERS = {"torch.Tensor": "torch:tensor", "ndarray": "numpy", "jax.Array": "jax.numpy:asarray",
@@ -844,6 +890,9 @@ def _object_fields(cls):
         return [(a.name, hints.get(a.name, a.type), empty if a.default is attrs.NOTHING
                  else (a.default.factory() if isinstance(a.default, attrs.Factory) else a.default))
                 for a in cls.__attrs_attrs__ if a.init]
+    if issubclass(cls, tuple) and hasattr(cls, "_fields"):   # a namedtuple
+        defaults = getattr(cls, "_field_defaults", {})
+        return [(name, hints.get(name), defaults.get(name, empty)) for name in cls._fields]
     return None
 
 
@@ -954,7 +1003,32 @@ def _probe_kwargs(data, sections):
 
 
 def _time_kwargs(time_args):
-    return {arg: (PROBE_STEP_SIZE if source == "step_size" else 0.0) for arg, source in time_args.items()}
+    kwargs = {}
+    for arg, source in time_args.items():
+        if isinstance(source, dict):   # { source = ..., epoch = ... }: a date-time
+            kwargs[arg] = datetime.datetime.fromisoformat(source["epoch"])
+        else:
+            kwargs[arg] = PROBE_STEP_SIZE if source == "step_size" else 0.0
+    return kwargs
+
+
+DATETIME_NAMES = ("when", "date", "datetime", "dateandtime", "date_time", "timestamp", "utc_time")
+
+
+def _is_datetime(fn, p):
+    """An argument that takes a date-time: by its annotation (datetime, Optional[datetime]) or its name."""
+    try:
+        hint = typing.get_type_hints(fn).get(p.name, p.annotation)
+    except Exception:
+        hint = p.annotation
+    hint = static.unwrap_optional(hint)
+    if isinstance(hint, type) and issubclass(hint, datetime.date):
+        return True
+    if isinstance(hint, str) and "datetime" in hint:
+        return True
+    if hint is not p.empty and hint is not None:
+        return False   # annotated as something else
+    return p.name.lower() in DATETIME_NAMES and (p.default is p.empty or p.default is None)
 
 
 def _typed(info, value, arrays=False):

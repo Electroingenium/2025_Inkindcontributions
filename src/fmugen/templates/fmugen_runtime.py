@@ -145,7 +145,8 @@ class Engine:
                 kwargs = dict(self.constants)
                 kwargs.update(self._bound("init"))
                 create = self.interface["entry"].get("create")
-                self.obj = (getattr(self.entry, create) if create else self.entry)(**kwargs)
+                self.obj = (getattr(self.entry, create) if create else self.entry)(
+                    *self._positional(kind="initpos"), **kwargs)
                 self._run_setup(after_construction=True)
                 self._apply_attributes(clock=None)
                 for name in self.clocks:
@@ -620,6 +621,9 @@ class Engine:
                 return list(enum).index(value) + 1
         if value is None:
             raise TypeError(f"{var['name']} is None")
+        if isinstance(value, str) and var["type"] not in ("String", "Boolean", "Binary"):
+            raise TypeError(f"{var['name']} is a string ({value[:80]!r}), not a {var['type']}: "
+                            f"set type = \"String\" for it in the config")
         return coerce(var["type"], plain_number(value, var.get("unit")))
 
     def _run_setup(self, after_construction):
@@ -632,12 +636,13 @@ class Engine:
             target(*[resolve_constant(a) for a in step.get("args", [])],
                    **{k: resolve_constant(v) for k, v in step.get("kwargs", {}).items()})
 
-    def _positional(self, clock=None):
-        """Values of variables bound to positional arguments (to = "pos:N"), in order."""
+    def _positional(self, clock=None, kind="pos"):
+        """Values of variables bound to positional arguments (to = "pos:N"), in order: of the call
+        ("pos"), or of the constructor ("initpos", a class's parameters)."""
         bound = sorted(
             (int(v["to"]["name"]), self._to_python(v, self.values[v["name"]]))
             for v in self.variables
-            if v.get("to", {}).get("kind") == "pos" and _clock_of(v) == clock
+            if v.get("to", {}).get("kind") == kind and _clock_of(v) == clock
         )
         return [value for _, value in bound]
 
@@ -1030,7 +1035,17 @@ def resolve_reference(ref):
     """'package.module:attr.path' (or dotted 'package.module.attr') -> the object."""
     if ":" in ref:
         module_name, _, attr = ref.partition(":")
-        return get_path(importlib.import_module(module_name), attr)
+        try:
+            module = importlib.import_module(module_name)
+        except ModuleNotFoundError as e:
+            # 'pybamm.lithium_ion:SPM': lithium_ion is an attribute of pybamm (set lazily), not a submodule
+            if e.name is None or not (module_name + ".").startswith(e.name + ".") or "." not in module_name:
+                raise
+            try:
+                return resolve_reference(f"{module_name}.{attr}")
+            except (ImportError, AttributeError):
+                raise e from None
+        return get_path(module, attr)
     parts = ref.split(".")
     for i in range(len(parts), 0, -1):  # longest importable module prefix
         try:
@@ -1145,6 +1160,8 @@ def build_object(fn, name, fields):
         if hasattr(type(default), "__attrs_attrs__"):
             import attrs
             return attrs.evolve(default, **fields)
+        if isinstance(default, tuple) and hasattr(default, "_replace"):   # a namedtuple
+            return default._replace(**fields)
         obj = copy.copy(default)
         for field, value in fields.items():
             setattr(obj, field, value)

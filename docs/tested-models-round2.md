@@ -14,15 +14,15 @@ Setup: Windows 11, Python 3.13 venvs made with `uv`, fmugen from this checkout (
 | Fail with the config `init` writes, pass with a hand-written config | 3: metpy, pysolar, ppigrf (FMI 3 only) |
 | Fail, no working config found | 10 |
 
-**Main problems found** (details [below](#problems-found)):
+**Main problems found** (details [below](#problems-found)). Status as of 2026-10-07: 2, 3, 5 and 6 are fixed; 1 and 7 are UniFMU limitations (noted, not fixed in fmugen); 4 is open.
 
-1. **After an FMU error, the UniFMU Python backend keeps running.** FMPy reports the error and exits, but the backend (`main.py`, 2 processes) stays alive, holding the importer's stdout/stderr. Anything that reads that output (a pipe, `subprocess.run(capture_output=True)`, `… | grep`) then hangs. 31 orphaned backend pairs had built up by the end of these runs. A successful run leaves none behind. Seen with FMI 2 and FMI 3.
-2. **`init` writes configs that `build` or the runtime then reject.** Dotted names from `--start a.b=…` become parameters that `build` refuses (simglucose). String attributes found in the code are typed Real (thermo). A date-time argument becomes `when = { start = 0.0 }` (pysolar, ppigrf). Constructor `*args` get passed as keyword arguments (python-control).
-3. **Silent zero-output FMUs.** No warning when `init` finds no outputs (ambiance, PyTCI, cantera, pandapower).
-4. **Outputs whose type or size changes at run time fail the step.** Complex arrays (impedance), arrays whose length varies (seirsplus), a property that is `None` (pyproj), an attribute that only exists sometimes (river).
-5. **`to = "pos:N"` on constructor parameters is accepted by `build` but ignored at run time.** The constructor gets no arguments.
-6. **`call:` start values can't use lazily exported submodules**, e.g. `pybamm.lithium_ion:SPM()`. The real module path works.
-7. **`fmpy simulate` shows no reason for a failure**, only `fmi3ExitInitializationMode failed with status 3`. The Python traceback is only visible with `simulate_fmu(debug_logging=True, logger=…)`. `--fmi-logging` instantiates with `loggingOn=False` and doesn't show it.
+1. *(UniFMU limitation, not fixed)* **After an FMU error, the UniFMU Python backend keeps running.** FMPy reports the error and exits, but the backend (`main.py`, 2 processes) stays alive, holding the importer's stdout/stderr. Anything that reads that output (a pipe, `subprocess.run(capture_output=True)`, `… | grep`) then hangs. 31 orphaned backend pairs had built up by the end of these runs. A successful run leaves none behind. Seen with FMI 2 and FMI 3.
+2. *(Fixed)* **`init` writes configs that `build` or the runtime then reject.** Dotted names from `--start a.b=…` become parameters that `build` refuses (simglucose). String attributes found in the code are typed Real (thermo). A date-time argument becomes `when = { start = 0.0 }` (pysolar, ppigrf). Constructor `*args` get passed as keyword arguments (python-control).
+3. *(Fixed)* **Silent zero-output FMUs.** No warning when `init` finds no outputs (ambiance, PyTCI, cantera, pandapower).
+4. *(Open)* **Outputs whose type or size changes at run time fail the step.** Complex arrays (impedance), arrays whose length varies (seirsplus), a property that is `None` (pyproj), an attribute that only exists sometimes (river).
+5. *(Fixed)* **`to = "pos:N"` on constructor parameters is accepted by `build` but ignored at run time.** The constructor gets no arguments.
+6. *(Fixed)* **`call:` start values can't use lazily exported submodules**, e.g. `pybamm.lithium_ion:SPM()`. The real module path works.
+7. *(UniFMU limitation, not fixed)* **`fmpy simulate` shows no reason for a failure**, only `fmi3ExitInitializationMode failed with status 3`. The Python traceback is only visible with `simulate_fmu(debug_logging=True, logger=…)`. `--fmi-logging` instantiates with `loggingOn=False` and doesn't show it.
 
 ## Results
 
@@ -94,9 +94,13 @@ Rows 20, 22 and 23 repeat models from earlier rows, and 24 is a replaced model, 
 
 Every FMU that failed in `exitInitializationMode` or `doStep` left its UniFMU backend running: `venv\Scripts\python.exe main.py` and the base `python.exe main.py` it starts. FMPy itself exits with the error, but whoever reads FMPy's stdout/stderr through a pipe waits for the backend, which never exits. This first looked like an FMI 2 hang on metpy (my first test driver used pipes). With output going to files, metpy fails cleanly in both FMI versions. Reproduce: `fmpy simulate pyproj_tf.fmu 2>&1 | Out-Null` in PowerShell never returns, and the `main.py` process count goes up by 2. A passing FMU (gsw) leaves no process behind. Probably `fmi2FreeInstance` / `fmi3FreeInstance` isn't reached, or doesn't stop the backend, after an error status.
 
+**Status:** a UniFMU limitation (the backend process is managed by UniFMU, not fmugen); not fixed here. Workaround: send the importer's output to a file, not a pipe.
+
 ### Failure messages
 
 `fmpy simulate` only prints the failed FMI call. The Python traceback (e.g. thermo's `ValueError: could not convert string to float: '7732-18-5'` from `fmugen_runtime.coerce`) shows with `fmpy.simulate_fmu(…, debug_logging=True, logger=print)`. The errors in this report were also read by running the FMU's `fmugen_runtime.make_engine` in-process.
+
+**Status:** a UniFMU limitation, not fixed. fmugen already sends the full traceback to the FMI log, but UniFMU drops log messages when the importer instantiates with `loggingOn=False`, which FMPy's CLI does. Workaround: `fmpy.simulate_fmu(…, debug_logging=True, logger=print)`.
 
 ### `init` writes configs that fail later
 
@@ -105,6 +109,12 @@ Every FMU that failed in `exitInitializationMode` or `doStep` left its UniFMU ba
 - **Unannotated date-time arguments** get `start = 0.0`, with no hint about `[time] … epoch` (pysolar, ppigrf). The probe fails and the failure is only visible as "not seen in the probe" comments.
 - **`*args` constructors** get their `--start` values as keyword arguments (python-control).
 
+**Fixed (2026-10-07):**
+- `ARG.FIELD` starts go to the argument's function and are never `**kwargs` parameters. Namedtuple arguments are split into fields like dataclasses. When the class of `ARG` can't be known, `init` stops with an error that says so and suggests `--start=ARG=call:module:Class(...)`. simglucose works that way (`Action(CHO=0.0, insulin=0.02)`, a constant).
+- A numeric output that gets a string at run time fails with `NAME is a string (...): set type = "String" for it in the config`. Without `--probe`, `init` warns that output types were read from the code.
+- Date-time arguments (annotated `datetime`, or named `when`, `date`, `dateandtime`, …) get `[time] NAME = { source = "end_time", epoch = "<today>T00:00:00" }`. The epoch is naive, and `--probe` switches to UTC when the model needs a time zone. pysolar (UTC), ppigrf (naive, FMI 3) and astral now run with `init` alone.
+- A constructor that only takes `(*args, **kwargs)` gets the extra `--start` values as `to = "pos:N"` parameters, in the order given. python-control `StateSpace` now runs with `init` alone (y = A·x checked).
+
 ### Silent outputs problems
 
 - FMUs with **no outputs** build without a warning: `ambiance` (properties returning 1-element arrays), PyTCI (state in a nested function), cantera (Cython properties), pandapower (results in DataFrames on the argument).
@@ -112,13 +122,19 @@ Every FMU that failed in `exitInitializationMode` or `doStep` left its UniFMU ba
 - **Arrays whose size changes** between calls (seirsplus history) get a fixed size from the probe.
 - An output that is **`None`** at run time (pyproj `remarks`) fails the step.
 
+**Fixed (2026-10-07):** zero outputs only. `init` warns (stderr and a comment in `[outputs]`), and `build` prints `note: the FMU has no outputs`. The other three items (problem 4) are still open.
+
 ### `to = "pos:N"` on constructor parameters is ignored
 
 Accepted by `build`, but the constructor of `control.StateSpace` is still called with no positional arguments.
 
+**Fixed (2026-10-07):** in a class's `[parameters]`, `to = "pos:N"` is a constructor position (numbered separately from the step call's).
+
 ### `call:` can't reach lazily exported names
 
 `call:pybamm.lithium_ion:SPM()` fails (`No module named 'pybamm.lithium_ion'`), even though `pybamm.lithium_ion.SPM` is the public path. `pybamm.models.full_battery_models.lithium_ion:SPM()` works.
+
+**Fixed (2026-10-07):** when `module` in `module:name` isn't an importable submodule, it is reached as attributes of the longest importable prefix. `call:pybamm.lithium_ion:SPM()` now works.
 
 ### `init` crash in `isolated_imports`
 

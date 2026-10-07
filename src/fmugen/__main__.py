@@ -308,6 +308,8 @@ def init(target, output=None, call=None, force=False, fmi_version=None, starts=N
         data, comments = infer_config(target, call=call, config_dir=output.parent, fmi_version=fmi_version,
                                       starts=starts, setup=setup, kind=kind, create=create, probe=probe,
                                       converts=converts)
+    for warning in _init_warnings(data, comments, probe):
+        print(f"warning: {warning}", file=sys.stderr)
     text = render_toml(data, comments)
     if to_stdout:
         sys.stdout.write(text)
@@ -315,6 +317,23 @@ def init(target, output=None, call=None, force=False, fmi_version=None, starts=N
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(text, encoding="utf-8")
     return output, data
+
+
+NO_OUTPUTS = "no outputs found: add [outputs] by hand (e.g. attributes or properties of the model object)"
+
+
+def _init_warnings(data, comments, probe):
+    """What the user must look at in the config init wrote; the zero-outputs one also goes into it."""
+    warnings = []
+    outputs = data.get("outputs", {})
+    if not outputs:
+        warnings.append(NO_OUTPUTS)
+        comments.setdefault(("outputs", None), NO_OUTPUTS)
+    elif not probe and any("type" not in info and "dimensions" not in info and "enum" not in info
+                           for info in outputs.values()):
+        warnings.append("output types were read from the code (Real unless it shows otherwise); "
+                        "run init --probe to check them")
+    return warnings
 
 
 def _parse_converts(items):
