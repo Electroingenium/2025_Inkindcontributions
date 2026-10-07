@@ -640,6 +640,7 @@ def test_date_time_argument_gets_an_epoch(tmp_path, make_fmu, adapter):
             return {"hour": when.hour + when.minute / 60}
     """)
     output, data = init(tmp_path / "sun.py")
+    assert "# a date-time argument: the epoch" in output.read_text()   # annotated: not a guess
     assert data["time"]["when"]["source"] == "end_time"
     assert data["time"]["when"]["epoch"].endswith("T00:00:00")
     fmu = adapter(make_fmu(output))
@@ -725,8 +726,10 @@ def test_probe_retries_a_date_time_in_utc(tmp_path):
                 raise ValueError("needs a time zone")
             return {"hour": when.hour}
     """)
-    _, data = init(tmp_path / "sun.py", probe=True)
+    output, data = init(tmp_path / "sun.py", probe=True)
     assert data["time"]["when"]["epoch"].endswith("T00:00:00+00:00")
+    text = output.read_text()
+    assert "taken as a date-time from its name 'when' (not annotated)" in text and "epoch in UTC" in text
     assert data["outputs"]["hour"] == {}
 
 
