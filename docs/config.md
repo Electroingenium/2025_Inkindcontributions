@@ -97,6 +97,8 @@ For a model that takes a date-time (pvlib, pandas, weather data), write the entr
 time = { source = "end_time", epoch = "2026-06-21T06:00:00+00:00" }
 ```
 
+`fmugen init` writes this for arguments annotated `datetime`/`date` (also `Optional[...]`), and for unannotated ones named `when`, `date`, `datetime`, `dateandtime`, `date_time`, `timestamp` or `utc_time`, with `source = "end_time"` and today's date at 00:00 as the epoch, without a time zone. With `--probe`, if the model rejects that, `init` adds `+00:00` (UTC). Set the epoch you need.
+
 `source` defaults to `"time"`. For a function of time with no state (a solar position, a weather lookup), use `"end_time"` so each output belongs to the time it is reported at.
 
 ---
@@ -164,10 +166,10 @@ Without `type`, it comes from `start`: `bool` → Boolean, `int` → Integer, `s
 | `to` | structural parameters, parameters, inputs, states | `"init:<arg>"` | Constructor argument (classes). |
 | | | `"arg:<arg>"` | Argument of the function or step method; for a clocked input, of the clock's `call`. |
 | | | `"call:<method>"` | A setter method called with the value after construction and before every step (classes), e.g. tclab's `Q1(value)`. |
-| | | `"pos:<N>"` | Positional argument number N (0, 1, … without gaps) of the function or step method, for positional-only arguments such as those of C extensions. |
+| | | `"pos:<N>"` | Positional argument number N (0, 1, … without gaps) of the function or step method, for positional-only arguments such as those of C extensions. In a class's `[parameters]` and `[structural_parameters]`, a position of the constructor instead (numbered separately), e.g. for `control.StateSpace(*args)`. |
 | | | `"attr:<name>"` | Attribute set on the object after construction and before every step (classes); clocked: before every tick. Dotted paths allowed. |
 | | | `"arg:<arg>[<i>]"`, `"arg:<arg>[<key>]"` | Item `i` of a tuple argument, or key `key` of a dict argument: the variables bound to the items of one argument are put together into a tuple (items 0, 1, … without gaps) or a dict, e.g. torchani's `forward((species, coordinates))`. `init` splits a tuple or dict `--start` value this way. Also `"init:<arg>[…]"`. |
-| | | `"arg:<arg>.<field>"` | Field `field` of an object argument (a dataclass, a pydantic model, an attrs class): the variables bound to its fields build it. If the argument has a default instance, that instance is copied with these fields replaced (`dataclasses.replace`, `model_copy`, `attrs.evolve`), so its other fields keep their values; otherwise the class from its annotation is called with the fields. `init` writes one variable per field, `<arg>_<field>`. Also `"init:<arg>.<field>"`. |
+| | | `"arg:<arg>.<field>"` | Field `field` of an object argument (a dataclass, a pydantic model, an attrs class, a namedtuple): the variables bound to its fields build it. If the argument has a default instance, that instance is copied with these fields replaced (`dataclasses.replace`, `model_copy`, `attrs.evolve`), so its other fields keep their values; otherwise the class from its annotation is called with the fields. `init` writes one variable per field, `<arg>_<field>`. Also `"init:<arg>.<field>"`. |
 | `from` | outputs, locals, calculated_parameters | `"return"` | The whole return value. |
 | | | `"return:<key>"` | `result[key]` for a dict, `result[int(key)]` for a tuple or list, else `result.key`. A dotted path (`"return:zone.T"`) takes these steps in turn. |
 | | | `"attr:<name>"` | An attribute of the object after the step (classes). Dotted paths allowed. Calculated parameters must use this form. |

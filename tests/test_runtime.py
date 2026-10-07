@@ -698,3 +698,69 @@ def test_call_reaches_lazily_exported_submodules(tmp_path, monkeypatch):
         assert call_reference("lazypkg.family:SPM(n=2)") == ("SPM", 2)
         with pytest.raises(ModuleNotFoundError):
             call_reference("lazypkg.missing:SPM()")
+
+
+def test_misspelled_field_and_unknown_argument_are_named(tmp_path):
+    from fmugen.config import InterfaceError
+    write(tmp_path, "objs.py", """
+        import dataclasses
+
+        @dataclasses.dataclass
+        class Weather:
+            T: float
+
+        def f(w: Weather):
+            return {"y": w.T}
+    """)
+    with pytest.raises(InterfaceError, match=r"w \(Weather\) has no field 'Tx'"):
+        init(f"{tmp_path / 'objs.py'}:f", starts={"w.Tx": 1.0})
+    with pytest.raises(InterfaceError, match=r"not arguments of the model: \['v.T'\]"):
+        init(f"{tmp_path / 'objs.py'}:f", starts={"w.T": 1.0, "v.T": 1.0})
+
+
+def test_probe_retries_a_date_time_in_utc(tmp_path):
+    write(tmp_path, "sun.py", """
+        def altitude(when):
+            if when.tzinfo is None:
+                raise ValueError("needs a time zone")
+            return {"hour": when.hour}
+    """)
+    _, data = init(tmp_path / "sun.py", probe=True)
+    assert data["time"]["when"]["epoch"].endswith("T00:00:00+00:00")
+    assert data["outputs"]["hour"] == {}
+
+
+def test_warning_names_only_outputs_of_unknown_type(tmp_path, capsys):
+    write(tmp_path, "chem.py", """
+        def lookup(name):
+            return name.upper()
+
+        class Chemical:
+            def __init__(self):
+                self.level = 1.0
+
+            def step(self, dt=1.0):
+                self.level += 0.5 * dt
+                self.count = self.level * 2
+                self.label = lookup("x")
+                return self.level
+    """)
+    init(f"{tmp_path / 'chem.py'}:Chemical")
+    err = capsys.readouterr().err
+    assert "warning: label: type not shown by the code" in err
+    assert "count" not in err and "y" not in err.split(":")[1]
+
+
+def test_numeric_strings_still_become_numbers(tmp_path, make_fmu, adapter):
+    write(tmp_path, "text.py", """
+        def reading(x=1.0):
+            return {"v": "2.5"}
+    """, config="""
+        [model]
+        entry = "text.py:reading"
+        [outputs]
+        v = {}
+    """)
+    fmu = adapter(make_fmu(tmp_path / "fmugen.toml"))
+    fmu.initialize()
+    assert fmu.get("v") == 2.5

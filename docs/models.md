@@ -532,7 +532,7 @@ fmugen init fluids.friction:friction_factor --start Re=1e5 -o -
 fmugen init psychrolib:GetHumRatioFromRelHum --setup "psychrolib:SetUnitSystem(psychrolib.SI)" --start TDryBulb=25.0 --start RelHum=0.5 --start Pressure=101325.0 -o -
 ```
 
-A `--start` name that appears in both the constructor and the step method goes to the one without a default; on a tie, to the step method. Names that neither declares are passed through `**kwargs`, if one of them accepts it.
+A `--start` name that appears in both the constructor and the step method goes to the one without a default; on a tie, to the step method. Names that neither declares are passed through `**kwargs`, if one of them accepts it. For a constructor that only declares `(*args, **kwargs)`, such as `control.StateSpace`, they are passed by position instead (`to = "pos:N"`), in the order given. `ARG.FIELD` names go wherever `ARG` goes; `init` stops with an error if `ARG`'s class can't be told from its default or annotation, or has no such field.
 
 | | Inferred from |
 |---|---|
@@ -540,6 +540,7 @@ A `--start` name that appears in both the constructor and the step method goes t
 | **Inputs (functions) / parameters (classes)** | Arguments with a `bool`/`int`/`float`/`str` default, or with no default |
 | **Start values and types** | The default value. With no default: the annotation, otherwise Real `0.0` |
 | **Time arguments** | Arguments named `dt`, `step_size`, `h` (step size) or `t`, `time` (time) |
+| **Date-time arguments** | Annotated `datetime`/`date`, or named `when`, `date`, `dateandtime`, …: [`[time]` with an `epoch`](config.md#time) |
 | **Outputs from the return value** | The code: dict keys (also a dict built in a variable), tuple positions, a single value (`y`), NamedTuple/dataclass fields, or the return annotation. With `--probe`: the actual result |
 | **Outputs and locals of classes** | Public attributes the step method assigns, following the methods it calls on `self` (also assigned in `__init__`: local; else output), and annotated properties. With `--probe`: also what the step actually created or changed, and every readable numeric property |
 | **States** | An input `x_prev` whose next value is returned or stored as `x_next` or `x` |
@@ -554,7 +555,7 @@ Check afterwards:
 - **States:** only inputs named `x_prev` are detected. A model that takes its own previous result under another name (Madgwick's `updateIMU(q, ...)` returning the new `q`) needs a `[states]` entry: `q = { dimensions = [4], start = [1.0, 0.0, 0.0, 0.0], next = "return" }`.
 - **Integer vs Real:** an `int` default (`setpoint=0`) gives an Integer. Write `0.0` for a Real.
 - **Units and descriptions:** add them; they can't be inferred.
-- **Outputs and locals:** remove the ones you don't need. Types come from annotations and obvious literals (`True`, comparisons, strings); everything else is Real. Uncomment and complete the commented lines (`dimensions = [...]`, properties, `save_state`), or rerun with `--probe`.
+- **Outputs and locals:** remove the ones you don't need. Types come from annotations and what the code shows (`True`, comparisons, strings, arithmetic, the arguments or attributes returned); everything else is assumed Real, and `init` names those outputs in a warning. If none is found, `init` warns that there are no outputs, and `build` notes it too. Uncomment and complete the commented lines (`dimensions = [...]`, properties, `save_state`), or rerun with `--probe`.
 - **Tunable parameters:** `init` only suggests them in comments (see [above](#a-class-with-a-step-method)).
 
 `fmugen build model.py` runs the same inference in memory. That's handy for a quick try; for anything you keep, write the config.
