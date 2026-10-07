@@ -97,7 +97,7 @@ For a model that takes a date-time (pvlib, pandas, weather data), write the entr
 time = { source = "end_time", epoch = "2026-06-21T06:00:00+00:00" }
 ```
 
-`fmugen init` writes this for arguments annotated `datetime`/`date` (also `Optional[...]`), and for unannotated ones named `when`, `date`, `datetime`, `dateandtime`, `date_time`, `timestamp` or `utc_time`, with `source = "end_time"` and today's date at 00:00 as the epoch, without a time zone. With `--probe`, if the model rejects that, `init` adds `+00:00` (UTC). Set the epoch you need.
+`fmugen init` writes this for arguments annotated `datetime`/`date` (also `Optional[...]`), and for unannotated ones named `when`, `date`, `datetime`, `dateandtime`, `date_time`, `timestamp` or `utc_time`, with `source = "end_time"` and today's date at 00:00 as the epoch, without a time zone. With `--probe`, if the model rejects that, `init` adds `+00:00` (UTC). For an argument matched only by its name, `--probe` also calls the model with `0.0` there: if only the date-time works, the comment says it was confirmed; if only the number works, the argument becomes an ordinary input; otherwise it stays a date-time marked as a guess. Set the epoch you need.
 
 `source` defaults to `"time"`. For a function of time with no state (a solar position, a weather lookup), use `"end_time"` so each output belongs to the time it is reported at.
 
