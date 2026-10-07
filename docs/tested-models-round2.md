@@ -14,7 +14,7 @@ Setup: Windows 11, Python 3.13 venvs made with `uv`, fmugen from this checkout (
 | Fail with the config `init` writes, pass with a hand-written config | 3: metpy, pysolar, ppigrf (FMI 3 only) |
 | Fail, no working config found | 10 |
 
-**Main problems found** (details [below](#problems-found)). Status as of 2026-10-07: 2, 3, 5 and 6 are fixed; 1 and 7 are UniFMU limitations (noted, not fixed in fmugen); 4 is open.
+**Main problems found** (details [below](#problems-found)). Status as of 2026-10-07: 2, 3, 5 and 6 are fixed; 1 and 7 are UniFMU limitations (noted, not fixed in fmugen); 4 is open. The table above is from the first run; see [Rerun after the fixes](#rerun-after-the-fixes-2026-10-07) for the results with the fixes.
 
 1. *(UniFMU limitation, not fixed)* **After an FMU error, the UniFMU Python backend keeps running.** FMPy reports the error and exits, but the backend (`main.py`, 2 processes) stays alive, holding the importer's stdout/stderr. Anything that reads that output (a pipe, `subprocess.run(capture_output=True)`, `… | grep`) then hangs. 31 orphaned backend pairs had built up by the end of these runs. A successful run leaves none behind. Seen with FMI 2 and FMI 3.
 2. *(Fixed)* **`init` writes configs that `build` or the runtime then reject.** Dotted names from `--start a.b=…` become parameters that `build` refuses (simglucose). String attributes found in the code are typed Real (thermo). A date-time argument becomes `when = { start = 0.0 }` (pysolar, ppigrf). Constructor `*args` get passed as keyword arguments (python-control).
@@ -24,7 +24,47 @@ Setup: Windows 11, Python 3.13 venvs made with `uv`, fmugen from this checkout (
 6. *(Fixed)* **`call:` start values can't use lazily exported submodules**, e.g. `pybamm.lithium_ion:SPM()`. The real module path works.
 7. *(UniFMU limitation, not fixed)* **`fmpy simulate` shows no reason for a failure**, only `fmi3ExitInitializationMode failed with status 3`. The Python traceback is only visible with `simulate_fmu(debug_logging=True, logger=…)`. `--fmi-logging` instantiates with `loggingOn=False` and doesn't show it.
 
-## Results
+## Rerun after the fixes (2026-10-07)
+
+The same 30 models, rerun with fmugen at `b437621` (fixes for problems 2, 3, 5 and 6) and the same `init` options as the tables below, in FMI 2 and FMI 3. Only `init` configs were rerun; the hand configs (PyTCI, cantera, metpy) were not. The tables further down are the original run of 2026-10-06 and are kept as they were.
+
+| | 2026-10-06 | 2026-10-07 |
+|---|---|---|
+| Pass with `init` alone, both FMI versions | 12 | **17** |
+| Run, but the FMU is not useful | 5 | 7 |
+| Fail | 13 | 6 |
+
+**Newly pass with `init` alone:**
+
+| Model | `init` options (changes from the tables below) | FMI 2 | FMI 3 | Check |
+|---|---|---|---|---|
+| `pysolar.solar:get_altitude` | `--probe` | ✓ | ✓ | The epoch is set to UTC automatically, since the probe failed without a time zone. |
+| `ppigrf:igrf` | `--probe` | ✓ | ✓ | B = (281.65, 25784.81, −36995.52) nT for today's date. FMI 2 now works too (1-element array outputs). |
+| `control:StateSpace` | unchanged | ✓ | ✓ | A–D become `to = "pos:N"` parameters; y = (0, −2) = A·x. |
+| `simglucose…:T1DPatient` | `--start=action=call:simglucose.patient.t1dpatient:Action(CHO=0.0, insulin=0.02)` | ✓ | ✓ | Gsub = 118.05. The dotted `--start action.CHO=…` now stops with an error that suggests this form. |
+| `pyproj:Transformer` | unchanged | ✓ | ✓ | (440598.08, 4472390.03) out; `remarks` and `scope` commented out with a warning. |
+
+**Unchanged passes:** gsw, py_vollib, windpowerlib, erfa, colour, hplib, pymsis, neurokit2, pyromat, astral and roboticstoolbox give the same values as on 2026-10-06. skops-digits passes in FMI 3 (predicts 0). In FMI 2, `fmpy simulate` exits 0, but `simulate_fmu(…, debug_logging=True, logger=…)` crashes FMPy with `OSError: access violation` (reproduced twice, and also without the String parameter `ensure_native_byte_order`). Not investigated.
+
+**Build and run, but not useful (now with warnings):**
+- **No outputs**: ambiance, pandapower, PyTCI, cantera and river all print `no outputs found: add [outputs] by hand`.
+- **impedance** runs. The complex result is commented out as `y_real` / `y_imag`.
+- **pybamm**: `call:pybamm.lithium_ion:SPM()` now works (problem 6). The voltage still can't be expressed as an output.
+
+**Still fail:**
+
+| Model | Error now |
+|---|---|
+| thermo (no `--probe`) | `CAS is a string (...): set type = "String"`. `init` now warns that the types of 114 outputs are guesses. |
+| metpy | Needs pint units (`init` doesn't recognise `@check_units`). The hand config was not rerun. |
+| pyet | Only accepts pandas Series with a date index (a limit of the library). |
+| seirsplus | The arrays whose size changes are now commented out. It then fails in `doStep` inside seirsplus: `ValueError: Values in t_eval are not within t_span`. Not investigated. |
+| mesa | `init` still crashes in `isolated_imports` (`KeyError: 'scipy._external'` / `'mesa.examples.advanced'`). |
+| sgp4 | Still the misleading `--start names that are not arguments of the model` for C built-ins. |
+
+Problem 1 is unchanged: 14 orphaned `main.py` backends built up during the rerun, and one held a lock on a work folder until killed.
+
+## Results (2026-10-06)
 
 Legend: ✓ = build, validate and simulate pass. ✗ = a step fails. "= direct" means the FMU's outputs equal a direct call of the model with the same inputs.
 
