@@ -1,4 +1,5 @@
 """`fmugen init`: configs inferred from unmodified models."""
+import sys
 import textwrap
 import tomllib
 
@@ -328,3 +329,16 @@ def test_setup_call_keeps_keyword_arguments():
         "call": "psychrolib:SetUnitSystem", "args": [{"ref": "psychrolib.SI"}], "kwargs": {"strict": True}}
     with pytest.raises(InterfaceError, match=r"\*\*kwargs"):
         parse_call("reset(**opts)")
+
+
+def test_isolated_imports_forgets_namespace_subpackages(tmp_path):
+    # like mesa.examples.advanced: a namespace package's __path__ looks its parent up in
+    # sys.modules when read, so forgetting the parent first made restoring sys.modules fail
+    (tmp_path / "pkg" / "ns").mkdir(parents=True)
+    (tmp_path / "pkg" / "__init__.py").write_text("")
+    (tmp_path / "pkg" / "ns" / "mod.py").write_text("x = 1\n")
+    with isolated_imports():
+        sys.path.insert(0, str(tmp_path))
+        import pkg.ns.mod  # noqa: F401
+    assert not {"pkg", "pkg.ns", "pkg.ns.mod"} & set(sys.modules)
+    assert str(tmp_path) not in sys.path

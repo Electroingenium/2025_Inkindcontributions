@@ -22,15 +22,16 @@ The same 30 models, rerun with fmugen at `b437621` (fixes for problems 2, 3, 5 a
 
 | | 2026-10-06 | 2026-10-07 |
 |---|---|---|
-| Pass with `init` alone, both FMI versions | 12 | **18** |
+| Pass with `init` alone, both FMI versions | 12 | **19** |
 | Run, but the FMU is not useful | 5 | 7 |
-| Fail | 13 | 5 |
+| Fail | 13 | 4 |
 
 **Newly pass with `init` alone:**
 
 | Model | `init` options (changes from the first run) | FMI 2 | FMI 3 | Check |
 |---|---|---|---|---|
 | `thermo:Chemical` | `--probe` added (the first run had none) | ✓ | ✓ | `CAS`, `name`, … typed String by the probe; 18 outputs that are `None` in the probe are commented out. H, S, G, Hm, MW at 350 K = direct. T-dependent properties such as `rho`, `Cp` and `mu` are not listed as outputs (only attributes set in `__init__` are), so add them by hand if needed. |
+| `mesa.examples:BoltzmannWealth` | unchanged (`--call step --probe`) | ✓ | ✓ | After the [`isolated_imports` fix](#init-crash-in-isolated_imports). Output `gini` (0.65–0.69; the model is unseeded, so it varies per run). The model object can't be pickled (`WeakMethod`), so `init` saves only the attributes that can be. |
 | `pysolar.solar:get_altitude` | `--probe` | ✓ | ✓ | The epoch is set to UTC automatically, since the probe failed without a time zone. |
 | `ppigrf:igrf` | `--probe` | ✓ | ✓ | B = (281.65, 25784.81, −36995.52) nT for today's date. FMI 2 now works too (1-element array outputs). |
 | `control:StateSpace` | unchanged | ✓ | ✓ | A–D become `to = "pos:N"` parameters; y = (0, −2) = A·x. |
@@ -51,7 +52,6 @@ The same 30 models, rerun with fmugen at `b437621` (fixes for problems 2, 3, 5 a
 | metpy | Needs pint units (`init` doesn't recognise `@check_units`). The hand config was not rerun. |
 | pyet (also with `--probe`) | Only accepts pandas Series with a date index (a limit of the library). The probe fails with `'float' object has no attribute 'time'`, and the FMU with `AttributeError` at initialization. |
 | seirsplus | The arrays whose size changes are now commented out. It then fails in `doStep` inside seirsplus: `ValueError: Values in t_eval are not within t_span`. Not investigated. |
-| mesa | `init` still crashes in `isolated_imports` (`KeyError: 'scipy._external'` / `'mesa.examples.advanced'`). |
 | sgp4 | Still the misleading `--start names that are not arguments of the model` for C built-ins. |
 
 Problem 1 is unchanged: 14 orphaned `main.py` backends built up during the rerun, and one held a lock on a work folder until killed.
@@ -116,6 +116,8 @@ Accepted by `build`, but the constructor of `control.StateSpace` is still called
 ### `init` crash in `isolated_imports`
 
 `fmugen init mesa.examples:BoltzmannWealth …` crashes with `KeyError: 'scipy'` from `importlib._bootstrap_external._get_parent_path`, when `isolated_imports` restores `sys.modules` (`src/fmugen/__main__.py:131`).
+
+**Fixed (2026-10-07):** a namespace package's `__path__` (here `mesa.examples.advanced`, `scipy._external`) looks its parent up in `sys.modules` each time it is read. `isolated_imports` deleted modules while reading their paths, so a parent could already be gone. It now finds every module to forget first, then deletes them. mesa now runs with `init` alone.
 
 ### Misleading `init` error when the model can't be loaded
 
