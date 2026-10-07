@@ -173,8 +173,40 @@ def test_probe_adds_what_only_the_code_shows(tmp_path):
                 self.flow = 2 * u
     ''')
     data, comments = infer(model, probe=True)
-    assert data["outputs"]["flow"] == {} and data["outputs"]["alarm"] == {"type": "Boolean"}
-    assert comments[("outputs", "alarm")] == "from the code; not seen in the probe"
+    # the probe's step worked without setting alarm: reading it would fail the FMU's step
+    assert data["outputs"] == {"flow": {}}
+    assert comments[("outputs", "#alarm#0")] == 'alarm = { type = "Boolean" }'
+    assert "not set by step() in the probe" in comments[("outputs", "#alarm#why")]
+
+
+def test_probe_comments_out_values_that_cant_be_fmi_variables(tmp_path):
+    # like impedance (complex result), pyproj (a str property that is None) and seirsplus (a growing history)
+    model = write(tmp_path, '''
+        import numpy as np
+
+        class Circuit:
+            def __init__(self):
+                self.history = np.zeros(1)
+
+            @property
+            def remarks(self) -> str:
+                return None
+
+            def predict(self, f=1.0):
+                self.history = np.append(self.history, f)
+                return np.array([1 + 2j, 3 - 1j]) * f
+    ''')
+    data, comments = infer(model, probe=True, fmi_version=3)
+    assert "outputs" not in data and "locals" not in data
+    assert comments[("outputs", "#y#0")] == 'y_real = { from = "return:real", dimensions = [2] }'
+    assert comments[("outputs", "#y#1")] == 'y_imag = { from = "return:imag", dimensions = [2] }'
+    assert comments[("outputs", "#remarks#0")] == 'remarks = { from = "attr:remarks", type = ... }'
+    assert "from [2] to [3]" in comments[("locals", "#history#why")]
+    with isolated_imports():
+        output, _ = init(str(model), probe=True, fmi_version=3, output=str(tmp_path / "fmugen.toml"))
+    text = output.read_text()
+    assert "# y_real = " in text and "# remarks: None in the probe" in text
+    assert "remarks" not in tomllib.loads(text).get("outputs", {})
 
 
 def test_init_writes_the_static_config(tmp_path):
