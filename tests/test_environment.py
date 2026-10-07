@@ -4,6 +4,7 @@ import tomllib
 import zipfile
 
 from conftest import EXAMPLES
+
 from fmugen.__main__ import CURRENT_OS, build
 
 

@@ -1,11 +1,11 @@
 """modelDescription.xml (FMI 2.0 or 3.0 Co-Simulation) from a fmugen interface spec."""
+import hashlib
 import itertools
 import math
-import hashlib
 import os
 import uuid
 import xml.etree.ElementTree as ET
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 LOG_CATEGORIES = [
@@ -16,8 +16,8 @@ LOG_CATEGORIES = [
     ("logStatusPending", None),
     ("logAll", None),
     ("logUnifmuMessages",
-     "Messages related to internal UniFMU functionality. "
-     "Enabling this category is required for distributed UniFMUs."),
+     ("Messages related to internal UniFMU functionality. "
+     "Enabling this category is required for distributed UniFMUs.")),
 ]
 
 # Replaced after the FMU's files are written by a token derived from their content (stamp_guid),
@@ -36,7 +36,7 @@ EXPERIMENT_ATTRIBUTES = {
 def build_time():
     """The build time: SOURCE_DATE_EPOCH when set (reproducible builds), else now."""
     epoch = os.environ.get("SOURCE_DATE_EPOCH")
-    return datetime.fromtimestamp(int(epoch), timezone.utc) if epoch else datetime.now(timezone.utc)
+    return datetime.fromtimestamp(int(epoch), UTC) if epoch else datetime.now(UTC)
 
 
 def _format_value(fmi_type, value):
@@ -189,8 +189,8 @@ LOG_CATEGORIES_FMI3 = [
     ("logStatusFatal", None),
     ("logEvents", None),
     ("logUnifmuMessages",
-     "Messages related to internal UniFMU functionality. "
-     "Enabling this category is required for distributed UniFMUs."),
+     ("Messages related to internal UniFMU functionality. "
+     "Enabling this category is required for distributed UniFMUs.")),
 ]
 
 

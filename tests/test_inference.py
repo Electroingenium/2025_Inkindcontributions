@@ -3,8 +3,8 @@ import textwrap
 import tomllib
 
 import pytest
-
 from conftest import EXAMPLES
+
 from fmugen.__main__ import init, isolated_imports
 from fmugen.config import Config, InterfaceError, load_config, parse_call
 from fmugen.interface import infer_config, render_toml
@@ -177,6 +177,7 @@ def test_optional_annotation_keeps_the_type(tmp_path, annotation):
 
 def test_optional_from_typing_objects():
     import typing
+
     from fmugen.static import unwrap_optional
     assert unwrap_optional(typing.Optional[bool]) is bool
     assert unwrap_optional(int | None) is int

@@ -1,13 +1,12 @@
 """Built FMUs: modelDescription.xml validity, and real simulations through UniFMU."""
 import shutil
-import sys
 
 import pytest
+from conftest import EXAMPLES
 from fmpy import read_model_description, simulate_fmu
 from fmpy.fmi2 import FMU2Slave
 from fmpy.validation import validate_fmu
 
-from conftest import EXAMPLES
 from fmugen.__main__ import build
 
 EXAMPLE_NAMES = ["psychrometry", "simple_pid", "rc_building"]

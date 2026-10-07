@@ -14,9 +14,9 @@ from datetime import datetime
 
 import pandas as pd
 import streamlit as st
-from opcua import Client as OPCClient, ua
-
 from fmu_io import NAMESPACE_URI, RESULTS_BEGIN, RESULTS_END, experiment, read_fmu
+from opcua import Client as OPCClient
+from opcua import ua
 
 OPCUA_ENDPOINT = os.getenv("OPCUA_ENDPOINT", "opc.tcp://opcua-server:4840")
 RUN_BACKEND = os.getenv("RUN_BACKEND", "docker")

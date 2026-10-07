@@ -16,9 +16,9 @@ import pandas as pd
 from fmpy import extract
 from fmpy.fmi2 import FMU2Slave
 from fmpy.fmi3 import FMU3Slave
-from opcua import Client as OPCClient, ua
-
 from fmu_io import NAMESPACE_URI, RESULTS_BEGIN, RESULTS_END, experiment, read_fmu
+from opcua import Client as OPCClient
+from opcua import ua
 
 logging.basicConfig(level=logging.INFO, stream=sys.stderr)
 logger = logging.getLogger("fmu_runner")

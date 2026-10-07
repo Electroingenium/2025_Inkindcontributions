@@ -75,8 +75,8 @@ INPUT PARAMETER DEFINITION
 
 """
 
-import supply_system
 import emission_system
+import supply_system
 
 __authors__ = "Prageeth Jayathissa"
 __copyright__ = "Copyright 2016, Architecture and Building Systems - ETH Zurich"
@@ -88,7 +88,7 @@ __email__ = "p.jayathissa@gmail.com"
 __status__ = "production"
 
 
-class Zone(object):
+class Zone:
     '''Sets the parameters of the zone. '''
 
     def __init__(self,
