@@ -139,13 +139,13 @@ def _infer_config(target, call, config_dir, fmi_version, starts, setup, kind, cr
         - {str(info.get("to", "")).partition(":")[2].partition("[")[0]
            for sec in ("parameters", "inputs", "states") for info in data.get(sec, {}).values()}         - {str(info["to"]).partition(":")[2] for sec in ("parameters", "inputs", "states")
            for info in data.get(sec, {}).values() if "." in str(info.get("to", ""))}
-    fields = sorted(n for n in unused if "." in n)
-    if fields:
-        bases = sorted({n.partition(".")[0] for n in fields})
-        raise InterfaceError(
-            f"--start {', '.join(fields)}: cannot tell the class of {', '.join(bases)} (no default and no "
-            "dataclass, pydantic, attrs or namedtuple annotation) to build it from fields; give the whole "
-            "argument instead, e.g. --start=NAME=call:module:Class(...)")
+    errors = comments.get(START_ERRORS, {})
+    explained = sorted(n for n in unused if n in errors)
+    if explained:
+        by_message = {}
+        for name in explained:
+            by_message.setdefault(errors[name], []).append(name)
+        raise InterfaceError("; ".join(f"--start {', '.join(names)}: {message}" for message, names in by_message.items()))
     if unused:
         raise InterfaceError(f"--start names that are not arguments of the model: {sorted(unused)}")
     return data, comments
@@ -397,7 +397,12 @@ def _infer_class(cls, call, data, comments, arrays=False, starts=None, create=No
     if obj is None and cls is None:
         return   # a factory whose object type isn't known without running it
 
-    read = static.returned(getattr(cls, method_name)) if cls is not None else static.Returned()
+    if cls is not None:
+        in_step, in_init = static.class_attributes(cls, method_name)
+        attributes = {a: static._merge([in_step.get(a), in_init.get(a)]) for a in {*in_step, *in_init}}
+        read = static.returned(getattr(cls, method_name), attributes=attributes)
+    else:
+        read = static.Returned()
     _add_returned(read, data, comments, is_class=True, arrays=arrays, probe=probe, seen=seen_returns)
     if cls is not None:
         _add_attributes(cls, method_name, data, comments, arrays, probe, seen_attrs)
@@ -520,6 +525,8 @@ def _add_returned(read, data, comments, is_class, arrays, probe, seen):
             info.update({k: v for k, v in copied.items() if k in ("type", "enum", "items")})
         elif kind in ("Boolean", "String", "Integer"):
             info["type"] = kind
+        elif kind is None:
+            _guessed(comments, name)
         data.setdefault("outputs", {})[name] = info
         if probe:
             comments[("outputs", name)] = "from the code; not seen in the probe"
@@ -542,6 +549,8 @@ def _add_attributes(cls, method_name, data, comments, arrays, probe, seen):
         if kind == "other":
             continue
         info = {"type": kind} if kind in ("Boolean", "String") else {}
+        if kind is None and section == "outputs":
+            _guessed(comments, attr)
         data.setdefault(section, {})[attr] = info
         comments[(section, attr)] = ("from the code; not seen in the probe" if probe else
                                      f"{'changed' if section == 'locals' else 'set'} by {method_name}()")
@@ -554,6 +563,27 @@ def _add_attributes(cls, method_name, data, comments, arrays, probe, seen):
         elif not probe:   # without an annotation its value could be anything: reading it would run code
             comments[("outputs", f"#{name}")] = (f"{name} = {{}}  # a property of the object (type unknown): "
                                                  "uncomment if it is a number, or run init --probe")
+
+
+START_ERRORS = ("init", "start errors")   # comments key (not rendered): {--start name: why it can't be used}
+
+
+def _start_error(comments, name, message):
+    comments.setdefault(START_ERRORS, {})[name] = message
+
+
+GUESSED = ("init", "guessed")   # comments key (not rendered): outputs typed Real only by default
+
+
+def _guessed(comments, name):
+    """An output whose type the code doesn't show: written as Real, which may be wrong."""
+    comments.setdefault(GUESSED, []).append(name)
+
+
+def guessed_outputs(data, comments):
+    """Outputs still in the config whose type is a guess (see _guessed)."""
+    return [n for n in comments.get(GUESSED, []) if n in data.get("outputs", {})
+            and not {"type", "dimensions", "enum"} & set(data["outputs"][n])]
 
 
 def _apply_converts(data, converts):
@@ -754,6 +784,11 @@ def _arguments(fn, section, data, comments, skip_self=False, allow_time=True, co
             continue
         if p.name not in starts and _split_fields(fn, p, variables, section, comments, starts, arrays):
             continue
+        for name in starts:
+            if name.startswith(f"{p.name}."):
+                _start_error(comments, name, f"cannot tell the class of {p.name} (no default and no dataclass, "
+                                             "pydantic, attrs or namedtuple annotation) to build it from fields; "
+                                             f"give the whole argument instead, e.g. --start={p.name}=call:module:Class(...)")
         if p.name in starts and not arrays and isinstance(starts[p.name], (list, tuple, bytes)):
             raise InterfaceError(f"--start {p.name}: arrays and bytes need --fmi 3 (FMI 2 has only scalar variables)")
         has_default = p.default is not p.empty or p.name in starts
@@ -931,6 +966,12 @@ def _split_fields(fn, p, variables, section, comments, starts, arrays):
             comments[(section, f"{p.name}_{field}")] = f"field {field!r} of {p.name} ({cls.__name__})"
     if not found:
         return False
+    names = {field for field, _, _ in fields}
+    for name in starts:
+        base, _, field = name.partition(".")
+        if base == p.name and field not in names:
+            _start_error(comments, name, f"{p.name} ({cls.__name__}) has no field {field!r}; "
+                                         f"its fields: {', '.join(sorted(names))}")
     variables.update(found)
     return True
 

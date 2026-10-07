@@ -30,7 +30,7 @@ from fmugen.distribute import (
     compiled_launch_command,
 )
 from fmugen.distribute import vendor as vendor_wheels
-from fmugen.interface import infer_config, parse_target, render_toml
+from fmugen.interface import guessed_outputs, infer_config, parse_target, render_toml
 from fmugen.templates.fmugen_runtime import setup_sys_path
 
 PACKAGE_DIR = Path(__file__).resolve().parent
@@ -329,10 +329,11 @@ def _init_warnings(data, comments, probe):
     if not outputs:
         warnings.append(NO_OUTPUTS)
         comments.setdefault(("outputs", None), NO_OUTPUTS)
-    elif not probe and any("type" not in info and "dimensions" not in info and "enum" not in info
-                           for info in outputs.values()):
-        warnings.append("output types were read from the code (Real unless it shows otherwise); "
-                        "run init --probe to check them")
+    guessed = guessed_outputs(data, comments)
+    if guessed:
+        names = ", ".join(guessed[:8]) + (f" and {len(guessed) - 8} more" if len(guessed) > 8 else "")
+        warnings.append(f"{names}: type not shown by the code, assumed Real; "
+                        + ("set type = ... if that's wrong" if probe else "run init --probe, or set type = ..."))
     return warnings
 
 

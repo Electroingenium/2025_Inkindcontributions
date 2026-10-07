@@ -621,7 +621,7 @@ class Engine:
                 return list(enum).index(value) + 1
         if value is None:
             raise TypeError(f"{var['name']} is None")
-        if isinstance(value, str) and var["type"] not in ("String", "Boolean", "Binary"):
+        if isinstance(value, str) and var["type"] not in ("String", "Boolean", "Binary") and not _is_number(value):
             raise TypeError(f"{var['name']} is a string ({value[:80]!r}), not a {var['type']}: "
                             f"set type = \"String\" for it in the config")
         return coerce(var["type"], plain_number(value, var.get("unit")))
@@ -1276,6 +1276,14 @@ def reshape(flat, dims):
         return list(flat)
     step = len(flat) // dims[0]
     return [reshape(flat[i * step:(i + 1) * step], dims[1:]) for i in range(dims[0])]
+
+
+def _is_number(text):
+    try:
+        float(text)
+    except ValueError:
+        return False
+    return True
 
 
 def coerce(fmi_type, value):

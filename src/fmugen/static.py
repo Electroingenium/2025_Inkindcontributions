@@ -55,13 +55,17 @@ def _own_nodes(node):
 
 ARRAY_CALLS = {"array", "asarray", "zeros", "ones", "empty", "full", "arange", "linspace", "eye", "tensor",
                "zeros_like", "ones_like", "empty_like", "full_like", "roll", "stack", "concatenate", "list", "tuple"}
+NUMBER_CALLS = {"float", "int", "abs", "round", "sqrt", "exp", "log", "log10", "log2", "sin", "cos", "tan",
+                "asin", "acos", "atan", "atan2", "sinh", "cosh", "tanh", "pow", "hypot", "floor", "ceil", "radians",
+                "degrees", "isclose"}
 OTHER_CALLS = {"dict", "set", "frozenset", "deque", "defaultdict", "OrderedDict", "Counter", "open", "Lock",
                "RLock", "Thread", "Queue", "Event", "object"}
 
 
 def _literal_type(node, namespace=None):
-    """What an assigned/returned expression obviously is: "Boolean", "String", "array", "other" (not
-    an FMI value: dicts, sets, objects), or None (a number, or not obvious from the code)."""
+    """What an assigned/returned expression obviously is: "Boolean", "String", "Real" (arithmetic, a
+    number literal, math functions), "array", "other" (not an FMI value: dicts, sets, objects), or None
+    (not obvious from the code)."""
     if isinstance(node, ast.Constant):
         if isinstance(node.value, bool):
             return "Boolean"
@@ -69,7 +73,14 @@ def _literal_type(node, namespace=None):
             return "String"
         if node.value is None:
             return "none"
-        return None
+        return "Real" if isinstance(node.value, (int, float)) else None
+    if isinstance(node, ast.BinOp):   # a * b, x ** 2; "a" + b is a string, [a] * n a list
+        kinds = {_literal_type(node.left, namespace), _literal_type(node.right, namespace)}
+        if kinds & {"String", "array", "other"}:
+            return None
+        return "Real"
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.USub, ast.UAdd)):
+        return "Real"
     if isinstance(node, (ast.Compare, ast.BoolOp)) or isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
         return "Boolean"   # a > b, a and b, not a (BoolOp of non-bools is rare in model code)
     if isinstance(node, (ast.List, ast.ListComp, ast.Tuple)):
@@ -80,6 +91,8 @@ def _literal_type(node, namespace=None):
         name = node.func.attr if isinstance(node.func, ast.Attribute) else getattr(node.func, "id", "")
         if name in ARRAY_CALLS:
             return "array"
+        if name in NUMBER_CALLS:
+            return "Real"
         if name in OTHER_CALLS:
             return "other"
         target = _resolve(node.func, namespace or {})
@@ -150,8 +163,9 @@ def _fields_of(hint):
     return names, {n: _hint_type(hints.get(n)) for n in names if _hint_type(hints.get(n))}
 
 
-def returned(fn, namespace=None):
-    """What fn returns: dict keys, tuple positions, NamedTuple/dataclass fields, or a single value."""
+def returned(fn, namespace=None, attributes=None):
+    """What fn returns: dict keys, tuple positions, NamedTuple/dataclass fields, or a single value.
+    `attributes` ({attr: kind}, for a method) gives the kind of a returned self.attr."""
     try:
         hint = typing.get_type_hints(inspect.unwrap(getattr(fn, "__func__", fn))).get("return")
     except Exception:
@@ -175,8 +189,27 @@ def returned(fn, namespace=None):
     dict_vars = _local_dicts(node)
     arg_names = {a.arg for a in [*node.args.posonlyargs, *node.args.args, *node.args.kwonlyargs]} - {self_name}
 
+    found = {}   # local variables: x = a * b
+    for item in _own_nodes(node):
+        if isinstance(item, ast.Assign) and len(item.targets) == 1 and isinstance(item.targets[0], ast.Name):
+            value = item.value
+            if isinstance(value, ast.Name):   # y = x: x's kind (an argument, or an earlier local)
+                value_kind = f"arg:{value.id}" if value.id in arg_names else _merge(found.get(value.id, []))
+            else:
+                value_kind = _literal_type(value)
+            found.setdefault(item.targets[0].id, []).append(value_kind)
+        elif isinstance(item, ast.AugAssign) and isinstance(item.target, ast.Name):
+            found.setdefault(item.target.id, []).append(None)   # x += ...: its kind stays that of x = ...
+    local_kinds = {name: _merge(kinds) for name, kinds in found.items()}
+
     def kind(value):   # an argument returned as it is takes that argument's type ("arg:<name>")
-        return f"arg:{value.id}" if isinstance(value, ast.Name) and value.id in arg_names else _literal_type(value)
+        if isinstance(value, ast.Name) and value.id in arg_names:
+            return f"arg:{value.id}"
+        if isinstance(value, ast.Name) and value.id in local_kinds:
+            return local_kinds[value.id]
+        if attributes is not None and isinstance(value, ast.Attribute) and isinstance(value.value, ast.Name)                 and value.value.id == self_name:
+            return attributes.get(value.attr)
+        return _literal_type(value)
 
     shapes = []
     for item in _own_nodes(node):
@@ -270,7 +303,7 @@ def _resolve(node, namespace):
 
 def assigned_attributes(cls, method_name, depth=MAX_DEPTH, raw=False):
     """{attribute: kind} that method_name sets on self, following self.other() calls. The kind is
-    "Boolean", "String", "array", "other" (not an FMI value) or None (a number / not obvious)."""
+    "Boolean", "String", "Real", "array", "other" (not an FMI value) or None (not obvious)."""
     kinds, seen = {}, set()
 
     def visit(name, level):
@@ -295,8 +328,12 @@ def assigned_attributes(cls, method_name, depth=MAX_DEPTH, raw=False):
                         if isinstance(t, ast.Subscript):
                             value = None   # self.x[i] = ...: x is a container, its kind comes from elsewhere
                         ref = _attribute_ref(value, self_name) if value is not None else None
-                        kinds.setdefault(base.attr, []).append(
-                            ("ref", ref) if ref else _literal_type(value, namespace) if value is not None else None)
+                        if isinstance(item, ast.AugAssign) and t is base:   # self.x += dx: x has dx's kind
+                            found = _literal_type(item.value, namespace)
+                            found = "Real" if not isinstance(item.op, ast.Add) or found == "Real" else None
+                        else:
+                            found = ("ref", ref) if ref else _literal_type(value, namespace) if value is not None else None
+                        kinds.setdefault(base.attr, []).append(found)
             if isinstance(item, ast.Call) and isinstance(item.func, ast.Attribute) \
                     and isinstance(item.func.value, ast.Name) and item.func.value.id == self_name:
                 visit(item.func.attr, level + 1)
