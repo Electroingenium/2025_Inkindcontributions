@@ -30,7 +30,7 @@ from fmugen.distribute import (
     compiled_launch_command,
 )
 from fmugen.distribute import vendor as vendor_wheels
-from fmugen.interface import guessed_outputs, infer_config, parse_target, render_toml
+from fmugen.interface import guessed_outputs, infer_config, parse_target, render_toml, unfit_outputs
 from fmugen.templates.fmugen_runtime import setup_sys_path
 
 PACKAGE_DIR = Path(__file__).resolve().parent
@@ -334,6 +334,8 @@ def _init_warnings(data, comments, probe):
         names = ", ".join(guessed[:8]) + (f" and {len(guessed) - 8} more" if len(guessed) > 8 else "")
         warnings.append(f"{names}: type not shown by the code, assumed Real; "
                         + ("set type = ... if that's wrong" if probe else "run init --probe, or set type = ..."))
+    for name, why in unfit_outputs(comments).items():
+        warnings.append(f"{name}: left commented out in the config, since {why}")
     return warnings
 
 

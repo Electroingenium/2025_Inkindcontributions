@@ -19,7 +19,7 @@ Setup: Windows 11, Python 3.13 venvs made with `uv`, fmugen from this checkout (
 1. *(UniFMU limitation, not fixed)* **After an FMU error, the UniFMU Python backend keeps running.** FMPy reports the error and exits, but the backend (`main.py`, 2 processes) stays alive, holding the importer's stdout/stderr. Anything that reads that output (a pipe, `subprocess.run(capture_output=True)`, `… | grep`) then hangs. 31 orphaned backend pairs had built up by the end of these runs. A successful run leaves none behind. Seen with FMI 2 and FMI 3.
 2. *(Fixed)* **`init` writes configs that `build` or the runtime then reject.** Dotted names from `--start a.b=…` become parameters that `build` refuses (simglucose). String attributes found in the code are typed Real (thermo). A date-time argument becomes `when = { start = 0.0 }` (pysolar, ppigrf). Constructor `*args` get passed as keyword arguments (python-control).
 3. *(Fixed)* **Silent zero-output FMUs.** No warning when `init` finds no outputs (ambiance, PyTCI, cantera, pandapower).
-4. *(Open)* **Outputs whose type or size changes at run time fail the step.** Complex arrays (impedance), arrays whose length varies (seirsplus), a property that is `None` (pyproj), an attribute that only exists sometimes (river).
+4. *(Detected by `init --probe`; the runtime still fails on them)* **Outputs whose type or size changes at run time fail the step.** Complex arrays (impedance), arrays whose length varies (seirsplus), a property that is `None` (pyproj), an attribute that only exists sometimes (river).
 5. *(Fixed)* **`to = "pos:N"` on constructor parameters is accepted by `build` but ignored at run time.** The constructor gets no arguments.
 6. *(Fixed)* **`call:` start values can't use lazily exported submodules**, e.g. `pybamm.lithium_ion:SPM()`. The real module path works.
 7. *(UniFMU limitation, not fixed)* **`fmpy simulate` shows no reason for a failure**, only `fmi3ExitInitializationMode failed with status 3`. The Python traceback is only visible with `simulate_fmu(debug_logging=True, logger=…)`. `--fmi-logging` instantiates with `loggingOn=False` and doesn't show it.
@@ -122,7 +122,16 @@ Every FMU that failed in `exitInitializationMode` or `doStep` left its UniFMU ba
 - **Arrays whose size changes** between calls (seirsplus history) get a fixed size from the probe.
 - An output that is **`None`** at run time (pyproj `remarks`) fails the step.
 
-**Fixed (2026-10-07):** zero outputs only. `init` warns (stderr and a comment in `[outputs]`), and `build` prints `note: the FMU has no outputs`. The other three items (problem 4) are still open.
+**Fixed (2026-10-07):** zero outputs only. `init` warns (stderr and a comment in `[outputs]`), and `build` prints `note: the FMU has no outputs`.
+
+**Detected (2026-10-07), problem 4:** `init --probe` now writes these commented out, with the reason, and warns on stderr:
+
+- a **complex** value: two commented lines for its parts, `y_real = { from = "return:real", … }` and `y_imag`. Uncommented, the impedance FMU's outputs equal a direct `predict` call.
+- a value or property that is **`None`** (or raised) in the probe, although the code annotates it as a number, bool or string (pyproj `remarks`, `scope`).
+- an **array whose size changes**: classes are stepped a second time, and arrays whose size differs are commented out (seirsplus `tseries`, `numS`, … went from 2 to 3).
+- an output found **only in the code** that the probe's working call didn't set or return. river's `max_cum_l1` is in this group: it is set only when `l1 != 0`, and the probe never saw it (the table above is wrong to say it did).
+
+The runtime is unchanged: an output that does turn into `None`, changes size or is missing still fails the step.
 
 ### `to = "pos:N"` on constructor parameters is ignored
 
