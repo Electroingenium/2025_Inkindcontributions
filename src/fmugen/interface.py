@@ -327,6 +327,7 @@ def _infer_function(fn, data, comments, arrays=False, starts=None, probe=False, 
         except Exception as e:
             comments[("outputs", None)] = f"probe call failed ({e!r}); outputs below are read from the code"
         else:
+            comments[PROBED] = True
             seen = _outputs_from_return(result, data, comments, default_name="y", is_class=False, arrays=arrays)
             returned_names |= seen
     if inspect.isclass(fn):   # kind = "function": the new object is the result; its constructor sets the outputs
@@ -453,6 +454,7 @@ def _probe_class(cls, method_name, data, comments, arrays, call_starts, create, 
     except Exception as e:
         comments[("outputs", None)] = f"probe call failed ({e!r}); outputs below are read from the code"
         return obj, set(), set(getattr(obj, "__dict__", {}))
+    comments[PROBED] = True
     after = _numeric_attributes(obj, arrays)
     _check_picklable(obj, data, comments)
 
@@ -464,7 +466,12 @@ def _probe_class(cls, method_name, data, comments, arrays, call_starts, create, 
         if attr not in taken:
             data.setdefault("outputs", {})[attr] = _typed({}, value, arrays)
             comments[("outputs", attr)] = "a property of the object"
-    taken |= set(data.get("outputs", {}))
+    unfit = _unfit_properties(obj, data, comments, arrays, taken)
+    taken |= set(data.get("outputs", {})) | unfit
+    for attr, value in getattr(obj, "__dict__", {}).items():   # complex attributes (None ones are too common)
+        if not attr.startswith("_") and attr not in taken and value is not None and _misfit(value):
+            _unfit_value(comments, "outputs", attr, value, f"attr:{attr}", arrays)
+            unfit.add(attr)
     for attr, value in after.items():
         if attr in taken:
             continue
@@ -474,7 +481,57 @@ def _probe_class(cls, method_name, data, comments, arrays, call_starts, create, 
         elif not _same(before[attr], value):
             data.setdefault("locals", {})[attr] = _typed({}, value, arrays)
             comments[("locals", attr)] = f"changed by {method_name}()"
-    return obj, returned, set(getattr(obj, "__dict__", {})) | set(_property_values(obj, arrays))
+    _check_sizes(obj, method_name, data, comments)
+    return obj, returned, set(getattr(obj, "__dict__", {})) | set(_property_values(obj, arrays)) | unfit
+
+
+def _unfit_properties(obj, data, comments, arrays, taken):
+    """Properties annotated as a number, bool or str (so the code alone would make them outputs) whose
+    probe value isn't one, e.g. None, or that raised: commented out. Returns their names."""
+    annotated = {name for name, kind in static.own_properties(type(obj)).items() if kind}
+    unfit = set()
+    for attr, value in _property_values(obj, arrays, everything=True).items():
+        if attr in taken or attr not in annotated or (not isinstance(value, Exception) and _fmi_value(value, arrays)):
+            continue
+        if not _unfit_value(comments, "outputs", attr, value, f"attr:{attr}", arrays):
+            why = (f"reading it raised {value!r} in the probe" if isinstance(value, Exception)
+                   else f"a {type(value).__name__} in the probe, not an FMI value")
+            _unfit(comments, "outputs", attr, why, [f'{_key(attr)} = {{ from = "attr:{attr}" }}'])
+        unfit.add(attr)
+    return unfit
+
+
+def _check_sizes(obj, method_name, data, comments):
+    """Call the step method a second time: an array whose size changes (a history that grows each
+    call) can't be an FMI array, which has a fixed size."""
+    sized = [(section, name, info) for section in ("outputs", "locals")
+             for name, info in data.get(section, {}).items() if "dimensions" in info]
+    if not sized:
+        return
+    from fmugen.templates.fmugen_runtime import get_path, pick
+    try:
+        result = _call_with_probe_inputs(getattr(obj, method_name), data, "call_constants")
+    except Exception:
+        return
+    for section, name, info in sized:
+        source = info.get("from", f"attr:{name}")
+        kind, _, path = source.partition(":")
+        try:
+            value = pick(result, path or None) if kind == "return" else get_path(obj, path)
+        except Exception as e:
+            size = f"unreadable ({e!r})"
+        else:
+            new = _array_info(_scalar_of(value))
+            size = new["dimensions"] if new else "not an array"
+        if size == info["dimensions"]:
+            continue
+        del data[section][name]
+        comments.pop((section, name), None)
+        _unfit(comments, section, name, f"its size changed from {info['dimensions']} to {size} on a second probe "
+               "call, and an FMI array has a fixed size", [f'{_key(name)} = {{ ' + (f'from = "{source}", ' if section == "outputs"
+                                                                       else "") + "dimensions = [...] }"])
+        if not data[section]:
+            del data[section]
 
 
 # ---------------- results read from the code ----------------
@@ -520,6 +577,10 @@ def _add_returned(read, data, comments, is_class, arrays, probe, seen):
             continue
         if kind in ("other", "none"):
             continue
+        if comments.get(PROBED):   # the probe's call worked, and didn't return it
+            _unfit(comments, "outputs", name, "not in what the probe's call returned; reading it fails the step "
+                   "whenever the model doesn't return it", [f'{_key(name)} = {{ from = "{source}" }}'])
+            continue
         info = {} if (source == f"return:{name}" and not is_class) else {"from": source}
         if copied:
             info.update({k: v for k, v in copied.items() if k in ("type", "enum", "items")})
@@ -547,6 +608,11 @@ def _add_attributes(cls, method_name, data, comments, arrays, probe, seen):
                                                    f"{method_name}(): set its dimensions and uncomment, or run init --probe")
             continue
         if kind == "other":
+            continue
+        if comments.get(PROBED) and section == "outputs":   # the probe's step worked, and didn't set it
+            _unfit(comments, "outputs", attr, f"not set by {method_name}() in the probe; reading it fails the step "
+                   "whenever the model hasn't set it", [f'{_key(attr)} = ' + (f'{{ type = "{kind}" }}' if kind in
+                                                        ("Boolean", "String") else "{}")])
             continue
         info = {"type": kind} if kind in ("Boolean", "String") else {}
         if kind is None and section == "outputs":
@@ -585,6 +651,53 @@ def guessed_outputs(data, comments):
     """Outputs still in the config whose type is a guess (see _guessed)."""
     return [n for n in comments.get(GUESSED, []) if n in data.get("outputs", {})
             and not {"type", "dimensions", "enum"} & set(data["outputs"][n])]
+
+
+UNFIT = ("init", "unfit")   # comments key (not rendered): {name: why init left it out}
+PROBED = ("init", "probed")   # comments key (not rendered): the probe's step call worked
+
+
+def _unfit(comments, section, name, why, lines):
+    """An output (or local) the probe showed can't work as it is: written commented out, with why."""
+    comments[(section, f"#{name}#why")] = f"{name}: {why}"
+    for i, line in enumerate(lines):
+        comments[(section, f"#{name}#{i}")] = line
+    comments.setdefault(UNFIT, {})[name] = why
+
+
+def unfit_outputs(comments):
+    """{name: why} for outputs init left commented out because the probe showed they'd fail."""
+    return dict(comments.get(UNFIT, {}))
+
+
+def _misfit(value):
+    """Why a value seen in the probe can't be read into an FMI variable, or None if it can (or isn't
+    one of these cases)."""
+    value = _scalar_of(value)
+    if value is None:
+        return "None in the probe, so its type is unknown; a None at run time fails the step"
+    if isinstance(value, complex) or "complex" in str(getattr(value, "dtype", "")):
+        return "complex in the probe, and FMI has no complex type: uncomment its real and imaginary parts"
+    return None
+
+
+def _unfit_value(comments, section, name, value, source, arrays=True):
+    """Comment out `name` (read from `source`: "return", "return:key" or "attr:name") if its probe value
+    is None or complex. Returns True if it did."""
+    why = _misfit(value)
+    if why is None:
+        return False
+    if "complex" in why:
+        info = _array_info(value.real) if getattr(value, "ndim", 0) else None
+        dims = f", dimensions = {info['dimensions']}" if info else ""
+        sep = "." if ":" in source else ":"
+        lines = [f'{_key(f"{name}_{part}")} = {{ from = "{source}{sep}{part}"{dims} }}' for part in ("real", "imag")]
+        if dims and not arrays:
+            why += " (an array: needs init --fmi 3)"
+    else:
+        lines = [f'{_key(name)} = {{ from = "{source}", type = ... }}']
+    _unfit(comments, section, name, why, lines)
+    return True
 
 
 def _apply_converts(data, converts):
@@ -650,14 +763,18 @@ def _probe_call(fn, data, comments, constants_key="constants"):
     return result
 
 
+def _call_with_probe_inputs(fn, data, constants_key):
+    args, kwargs = _probe_args(data, ("inputs",), fn)
+    kwargs.update(_time_kwargs(data.get("time", {})))
+    kwargs.update(_probe_constants(data, constants_key))
+    return fn(*args, **kwargs)
+
+
 def _probe_once(fn, data, comments, constants_key="constants"):
     """Call fn with the probe inputs. If it fails and array inputs are plain lists, retry with them
     as numpy arrays, then torch tensors (when installed), and keep the first that works."""
     def call():
-        args, kwargs = _probe_args(data, ("inputs",), fn)
-        kwargs.update(_time_kwargs(data.get("time", {})))
-        kwargs.update(_probe_constants(data, constants_key))
-        return fn(*args, **kwargs)
+        return _call_with_probe_inputs(fn, data, constants_key)
 
     try:
         return call()
@@ -1154,7 +1271,7 @@ def _outputs_from_return(result, data, comments, default_name, is_class, arrays=
         items = [(field, getattr(result, field), f"return:{field}") for field in result._fields]
     elif isinstance(result, (tuple, list)):
         items = [(f"{default_name}{i}", v, f"return:{i}") for i, v in enumerate(result)]
-    elif _fmi_value(result):
+    elif _fmi_value(result) or (result is not None and _misfit(result)):
         items = [(default_name, result, "return")]
     elif result is not None and hasattr(result, "__dict__"):
         items = [(k, v, f"return:{k}") for k, v in vars(result).items() if not k.startswith("_")]
@@ -1165,6 +1282,8 @@ def _outputs_from_return(result, data, comments, default_name, is_class, arrays=
     taken = {n for section in ("parameters", "inputs", "states") for n in data.get(section, {})}
     for name, value, source in items:
         if name in taken:  # e.g. an object that echoes its inputs as attributes
+            continue
+        if _dotted_name(name) and _unfit_value(comments, "outputs", name, value, source, arrays):
             continue
         if not _dotted_name(name) or not _fmi_value(value, arrays):
             comments[("outputs", None)] = f"skipped {name!r}: not an FMI value or not a valid name"
@@ -1269,7 +1388,7 @@ def _snapshot(value):
     return value.copy() if hasattr(value, "copy") and not isinstance(value, (str, bytes)) else value
 
 
-def _property_values(obj, arrays=False):
+def _property_values(obj, arrays=False, everything=False):
     """Public properties of the object whose current value is an FMI value.
 
     Only properties defined in the model's own package count: base classes from frameworks
@@ -1284,9 +1403,11 @@ def _property_values(obj, arrays=False):
             continue
         try:
             value = getattr(obj, name)
-        except Exception:
+        except Exception as e:
+            if everything:   # the exception, in place of the value
+                values[name] = e
             continue
-        if _fmi_value(value, arrays):
+        if everything or _fmi_value(value, arrays):
             values[name] = _snapshot(value)
     return values
 
