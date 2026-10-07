@@ -23,7 +23,13 @@ from pathlib import Path
 from fmugen.compose import PARTS_DIR, Composite, combine, is_composite
 from fmugen.config import MODEL_DIR, Config, InterfaceError, load_config, normalize
 from fmugen.description import build_time, stamp_guid, write_model_description
-from fmugen.distribute import COMPILERS, bundle_hf_models, compile_fmu, compiled_launch_command, vendor as vendor_wheels
+from fmugen.distribute import (
+    COMPILERS,
+    bundle_hf_models,
+    compile_fmu,
+    compiled_launch_command,
+)
+from fmugen.distribute import vendor as vendor_wheels
 from fmugen.interface import infer_config, parse_target, render_toml
 from fmugen.templates.fmugen_runtime import setup_sys_path
 
@@ -412,7 +418,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
     try:
         if args.command == "init":
-            output, data = init(args.model, args.output, args.call, args.force, args.fmi,
+            output, _data = init(args.model, args.output, args.call, args.force, args.fmi,
                                 _parse_starts(args.start), args.setup, args.kind, args.create, args.probe,
                                 _parse_converts(args.convert))
             if output:

@@ -18,7 +18,6 @@ def compute_balances_simplified(regen_target_temp, airCond_target_temp, precool_
     # Physical constants
     rho_air = 1.2      # [kg/m³] density of dry air
     Cp_air = 1010      # [J/kg·K] specific heat of dry air
-    dH_evap = 2.45e6   # [J/kg] latent heat of vaporization (not used here, but available)
 
     # Mass flow rate of air at each key point
     mdot_air_5 = vfr_5 * rho_air

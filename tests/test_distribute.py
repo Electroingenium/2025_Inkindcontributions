@@ -4,9 +4,9 @@ import tomllib
 import zipfile
 
 import pytest
+from conftest import EXAMPLES
 from fmpy import simulate_fmu
 
-from conftest import EXAMPLES
 from fmugen.__main__ import build
 from fmugen.config import InterfaceError
 

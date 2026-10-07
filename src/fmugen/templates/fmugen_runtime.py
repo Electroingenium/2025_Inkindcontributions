@@ -1061,7 +1061,7 @@ def dump_state(state):
 def load_state(data):
     kind, payload = data[:1], data[1:]
     if kind == b"C":
-        import cloudpickle   # noqa: F401  (its pickles load with pickle once it is importable)
+        import cloudpickle  # noqa: F401  (its pickles load with pickle once it is importable)
     elif kind == b"D":
         import dill
         return dill.loads(payload)
@@ -1218,9 +1218,7 @@ def plain_number(value, unit=None):
 def get_path(obj, path):
     """Follow a dotted path through attributes, mapping keys and sequence indexes: "state.T", "rewards.speed", "4.x"."""
     for part in path.split("."):
-        if isinstance(obj, Mapping) and (part in obj or not hasattr(obj, part)):   # "options.update": the method
-            obj = obj[part]
-        elif _labelled(obj) and part in obj.keys():   # pandas Series/DataFrame, xarray Dataset
+        if isinstance(obj, Mapping) and (part in obj or not hasattr(obj, part)) or _labelled(obj) and part in obj:   # "options.update": the method
             obj = obj[part]
         elif part.isdigit() and isinstance(obj, (tuple, list)):
             obj = obj[int(part)]

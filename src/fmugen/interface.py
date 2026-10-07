@@ -71,7 +71,7 @@ def infer_config(target, call=None, config_dir=None, fmi_version=None, starts=No
     The model is imported (and probed) in config_dir, as it will run inside the FMU with
     [model] cwd, so files it opens by a relative path are found.
     """
-    path, module_name, name = parse_target(target)
+    path, _module_name, name = parse_target(target)
     config_dir = Path(config_dir or (path.parent if path else ".")).resolve()
     if path:
         target = f"{path.resolve()}" + (f":{name}" if name else "")
@@ -182,7 +182,11 @@ def _rename_reserved(data, comments, is_class):
 def _run_setup(data, obj=None):
     """Run [model] setup steps for the probe: functions before construction, methods after."""
     from fmugen.config import _setup
-    from fmugen.templates.fmugen_runtime import get_path, resolve_constant, resolve_reference
+    from fmugen.templates.fmugen_runtime import (
+        get_path,
+        resolve_constant,
+        resolve_reference,
+    )
     for step in _setup(data["model"].get("setup", []), is_class=True):
         is_method = ":" not in step["call"]
         if is_method != (obj is not None):
@@ -577,7 +581,7 @@ def _probe_call(fn, data, comments, constants_key="constants"):
 
     try:
         return call()
-    except Exception as first:
+    except Exception:
         plain = [info for info in data.get("inputs", {}).values()
                  if "dimensions" in info and not info.get("numpy") and not info.get("convert")]
         if not plain:
@@ -599,7 +603,7 @@ def _probe_call(fn, data, comments, constants_key="constants"):
             for name in names:
                 comments[("inputs", name)] = f"passed as {shown}: the probe failed with lists"
             return result
-        raise first
+        raise
 
 
 def _check_picklable(obj, data, comments):

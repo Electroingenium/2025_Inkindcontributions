@@ -4,8 +4,8 @@ import textwrap
 from pathlib import Path
 
 import pytest
-
 from conftest import EXAMPLES
+
 from fmugen.__main__ import init, isolated_imports
 from fmugen.templates.model_fmi2 import Fmi2Status
 
@@ -205,7 +205,7 @@ def test_state_of_selected_attributes(tmp_path, make_fmu, adapter):
     fmu = adapter(fmu_dir)
     fmu.initialize()
     assert fmu.fmi2DoStep(0.0, 1.0, False) == OK and fmu.get("total") == 1.0
-    status, state = fmu.fmi2SerializeFmuState()
+    _status, state = fmu.fmi2SerializeFmuState()
     lock = fmu.engine.obj.lock
     assert fmu.fmi2DoStep(1.0, 1.0, False) == OK and fmu.get("total") == 2.0
     assert fmu.fmi2DeserializeFmuState(state) == OK
@@ -378,6 +378,7 @@ def test_boolean_from_unknown_string_is_an_error():
 def test_number_like_values_are_coerced():
     from decimal import Decimal
     from fractions import Fraction
+
     from fmugen.templates.fmugen_runtime import coerce, plain_number
     assert coerce("Real", plain_number(Decimal("1.5"))) == 1.5
     assert coerce("Real", plain_number(Fraction(1, 4))) == 0.25
@@ -394,6 +395,7 @@ def test_pint_quantities_in_and_out():
 
 def test_dotted_paths_walk_mappings_sequences_and_attributes():
     from types import SimpleNamespace
+
     from fmugen.templates.fmugen_runtime import pick
     result = (0, {"rewards": {"speed": 1.5}, "a.b": 2}, SimpleNamespace(state={"T": 3}))
     assert pick(result, "1.rewards.speed") == 1.5
@@ -534,7 +536,7 @@ def test_module_globals_are_reset_and_saved(tmp_path, make_fmu, adapter):
     for t in range(3):
         assert fmu.fmi2DoStep(float(t), 1.0, False) == OK
     calls = fmu.get("calls")
-    status, state = fmu.fmi2SerializeFmuState()
+    _status, state = fmu.fmi2SerializeFmuState()
     assert fmu.fmi2DoStep(3.0, 1.0, False) == OK and fmu.get("calls") == calls + 1
     assert fmu.fmi2DeserializeFmuState(state) == OK
     assert fmu.fmi2DoStep(3.0, 1.0, False) == OK and fmu.get("calls") == calls + 1   # rolled back first

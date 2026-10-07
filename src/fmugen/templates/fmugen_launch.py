@@ -58,7 +58,7 @@ def env_python(env):
 
 
 def run(cmd):
-    result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True)
+    result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     if result.returncode != 0:
         raise RuntimeError("command failed: " + " ".join(cmd) + "\n" + result.stdout)
 

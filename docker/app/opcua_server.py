@@ -3,9 +3,8 @@ import logging
 import os
 import time
 
-from opcua import Server
-
 from fmu_io import NAMESPACE_URI, read_fmu
+from opcua import Server
 
 FMU_PATH = os.getenv("FMU_PATH", "/model/model.fmu")
 ENDPOINT = os.getenv("OPCUA_BIND_ENDPOINT", "opc.tcp://0.0.0.0:4840")

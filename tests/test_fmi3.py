@@ -1,15 +1,14 @@
 """FMI 3: the generated adapter driven directly, and built FMUs driven through UniFMU."""
 import shutil
-import sys
 import textwrap
 from ctypes import c_double, c_int, c_uint64
 
 import pytest
+from conftest import EXAMPLES
 from fmpy import read_model_description, simulate_fmu
 from fmpy.fmi3 import FMU3Slave, fmi3ValueReference
 from fmpy.validation import validate_fmu
 
-from conftest import EXAMPLES
 from fmugen.__main__ import build
 from fmugen.config import InterfaceError
 from fmugen.templates.fmugen_runtime import Status
@@ -388,7 +387,7 @@ interval = 2.0
 @pytest.mark.parametrize("name", ["psychrometry", "simple_pid", "rc_building"])
 def test_fmi2_examples_build_as_fmi3_with_the_same_results(tmp_path, name):
     from fmpy import simulate_fmu
-    kwargs = dict(stop_time=7200 if name == "rc_building" else 1.0, output_interval=3600 if name == "rc_building" else 0.1)
+    kwargs = {"stop_time": 7200 if name == "rc_building" else 1.0, "output_interval": 3600 if name == "rc_building" else 0.1}
     results = {}
     for version in (2, 3):
         out = build(EXAMPLES / name, tmp_path / f"{name}{version}.fmu", fmi_version=version)[0]
