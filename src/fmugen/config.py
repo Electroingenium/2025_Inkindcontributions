@@ -342,12 +342,15 @@ def normalize(config, entry_obj, module_name, sys_path, model_name=None, author=
             "the config defines no FMU variables: add [inputs]/[parameters] and [outputs] "
             "(the model's arguments and results could not be inferred)"
         )
-    for clock_name in [None, *clock_names]:
+    if not any("from" in v for v in variables):
+        notes.append("the FMU has no outputs: add [outputs] to read results from the model")
+    for pos_kind, clock_name in [("initpos", None), *(("pos", c) for c in [None, *clock_names])]:
         positions = sorted(int(v["to"]["name"]) for v in variables
-                           if v.get("to", {}).get("kind") == "pos" and (v.get("clocks") or [None])[0] == clock_name)
+                           if v.get("to", {}).get("kind") == pos_kind and (v.get("clocks") or [None])[0] == clock_name)
         if positions != list(range(len(positions))):
-            raise InterfaceError(f"positional arguments (to = \"pos:N\") must be numbered 0, 1, 2, ... without gaps; "
-                                 f"got {positions}")
+            where = "the constructor's" if pos_kind == "initpos" else "the call's"
+            raise InterfaceError(f"{where} positional arguments (to = \"pos:N\") must be numbered 0, 1, 2, ... "
+                                 f"without gaps; got {positions}")
 
     names = [v["name"] for v in variables]
     duplicates = sorted({n for n in names if names.count(n) > 1} | (set(names) & clock_names))
@@ -702,6 +705,8 @@ def _variable(section, causality, name, info, is_class, type_definitions, versio
         var["to"] = parse_binding(info.get("to", f"{default}:{name}"), kinds, where)
         if var["to"]["kind"] == "pos" and not var["to"]["name"].isdigit():
             raise InterfaceError(f"{where}: pos needs an argument index, e.g. to = \"pos:0\"")
+        if var["to"]["kind"] == "pos" and default == "init":   # a class's parameter: a constructor position
+            var["to"]["kind"] = "initpos"
         if "clocks" in var and var["to"]["kind"] == "init":
             raise InterfaceError(f"{where}: a clocked input is passed to its clock's call, not the constructor")
         if section == "states":

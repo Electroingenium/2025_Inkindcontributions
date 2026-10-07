@@ -573,3 +573,128 @@ def test_rollback_repeats_random_draws(tmp_path, make_fmu, adapter):
     assert fmu.fmi2DoStep(0.0, 1.0, False) == OK
     assert fmu.get("a", "b") == first
 
+
+
+def test_star_args_constructor_gets_positional_parameters(tmp_path, make_fmu, adapter):
+    write(tmp_path, "affine.py", """
+        class Affine:
+            def __init__(self, *args, **kwargs):   # e.g. control.StateSpace(A, B, C, D)
+                self.a, self.b = args
+
+            def step(self, x=1.0):
+                return self.a * x + self.b
+    """)
+    output, data = init(tmp_path / "affine.py", starts={"a": 2.0, "b": 0.5})
+    assert data["parameters"] == {"a": {"start": 2.0, "to": "pos:0"}, "b": {"start": 0.5, "to": "pos:1"}}
+    fmu = adapter(make_fmu(output))
+    assert fmu.set("a", 3.0) == OK
+    fmu.initialize()
+    assert fmu.fmi2DoStep(0.0, 1.0, False) == OK
+    assert fmu.get("y") == 3.5
+
+
+def test_namedtuple_argument_fields(tmp_path, make_fmu, adapter):
+    write(tmp_path, "meal.py", """
+        from typing import NamedTuple
+
+        class Action(NamedTuple):
+            CHO: float
+            insulin: float = 0.0
+
+        class Patient:
+            def __init__(self):
+                self.glucose = 100.0
+
+            def step(self, action: Action):
+                self.glucose += action.CHO - 10 * action.insulin
+                return self.glucose
+    """)
+    output, data = init(f"{tmp_path / 'meal.py'}:Patient", starts={"action.CHO": 1.0})
+    assert data["inputs"]["action_CHO"] == {"start": 1.0, "to": "arg:action.CHO"}
+    fmu = adapter(make_fmu(output))
+    fmu.initialize()
+    assert fmu.set("action_insulin", 0.5) == OK
+    assert fmu.fmi2DoStep(0.0, 1.0, False) == OK
+    assert fmu.get("y") == 96.0
+
+
+def test_fields_of_an_argument_of_unknown_class_are_an_error(tmp_path):
+    from fmugen.config import InterfaceError
+    write(tmp_path, "kw.py", """
+        class Patient:
+            def __init__(self, **kwargs):
+                pass
+
+            def step(self, action):
+                return action.CHO
+    """)
+    with pytest.raises(InterfaceError, match="cannot tell the class of action"):
+        init(tmp_path / "kw.py", starts={"action.CHO": 1.0})
+
+
+def test_date_time_argument_gets_an_epoch(tmp_path, make_fmu, adapter):
+    write(tmp_path, "sun.py", """
+        import datetime
+
+        def altitude(lat=40.0, when: datetime.datetime | None = None):
+            return {"hour": when.hour + when.minute / 60}
+    """)
+    output, data = init(tmp_path / "sun.py")
+    assert data["time"]["when"]["source"] == "end_time"
+    assert data["time"]["when"]["epoch"].endswith("T00:00:00")
+    fmu = adapter(make_fmu(output))
+    fmu.initialize()
+    assert fmu.fmi2DoStep(0.0, 5400.0, False) == OK
+    assert fmu.get("hour") == 1.5
+
+
+def test_string_in_a_real_output_says_to_set_its_type(tmp_path, make_fmu, adapter):
+    write(tmp_path, "chem.py", """
+        def chemical(T=300.0):
+            return {"CAS": "7732-18-5"}
+    """, config="""
+        [model]
+        entry = "chem.py:chemical"
+        [outputs]
+        CAS = {}
+    """)
+    fmu = adapter(make_fmu(tmp_path / "fmugen.toml"))
+    assert fmu.fmi2SetupExperiment(0.0, None, None) == OK and fmu.fmi2EnterInitializationMode() == OK
+    assert fmu.fmi2ExitInitializationMode() == ERROR
+    assert 'CAS is a string' in fmu.logs[-1][2] and 'set type = "String"' in fmu.logs[-1][2]
+
+
+def test_no_outputs_is_a_warning_and_a_build_note(tmp_path, make_fmu, capsys):
+    write(tmp_path, "quiet.py", """
+        class Quiet:
+            def step(self, x=1.0):
+                self.update(x)
+
+            def update(self, x):
+                pass
+    """)
+    output, _ = init(tmp_path / "quiet.py")
+    assert "no outputs found" in capsys.readouterr().err
+    assert "no outputs found" in output.read_text()
+    make_fmu(output)
+    assert "the FMU has no outputs" in capsys.readouterr().out
+
+
+def test_call_reaches_lazily_exported_submodules(tmp_path, monkeypatch):
+    from fmugen.templates.fmugen_runtime import call_reference
+    package = tmp_path / "lazypkg"
+    (package / "models").mkdir(parents=True)
+    (package / "__init__.py").write_text(textwrap.dedent("""
+        def __getattr__(name):   # as pybamm exports lithium_ion
+            if name == "family":
+                from .models import family
+                return family
+            raise AttributeError(name)
+    """))
+    (package / "models" / "__init__.py").write_text("")
+    (package / "models" / "family.py").write_text("def SPM(n=1):\n    return ('SPM', n)\n")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    with isolated_imports():
+        assert call_reference("lazypkg.family:SPM(n=2)") == ("SPM", 2)
+        with pytest.raises(ModuleNotFoundError):
+            call_reference("lazypkg.missing:SPM()")
