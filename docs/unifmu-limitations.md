@@ -15,7 +15,7 @@ Problems that come from [UniFMU](https://github.com/INTO-CPS-Association/unifmu)
 | 9 | [Reserved module names](#9-reserved-module-names) | Limitation | None. Rename the model file |
 | 10 | [FMI 3 template declares `fmiVersion="3.0-beta.4"`](#10-fmi-3-template-declares-fmiversion30-beta4) | Bug | fmugen writes its own `modelDescription.xml` |
 | 11 | [Smaller limitations from the README](#11-smaller-limitations-from-the-readme) | Limitation | — |
-| 12 | [Unconfirmed: FMI 2 crash with FMPy debug logging](#12-unconfirmed-fmi-2-crash-with-fmpy-debug-logging) | Unconfirmed | — |
+| 12 | [FMI 2 log messages are used as printf format strings](#12-fmi-2-log-messages-are-used-as-printf-format-strings) | Bug | None yet. Turn off debug logging, or avoid `%` in log messages |
 
 ---
 
@@ -98,6 +98,33 @@ UniFMU 0.14 writes `fmiVersion="3.0-beta.4"` into the FMI 3 template's `modelDes
 - **Distributed FMUs (`generate-distributed`) are FMI 2 only**, per the README. fmugen doesn't use them yet.
 - **Building UniFMU itself** pins Protocol Buffers v27.3 (the source of the pin in 7), and on Windows, git's CRLF line endings break the Docker build's bash scripts.
 
-## 12. Unconfirmed: FMI 2 crash with FMPy debug logging
+## 12. FMI 2 log messages are used as printf format strings
 
-In the round-2 rerun, the FMI 2 FMU for `joblib:load` + `julien-c/skops-digits` crashed FMPy with `OSError: access violation reading 0x…24F0` when simulated with `simulate_fmu(…, debug_logging=True, logger=…)`. Reproduced twice, and also without the FMU's String parameter. Plain `fmpy simulate` of the same FMU exits with code 0, and the FMI 3 version works with debug logging. Not yet narrowed down to UniFMU, FMPy or the FMU ([tested-models-round2.md](tested-models-round2.md#rerun-after-the-fixes-2026-10-07)).
+In FMI 2, the importer's logger callback is variadic, like `printf`: `logger(env, instanceName, status, category, message, ...)`, where `message` is a format string. UniFMU passes the log text as the format string, with no arguments after it and without escaping `%`. Any `%` in a log message is then read as a format specifier by an importer that formats messages. `%s` makes it read a string pointer from an argument that doesn't exist, and it crashes or prints garbage, depending on what is on the stack.
+
+Source (v0.14.0, unchanged on `master` as of 2026-10-07), `fmiapi/src/fmi2/fmi2_logger.rs`, `Fmi2Logger::log`:
+
+```rust
+unsafe { (self.callback)(
+    self.environment,
+    self.instance_name,
+    status,
+    c_category.as_ptr(),
+    c_message.as_ptr()      // the text as the format; no arguments follow
+); }
+```
+
+The callback type is variadic (`fmiapi/src/fmi2/fmi2_types.rs`, `Fmi2CallbackLogger`, `message: Fmi2String, ...`). Every message from the Python backend takes this path: `Fmi2Slave::handle_log_return` (`fmi2_slave.rs`) passes `Fmi2LogReturn.log_message` straight to `logger.log`. So do UniFMU's own messages built with `format!` from error text.
+
+**FMI 3 is not affected:** its logger takes a plain message, not a format string.
+
+**Found with:** `joblib:load` + `julien-c/skops-digits` in FMI 2 ([tested-models-round2.md](tested-models-round2.md#rerun-after-the-fixes-2026-10-07)). While the FMU initializes, `huggingface_hub` downloads the model and its HTTP library logs the download URL, which contains `%3B`, `%22s` and `%27s`. fmugen forwards the record. FMPy formats FMI 2 messages in a native proxy (`fmpy.logging.addLoggerProxy`) with the variadic arguments, so `simulate_fmu(…, debug_logging=True, logger=…)` crashed with `OSError: access violation reading 0x…21xx`, 4 times out of 4.
+- With `HF_HUB_OFFLINE=1` (no download, no URL in the log), the same FMU ran 2 times out of 2 and predicted 0.
+- Calling FMPy's proxy directly with a message containing `%27%27x` returns `%27x`, which shows the text is formatted.
+- Plain `fmpy simulate` doesn't crash, because logging is off and nothing is formatted.
+
+**Who is affected:** any FMI 2 UniFMU FMU (not just fmugen's) whose code, or a library it uses, logs a `%`: URLs, `"50%"`, printf-style strings. This applies with any importer that formats FMI 2 messages as the standard says, not only FMPy.
+
+**Fix upstream:** call `(self.callback)(env, name, status, category, c"%s".as_ptr(), c_message.as_ptr())`, or double each `%` to `%%` in `log()`. No upstream issue was found (a search of the UniFMU issues for "logger format", "printf", "access violation" and "percent" returned nothing).
+
+**Workaround in fmugen:** none yet. Possible: the FMI 2 adapter doubles each `%` before sending a message. Since fmugen pins UniFMU 0.14.0 exactly, that is safe, but it must be removed when UniFMU fixes the bug, or `%%` would show in the log.
