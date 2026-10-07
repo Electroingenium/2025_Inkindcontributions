@@ -37,7 +37,7 @@ The same 30 models, rerun with fmugen at `b437621` (fixes for problems 2, 3, 5 a
 | `simglucose…:T1DPatient` | `--start=action=call:simglucose.patient.t1dpatient:Action(CHO=0.0, insulin=0.02)` | ✓ | ✓ | Gsub = 118.05. The dotted `--start action.CHO=…` now stops with an error that suggests this form. |
 | `pyproj:Transformer` | unchanged | ✓ | ✓ | (440598.08, 4472390.03) out; `remarks` and `scope` commented out with a warning. |
 
-**Unchanged passes:** gsw, py_vollib, windpowerlib, erfa, colour, hplib, pymsis, neurokit2, pyromat, astral and roboticstoolbox give the same values as on 2026-10-06. skops-digits passes in FMI 3 (predicts 0). In FMI 2, `fmpy simulate` exits 0, but `simulate_fmu(…, debug_logging=True, logger=…)` crashes FMPy with `OSError: access violation` (reproduced twice, and also without the String parameter `ensure_native_byte_order`). Not investigated.
+**Unchanged passes:** gsw, py_vollib, windpowerlib, erfa, colour, hplib, pymsis, neurokit2, pyromat, astral and roboticstoolbox give the same values as on 2026-10-06. skops-digits passes in FMI 3 (predicts 0). In FMI 2, `fmpy simulate` exits 0, but `simulate_fmu(…, debug_logging=True, logger=…)` crashes FMPy with `OSError: access violation` (4 times out of 4). Cause: a UniFMU bug. FMI 2 log messages are passed to the importer as printf format strings, and the Hugging Face download URL logged at initialization contains `%22s`. With `HF_HUB_OFFLINE=1` it runs. See [unifmu-limitations.md](unifmu-limitations.md#12-fmi-2-log-messages-are-used-as-printf-format-strings).
 
 **Build and run, but not useful (now with warnings):**
 - **No outputs**: ambiance, pandapower, PyTCI, cantera and river all print `no outputs found: add [outputs] by hand`.
