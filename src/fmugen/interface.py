@@ -635,8 +635,7 @@ def _probe_call(fn, data, comments, constants_key="constants"):
             else:
                 for arg, source in data["time"].items():
                     if any(source is s for s in naive):
-                        comments[("time", arg)] = ("a date-time argument (in UTC: the probe failed without a time "
-                                                   "zone): the epoch plus the simulation time; check the epoch")
+                        comments[("time", arg)] += "; epoch in UTC: the probe failed without a time zone"
                 return result
         plain = [info for info in data.get("inputs", {}).values()
                  if "dimensions" in info and not info.get("numpy") and not info.get("convert")]
@@ -772,10 +771,14 @@ def _arguments(fn, section, data, comments, skip_self=False, allow_time=True, co
         if allow_time and p.name in TIME_NAMES and p.name not in starts:
             time_args[p.name] = TIME_NAMES[p.name]
             continue
-        if allow_time and p.name not in starts and _is_datetime(fn, p):
+        how = _is_datetime(fn, p) if allow_time and p.name not in starts else None
+        if how:
             today = datetime.datetime.now(datetime.UTC).date().isoformat()
             time_args[p.name] = {"source": "end_time", "epoch": f"{today}T00:00:00"}   # naive: some models need it
-            comments[("time", p.name)] = "a date-time argument: the epoch plus the simulation time; check the epoch"
+            comments[("time", p.name)] = (
+                "a date-time argument: the epoch plus the simulation time; check the epoch" if how == "annotation"
+                else f"taken as a date-time from its name {p.name!r} (not annotated): check it, or replace this "
+                     "with an input; the epoch plus the simulation time")
             continue
         if isinstance(starts.get(p.name), dict) and "call" in starts[p.name]:
             data["model"].setdefault(constants_key, {})[p.name] = dict(starts[p.name])
@@ -1057,19 +1060,22 @@ DATETIME_NAMES = ("when", "date", "datetime", "dateandtime", "date_time", "times
 
 
 def _is_datetime(fn, p):
-    """An argument that takes a date-time: by its annotation (datetime, Optional[datetime]) or its name."""
+    """Whether an argument takes a date-time: "annotation" (datetime, Optional[datetime]), "name" (an
+    unannotated argument named like one, without a non-None default), or None."""
     try:
         hint = typing.get_type_hints(fn).get(p.name, p.annotation)
     except Exception:
         hint = p.annotation
     hint = static.unwrap_optional(hint)
     if isinstance(hint, type) and issubclass(hint, datetime.date):
-        return True
+        return "annotation"
     if isinstance(hint, str) and "datetime" in hint:
-        return True
+        return "annotation"
     if hint is not p.empty and hint is not None:
-        return False   # annotated as something else
-    return p.name.lower() in DATETIME_NAMES and (p.default is p.empty or p.default is None)
+        return None   # annotated as something else
+    if p.name.lower() in DATETIME_NAMES and (p.default is p.empty or p.default is None):
+        return "name"
+    return None
 
 
 def _typed(info, value, arrays=False):
