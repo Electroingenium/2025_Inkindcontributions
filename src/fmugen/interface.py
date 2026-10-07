@@ -670,6 +670,59 @@ def unfit_outputs(comments):
     return dict(comments.get(UNFIT, {}))
 
 
+# Comments on a variable that record an assumption the user should check: (text in the comment,
+# what `fmugen init` prints after the variable names). Read from the final comments, so a guess the
+# probe later confirmed or replaced isn't reported.
+ASSUMPTIONS = (
+    ("no default in the code", "no default in the code: the start value is made up, check it"),
+    ("no default: check the start value", "no default in the code: the start value is made up, check it"),
+    ("Integer because the default is an int", "typed Integer because the default is an int; "
+                                              "write a float start if it is Real"),
+    ("an int in the probe; Real", 'an int in the probe, typed Real; set type = "Integer" if it is a count'),
+    ("taken as a date-time from its name", "taken as a date-time from the name only: check [time], "
+                                           "or make it an input"),
+    ("check the epoch", "a date-time: the epoch is set to today, check it"),
+    ("epoch in UTC", "a date-time epoch taken as UTC (the probe failed without a time zone)"),
+    ("passed by position to *args", "passed by position to *args in the order of --start: check the order"),
+    ("passed through **kwargs", "passed through **kwargs: check the model uses them"),
+    ("the probe failed with lists", "passed as arrays of another kind, since the probe failed with lists"),
+    ("fed back from", "taken as states from their names (x_prev fed back from x / x_next)"),
+    ("set its dimensions and uncomment", "arrays left commented out: set their dimensions and uncomment"),
+    ("(type unknown): uncomment", "properties of unknown type left commented out: uncomment the numbers"),
+    ("need --fmi 3", "left out: bytes and resizable arrays need --fmi 3"),
+)
+# Section notes (and [model] comments) that are warnings as they are.
+NOTE_WARNINGS = ("probe call failed", "probe construction failed", "outputs could not be read",
+                 "cannot inspect the signature", "is known only by running it", "skipped ",
+                 "can't be pickled")
+
+
+def assumptions(comments):
+    """Warnings for what init assumed and only wrote as comments in the config (see ASSUMPTIONS)."""
+    grouped, notes = {}, []
+    for key, text in comments.items():
+        if key[0] == "init" or not isinstance(text, str):
+            continue
+        section, name = key
+        if name is None or (section == "model" and name == "save_state"):
+            if any(text.startswith(n) or n in text for n in NOTE_WARNINGS):
+                notes.append(f"[{section}] {text}")
+            continue
+        name = str(name)
+        if name.count("#") > 1 or name == "#save_state":   # unfit outputs: reported on their own
+            continue
+        for fragment, warning in ASSUMPTIONS:
+            if fragment in text:
+                grouped.setdefault(warning, []).append(name.lstrip("#"))
+                break
+    warnings = notes
+    for warning, names in grouped.items():
+        names = list(dict.fromkeys(names))
+        shown = ", ".join(names[:8]) + (f" and {len(names) - 8} more" if len(names) > 8 else "")
+        warnings.append(f"{shown}: {warning}")
+    return warnings
+
+
 def _misfit(value):
     """Why a value seen in the probe can't be read into an FMI variable, or None if it can (or isn't
     one of these cases)."""
