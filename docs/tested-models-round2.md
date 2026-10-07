@@ -22,14 +22,15 @@ The same 30 models, rerun with fmugen at `b437621` (fixes for problems 2, 3, 5 a
 
 | | 2026-10-06 | 2026-10-07 |
 |---|---|---|
-| Pass with `init` alone, both FMI versions | 12 | **17** |
+| Pass with `init` alone, both FMI versions | 12 | **18** |
 | Run, but the FMU is not useful | 5 | 7 |
-| Fail | 13 | 6 |
+| Fail | 13 | 5 |
 
 **Newly pass with `init` alone:**
 
 | Model | `init` options (changes from the first run) | FMI 2 | FMI 3 | Check |
 |---|---|---|---|---|
+| `thermo:Chemical` | `--probe` added (the first run had none) | ✓ | ✓ | `CAS`, `name`, … typed String by the probe; 18 outputs that are `None` in the probe are commented out. H, S, G, Hm, MW at 350 K = direct. T-dependent properties such as `rho`, `Cp` and `mu` are not listed as outputs (only attributes set in `__init__` are), so add them by hand if needed. |
 | `pysolar.solar:get_altitude` | `--probe` | ✓ | ✓ | The epoch is set to UTC automatically, since the probe failed without a time zone. |
 | `ppigrf:igrf` | `--probe` | ✓ | ✓ | B = (281.65, 25784.81, −36995.52) nT for today's date. FMI 2 now works too (1-element array outputs). |
 | `control:StateSpace` | unchanged | ✓ | ✓ | A–D become `to = "pos:N"` parameters; y = (0, −2) = A·x. |
@@ -47,9 +48,8 @@ The same 30 models, rerun with fmugen at `b437621` (fixes for problems 2, 3, 5 a
 
 | Model | Error now |
 |---|---|
-| thermo (no `--probe`) | `CAS is a string (...): set type = "String"`. `init` now warns that the types of 114 outputs are guesses. |
 | metpy | Needs pint units (`init` doesn't recognise `@check_units`). The hand config was not rerun. |
-| pyet | Only accepts pandas Series with a date index (a limit of the library). |
+| pyet (also with `--probe`) | Only accepts pandas Series with a date index (a limit of the library). The probe fails with `'float' object has no attribute 'time'`, and the FMU with `AttributeError` at initialization. |
 | seirsplus | The arrays whose size changes are now commented out. It then fails in `doStep` inside seirsplus: `ValueError: Values in t_eval are not within t_span`. Not investigated. |
 | mesa | `init` still crashes in `isolated_imports` (`KeyError: 'scipy._external'` / `'mesa.examples.advanced'`). |
 | sgp4 | Still the misleading `--start names that are not arguments of the model` for C built-ins. |
