@@ -209,6 +209,23 @@ def test_probe_comments_out_values_that_cant_be_fmi_variables(tmp_path):
     assert "remarks" not in tomllib.loads(text).get("outputs", {})
 
 
+def test_init_prints_the_assumptions_it_wrote_as_comments(tmp_path, capsys):
+    model = write(tmp_path, '''
+        class Tank:
+            def __init__(self, area, n=3):
+                self.area, self.n = area, n
+
+            def step(self, *, inflow, when=None):
+                self.level = inflow / self.area
+    ''')
+    with isolated_imports():
+        init(str(model), output=str(tmp_path / "fmugen.toml"))
+    err = capsys.readouterr().err
+    assert "warning: area, inflow: no default in the code" in err
+    assert "warning: n: typed Integer because the default is an int" in err
+    assert "warning: when: taken as a date-time from the name only" in err
+
+
 def test_init_writes_the_static_config(tmp_path):
     model = write(tmp_path, "def f(a=1.0):\n    return {'b': 2 * a}\n")
     with isolated_imports():
