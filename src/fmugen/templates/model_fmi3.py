@@ -8,9 +8,9 @@ import sys
 from pathlib import Path
 
 try:
-    from fmugen_runtime import Status, make_engine, fraction
+    from fmugen_runtime import Status, fraction, make_engine
 except ImportError:  # imported from the fmugen package (build probe, tests)
-    from fmugen.templates.fmugen_runtime import Status, make_engine, fraction
+    from fmugen.templates.fmugen_runtime import Status, fraction, make_engine
 
 # Frozen with PyInstaller (fmugen build --compile), data files are in sys._MEIPASS;
 # with Nuitka, next to the compiled modules, as in a normal FMU.

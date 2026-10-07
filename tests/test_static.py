@@ -4,8 +4,8 @@ import textwrap
 import tomllib
 
 import pytest
-
 from conftest import EXAMPLES
+
 from fmugen.__main__ import _parse_converts, init, isolated_imports
 from fmugen.config import InterfaceError
 from fmugen.interface import infer_config, render_toml

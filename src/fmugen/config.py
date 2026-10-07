@@ -612,7 +612,9 @@ def _variable(section, causality, name, info, is_class, type_definitions, versio
         # a function applied to the value before the model gets it, e.g. "torch:tensor"
         if section not in ("structural_parameters", "parameters", "inputs", "states"):
             raise InterfaceError(f"{where}: convert only applies to values passed to the model")
-        from fmugen.templates.fmugen_runtime import resolve_reference  # same resolution as at runtime
+        from fmugen.templates.fmugen_runtime import (
+            resolve_reference,  # same resolution as at runtime
+        )
         if info["convert"] == "pint":   # a pint quantity in the variable's unit
             if not info.get("unit"):
                 raise InterfaceError(f"{where}: convert = \"pint\" needs a unit")
@@ -717,9 +719,7 @@ def _variable(section, causality, name, info, is_class, type_definitions, versio
         if attr is not None and not is_class:
             raise InterfaceError(f"{where}: attr only applies to classes")
         if variability == "tunable" and is_class:
-            if var["to"]["kind"] == "attr":
-                attr = var["to"]["name"]
-            elif var["to"]["kind"] == "init" and attr is None:
+            if var["to"]["kind"] == "attr" or var["to"]["kind"] == "init" and attr is None:
                 attr = var["to"]["name"]
             if attr:
                 var["attr"] = attr
@@ -753,7 +753,9 @@ def _type(where, info, section=None):
 
 def _enumeration(where, name, info):
     if "enum" in info:
-        from fmugen.templates.fmugen_runtime import resolve_reference  # same resolution as at runtime
+        from fmugen.templates.fmugen_runtime import (
+            resolve_reference,  # same resolution as at runtime
+        )
         try:
             enum = resolve_reference(info["enum"])
         except Exception as e:
