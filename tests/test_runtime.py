@@ -729,7 +729,7 @@ def test_probe_retries_a_date_time_in_utc(tmp_path):
     output, data = init(tmp_path / "sun.py", probe=True)
     assert data["time"]["when"]["epoch"].endswith("T00:00:00+00:00")
     text = output.read_text()
-    assert "taken as a date-time from its name 'when' (not annotated)" in text and "epoch in UTC" in text
+    assert "the probe worked with one, not with a number" in text and "epoch in UTC" in text
     assert data["outputs"]["hour"] == {}
 
 
@@ -767,3 +767,18 @@ def test_numeric_strings_still_become_numbers(tmp_path, make_fmu, adapter):
     fmu = adapter(make_fmu(tmp_path / "fmugen.toml"))
     fmu.initialize()
     assert fmu.get("v") == 2.5
+
+
+@pytest.mark.parametrize("body, kind, comment", [
+    ("return {'y': when.hour}", "time", "the probe worked with one, not with a number"),
+    ("return {'y': when * 2.0}", "inputs", "suggests a date-time, but the probe failed with one"),
+    ("return {'y': len(str(when))}", "time", "taken as a date-time from its name 'when'"),
+])
+def test_probe_checks_a_date_time_guessed_from_the_name(tmp_path, body, kind, comment):
+    write(tmp_path, "m.py", f"""
+        def f(when):
+            {body}
+    """)
+    output, data = init(tmp_path / "m.py", probe=True)
+    assert "when" in data.get(kind, {}) and "when" not in data.get("time" if kind == "inputs" else "inputs", {})
+    assert comment in output.read_text()
