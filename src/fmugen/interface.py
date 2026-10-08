@@ -367,6 +367,8 @@ def _infer_class(cls, call, data, comments, arrays=False, starts=None, create=No
     else:
         constructor = getattr(cls, create) if create else cls.__init__   # a bound classmethod has no cls argument
         init_starts, call_starts = _assign_starts(constructor, getattr(cls, method_name, None), starts or {})
+        init_starts, call_starts = _split_varargs(cls, create, method_name, init_starts, call_starts, data,
+                                                  comments, probe)
     _arguments(constructor, "parameters", data, comments, skip_self=not (create or factory), allow_time=False,
                arrays=arrays, starts=init_starts, positional=False)
     _apply_converts(data, converts)
@@ -701,7 +703,7 @@ ASSUMPTIONS = (
 # Section notes (and [model] comments) that are warnings as they are.
 NOTE_WARNINGS = ("probe call failed", "probe construction failed", "outputs could not be read",
                  "cannot inspect the signature", "is known only by running it", "skipped ",
-                 "can't be pickled")
+                 "can't be pickled", "both take *args")
 
 
 def assumptions(comments):
@@ -958,6 +960,51 @@ def _assign_starts(init, method, starts):
     return init_starts, call_starts
 
 
+def _only_varargs(fn, skip_self=True):
+    """Whether fn declares no named arguments, only *args (and maybe **kwargs)."""
+    try:
+        params = list(inspect.signature(fn).parameters.values())[1 if skip_self else 0:]
+    except (TypeError, ValueError):
+        return False
+    return any(p.kind is p.VAR_POSITIONAL for p in params) \
+        and all(p.kind in (p.VAR_POSITIONAL, p.VAR_KEYWORD) for p in params)
+
+
+def _split_varargs(cls, create, method_name, init_starts, call_starts, data, comments, probe):
+    """When the constructor and the step method both take only *args (SWIG classes such as
+    openturns.Normal(mu, sigma).computePDF(x)), the signatures can't tell which --start values go
+    where: _assign_starts gives them all to the constructor. With --probe, the first values (in
+    --start order) go to the constructor, the rest to the method, trying the constructor with as
+    many as possible first, and the first split where both calls work is kept."""
+    method = getattr(cls, method_name, None)
+    if create or method is None or not _only_varargs(cls.__init__) or not _only_varargs(method) \
+            or len(init_starts) < 1:
+        return init_starts, call_starts
+    names = list(init_starts)
+    if not probe:
+        comments[("inputs", None)] = (f"{cls.__name__}() and {method_name}() both take *args: every --start value "
+                                      f"was given to the constructor; run init --probe to split them")
+        return init_starts, call_starts
+    from fmugen.templates.fmugen_runtime import resolve_constant
+    try:
+        _run_setup(data)
+        values = [resolve_constant(init_starts[n]) for n in names]
+    except Exception:
+        return init_starts, call_starts
+    for k in range(len(names), -1, -1):
+        try:
+            getattr(cls(*values[:k]), method_name)(*values[k:], **{n: resolve_constant(v) for n, v in call_starts.items()})
+        except Exception:
+            continue
+        if k < len(names):
+            comments[("inputs", None)] = (f"{cls.__name__}() and {method_name}() both take *args: the probe worked "
+                                          f"with {', '.join(names[:k]) or 'nothing'} for the constructor and "
+                                          f"{', '.join(names[k:])} for {method_name}()")
+        return ({n: init_starts[n] for n in names[:k]},
+                {**{n: init_starts[n] for n in names[k:]}, **call_starts})
+    return init_starts, call_starts
+
+
 def _pick_method(cls):
     for name in CALL_NAMES:
         if name == "__call__":
@@ -1067,8 +1114,9 @@ def _arguments(fn, section, data, comments, skip_self=False, allow_time=True, co
              and name not in time_args]
     only_varargs = any(p.kind is p.VAR_POSITIONAL for p in params) \
         and all(p.kind in (p.VAR_POSITIONAL, p.VAR_KEYWORD) for p in params)
-    by_position = only_varargs and (section == "parameters" or any(
-        isinstance(starts[n], dict) and "call" in starts[n] for n in extra))
+    # by position: for a constructor, for computed constants, and when there's no **kwargs to take them
+    by_position = only_varargs and (section == "parameters" or not any(p.kind is p.VAR_KEYWORD for p in params)
+                                    or any(isinstance(starts[n], dict) and "call" in starts[n] for n in extra))
     for name in extra:
         computed = isinstance(starts[name], dict) and "call" in starts[name]   # call:...: a constant
         if by_position:
