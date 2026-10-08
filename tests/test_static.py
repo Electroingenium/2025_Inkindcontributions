@@ -144,12 +144,48 @@ def test_factory_without_a_return_annotation(tmp_path):
             def step(self, u=0.0):
                 return u
 
-        def load(path="weights.bin"):
+        MODELS = {"weights.bin": Model}
+
+        def build(path):
             return Model()
+
+        def load(path="weights.bin"):   # like tellurium's loada, which returns loadAntimonyModel(...)
+            return build(path)
+
+        def lookup(path="weights.bin"):
+            return MODELS[path]()
     ''')
+    # the class is found through the return statements
     data, comments = infer(f"{model}:load", call="step")
+    assert data["parameters"] == {"path": {"start": "weights.bin"}} and data["inputs"] == {"u": {"start": 0.0}}
+    data, comments = infer(f"{model}:lookup", call="step")
     assert data["parameters"] == {"path": {"start": "weights.bin"}}
     assert "known only by running it" in comments[("inputs", None)]
+
+
+def test_database_rows_give_their_typed_columns(tmp_path):
+    pytest.importorskip("sqlalchemy")
+    model = write(tmp_path, '''
+        from sqlalchemy import Column, Float, Integer, String
+        from sqlalchemy.orm import declarative_base
+
+        Base = declarative_base()
+
+        class Element(Base):   # like mendeleev's Element
+            __tablename__ = "elements"
+            atomic_number = Column(Integer, primary_key=True)
+            symbol = Column(String, nullable=False)
+            density = Column(Float)
+
+        def element(ids: int) -> Element:
+            return _get(ids)
+
+        def _get(ids):
+            raise RuntimeError("needs the database")
+    ''')
+    data, comments = infer(f"{model}:element", starts={"ids": 8})
+    assert data["outputs"] == {"atomic_number": {"type": "Integer"}, "symbol": {"type": "String"}}
+    assert "# density = {}" in render_toml(data, comments)   # nullable: commented out
 
 
 def test_convert(tmp_path):

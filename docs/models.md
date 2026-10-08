@@ -541,7 +541,7 @@ A `--start` name that appears in both the constructor and the step method goes t
 | **Start values and types** | The default value. With no default: the annotation, otherwise Real `0.0` |
 | **Time arguments** | Arguments named `dt`, `h`, `step_size`, `stepSize`, `time_step` (step size); `t`, `time`, `currentTime`, `t_now` (time at the start of the step); `until`, `end_time`, `t_end`, `t_next` (time at its end, e.g. simpy's `Environment.run(until)`). Case and underscores don't matter. A `--start` for one of them makes it a fixed input instead, with a hint |
 | **Date-time arguments** | Annotated `datetime`/`date`, or named `when`, `date`, `dateandtime`, …: [`[time]` with an `epoch`](config.md#time) |
-| **Outputs from the return value** | The code: dict keys (also a dict built in a variable), tuple positions, a single value (`y`), NamedTuple/dataclass fields, or the return annotation. With `--probe`: the actual result |
+| **Outputs from the return value** | The code: dict keys (also a dict built in a variable), tuple positions, a single value (`y`), NamedTuple/dataclass fields, or the return annotation (a SQLAlchemy model: its typed columns; nullable ones commented out). With `--probe`: the actual result |
 | **Outputs and locals of classes** | Public attributes the step method assigns, following the methods it calls on `self` (also assigned in `__init__`: local; else output), and annotated properties. With `--probe`: also what the step actually created or changed, and every readable numeric property |
 | **States** | An input `x_prev` whose next value is returned or stored as `x_next` or `x` |
 | **Sources** | Local modules under the config's folder that the model imported |

@@ -133,7 +133,7 @@ fmugen init MODEL [-o OUTPUT] [--call METHOD] [--fmi {2,3}]
 | Inputs (functions) / parameters (classes) | arguments with a `bool`/`int`/`float`/`str` default, without a default, or given `--start` |
 | Start values and types | the default or `--start` value; otherwise the annotation; otherwise Real `0.0` |
 | Time arguments | arguments named `dt`, `h`, `step_size`, `stepSize`, `time_step` (step size); `t`, `time`, `currentTime`, `t_now` (time at the start of the step); `until`, `end_time`, `t_end`, `t_next` (time at its end, e.g. simpy's `Environment.run(until)`). Case and underscores don't matter. A `--start` for one of them makes it a fixed input instead, with a hint |
-| Outputs from the return value | read from the code: dict keys (also a dict built in a variable), tuple positions (`y0`, `y1`, …), a single value (`y`), NamedTuple/dataclass fields, or the return annotation. An argument returned as it is keeps its type (e.g. an enum) |
+| Outputs from the return value | read from the code: dict keys (also a dict built in a variable), tuple positions (`y0`, `y1`, …), a single value (`y`), NamedTuple/dataclass fields, or the return annotation (also a SQLAlchemy model such as mendeleev's `Element`: its typed columns, with those that can be NULL commented out). An argument returned as it is keeps its type (e.g. an enum) |
 | Class outputs and locals | public attributes the step method assigns, following the methods it calls on `self`: also assigned in `__init__` → local, else output. Properties of the model's own classes with a type annotation → outputs; without one → a commented line (reading a property runs code) |
 | Types of outputs | annotations; booleans from comparisons and `True`/`False`; strings; otherwise Real. Lists, arrays and objects are never written as scalars |
 | States | an input `x_prev` whose next value is returned or stored as `x_next` or `x` |
@@ -147,7 +147,7 @@ fmugen init MODEL [-o OUTPUT] [--call METHOD] [--fmi {2,3}]
 - **Results built at runtime** (filled in loops, set by helper functions, returned from library calls) and **code without Python source** (C extensions, compiled models): the `[outputs]` section says the outputs couldn't be read.
 - **Unannotated properties**: commented lines, to uncomment if they are numbers.
 - **`save_state`** (whether the object can be pickled): a commented `save_state = false` line to uncomment if the model holds a device, file, socket or ONNX session.
-- **Factories without a return annotation**: the step method's inputs and outputs, because the object's class is only known by calling the factory.
+- **Factories whose class the code doesn't show**: the step method's inputs and outputs. The class is found from the return annotation, or from return statements that call a class, or a function that does (tellurium's `loada` → `loadAntimonyModel` → `roadrunner.RoadRunner(...)`); otherwise it is only known by calling the factory.
 
 **Never inferred:** units, descriptions, tunable variability (suggested in comments), states with other names, clocks, events, setter-method inputs (`call:`). With `--probe`, if the probe call fails, `init` still writes the config, with what the code shows, and says why in a comment.
 

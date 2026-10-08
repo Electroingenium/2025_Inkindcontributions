@@ -27,6 +27,7 @@ class Returned:
     array: bool = False      # the whole result is an array (size unknown)
     unknown: str = None      # why the result couldn't be read, if it couldn't
     may_be_none: bool = False   # some return statements return None (simpy's Environment.run)
+    nullable: list = dataclasses.field(default_factory=list)   # names whose value may be None (database columns)
 
 
 def function_node(fn):
@@ -164,6 +165,28 @@ def _fields_of(hint):
     return names, {n: _hint_type(hints.get(n)) for n in names if _hint_type(hints.get(n))}
 
 
+def _table_columns(hint):
+    """(names, {name: type}, nullable names) of the typed columns of a SQLAlchemy model class
+    (mendeleev's Element), else None."""
+    columns = getattr(getattr(hint, "__table__", None), "columns", None) if isinstance(hint, type) else None
+    if columns is None:
+        return None
+    names, types, nullable = [], {}, []
+    for column in columns:
+        try:
+            kind = PRIMITIVE_TYPES.get(column.type.python_type)
+        except Exception:   # NotImplementedError for types without one
+            kind = None
+        name = getattr(column, "key", None) or column.name
+        if kind is None or not str(name).isidentifier():
+            continue
+        names.append(name)
+        types[name] = kind
+        if getattr(column, "nullable", True):
+            nullable.append(name)
+    return (names, types, nullable) if names else None
+
+
 def returned(fn, namespace=None, attributes=None):
     """What fn returns: dict keys, tuple positions, NamedTuple/dataclass fields, or a single value.
     `attributes` ({attr: kind}, for a method) gives the kind of a returned self.attr."""
@@ -175,6 +198,10 @@ def returned(fn, namespace=None, attributes=None):
     if fields:
         names, types = fields
         return Returned(names, {n: f"return:{n}" for n in names}, types)
+    table = _table_columns(unwrap_optional(hint))
+    if table:
+        names, types, nullable = table
+        return Returned(names, {n: f"return:{n}" for n in names}, types, nullable=nullable)
     if hint is type(None):
         return Returned()
     if _hint_type(hint):
@@ -422,10 +449,34 @@ def own_properties(cls):
     return found
 
 
-def factory_class(factory):
-    """The class a factory function is annotated to return, if any (e.g. `-> torchani.arch.ANI`)."""
+def factory_class(factory, depth=0):
+    """The class a factory function returns, if the code tells: its return annotation
+    (`-> torchani.arch.ANI`), else what all its return statements call, followed through other
+    functions (tellurium's loada returns loadAntimonyModel(...), which returns roadrunner.RoadRunner(...))."""
     try:
         hint = typing.get_type_hints(factory).get("return")
     except Exception:
+        hint = None
+    if isinstance(hint, type):
+        return hint if hint.__module__ != "builtins" else None
+    node = function_node(factory)
+    if node is None or depth >= 3:
         return None
-    return hint if isinstance(hint, type) and hint.__module__ != "builtins" else None
+    namespace = getattr(inspect.unwrap(factory), "__globals__", {})
+    found = set()
+    for item in _own_nodes(node):
+        if not isinstance(item, ast.Return) or item.value is None:
+            continue
+        if not isinstance(item.value, ast.Call):
+            return None
+        target = _resolve(item.value.func, namespace)
+        if isinstance(target, type):
+            found.add(target)
+        elif inspect.isfunction(target):
+            found.add(factory_class(target, depth + 1))
+        else:
+            return None
+    if len(found) != 1 or None in found:
+        return None
+    cls = found.pop()
+    return cls if cls.__module__ != "builtins" else None
