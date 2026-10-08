@@ -82,6 +82,7 @@ class Engine:
         self.experiment = self.interface.get("experiment", {})
 
         self.logging_on = True
+        _quiet_debug_logging()
         hf_cache = self.resources_dir / "hf_cache"
         if hf_cache.is_dir():   # Hugging Face models bundled by fmugen build: load them from the FMU, offline
             os.environ.update(HF_HUB_CACHE=str(hf_cache), HF_HUB_OFFLINE="1", TRANSFORMERS_OFFLINE="1")
@@ -1391,6 +1392,19 @@ def coerce(fmi_type, value):
             return bytes.fromhex(value)
         return bytes(value)
     return str(value)
+
+
+def _quiet_debug_logging():
+    """Inside UniFMU's backend, raise the root logger from DEBUG to INFO.
+
+    The backend's main.py calls logging.basicConfig(level=logging.DEBUG), so every library logs
+    its debug records to the console: numba writes about 3 MB while compiling antropy's functions.
+    UniFMU 0.14 crashes (its dispatcher panics) when the backend writes that much, and the importer
+    then waits forever. INFO and above still reach the console and the importer's log.
+    """
+    root = logging.getLogger()
+    if "UNIFMU_DISPATCHER_ENDPOINT" in os.environ and root.level < logging.INFO:
+        root.setLevel(logging.INFO)
 
 
 def _capture_output(enabled):

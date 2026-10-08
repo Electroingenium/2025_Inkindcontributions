@@ -14,7 +14,7 @@ from datetime import datetime
 
 import pandas as pd
 import streamlit as st
-from fmu_io import NAMESPACE_URI, RESULTS_BEGIN, RESULTS_END, experiment, read_fmu
+from fmu_io import NAMESPACE_URI, RESULTS_BEGIN, RESULTS_END, experiment, read_fmu, run_timeout
 from opcua import Client as OPCClient
 from opcua import ua
 
@@ -23,6 +23,7 @@ RUN_BACKEND = os.getenv("RUN_BACKEND", "docker")
 FMU_IMAGE = os.getenv("FMU_IMAGE", "")
 RUN_PREFIX = os.getenv("FMU_CONTAINER_NAME_BASE", "fmu-run")
 STEP_DELAY = os.getenv("STEP_DELAY", "0.5")
+RUN_TIMEOUT = os.getenv("RUN_TIMEOUT", "")   # passed to runs; empty: the runner's default
 FMU_PATH = os.getenv("FMU_PATH", "/model/model.fmu")
 RUN_LABEL = "fmugen.run"
 
@@ -95,12 +96,16 @@ class KubernetesRuns:
         affinity = self._affinity(placement)
         if affinity:
             pod_spec["affinity"] = affinity
+        timeout = run_timeout(float(env["START_TIME"]), float(env["STOP_TIME"]), float(env["STEP_SIZE"]),
+                              float(env["STEP_DELAY"]), env.get("RUN_TIMEOUT"))
         job = {
             "apiVersion": "batch/v1",
             "kind": "Job",
             "metadata": {"name": name, "labels": {RUN_LABEL: name}},
             "spec": {
                 "backoffLimit": 0,
+                # in case the runner itself can't stop (its own RUN_TIMEOUT comes first)
+                **({"activeDeadlineSeconds": int(timeout) + 300} if timeout > 0 else {}),
                 "ttlSecondsAfterFinished": 3600,
                 "template": {"metadata": {"labels": {RUN_LABEL: name}}, "spec": pod_spec},
             },
@@ -304,6 +309,7 @@ if c1.button("▶️ Run"):
         "STEP_SIZE": str(STEP_SIZE),
         "STEP_DELAY": STEP_DELAY,
         "OPCUA_ENDPOINT": OPCUA_ENDPOINT,
+        **({"RUN_TIMEOUT": RUN_TIMEOUT} if RUN_TIMEOUT else {}),
     }
     try:
         runs.start(name, env, placement)
