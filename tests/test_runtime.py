@@ -801,3 +801,30 @@ def test_probe_checks_a_date_time_guessed_from_the_name(tmp_path, body, kind, co
     output, data = init(tmp_path / "m.py", probe=True)
     assert "when" in data.get(kind, {}) and "when" not in data.get("time" if kind == "inputs" else "inputs", {})
     assert comment in output.read_text()
+
+
+def test_call_arguments_can_be_calls_builtins_and_containers():
+    import math
+    import operator
+
+    from fmugen.templates.fmugen_runtime import call_reference
+    assert call_reference("operator:add(math.sqrt(16.0), -1)") == 3.0
+    assert call_reference('builtins:list((float("inf"), math.pi))') == [math.inf, math.pi]
+    assert call_reference("builtins:dict(a=math.floor(2.5), b={'k': [math.e]})") == {"a": 2, "b": {"k": [math.e]}}
+    # without parentheses: the object itself (a function to pass, an enum member), not called
+    assert call_reference("math:sin") is math.sin
+    assert call_reference("operator:attrgetter") is operator.attrgetter
+    with pytest.raises(ValueError, match="arguments must be"):
+        call_reference("builtins:print(lambda: 0)")
+
+
+def test_init_stops_when_a_computed_constant_fails(tmp_path):
+    write(tmp_path, "deriv.py", """
+        def derivative(fun, x=0.5):
+            return fun(x)
+    """)
+    from fmugen.config import InterfaceError
+    with pytest.raises(InterfaceError, match="constants.fun = call:math:nosuch fails: AttributeError"):
+        init(tmp_path / "deriv.py", starts={"fun": {"call": "math:nosuch"}}, probe=True)
+    _, data = init(tmp_path / "deriv.py", output="-", starts={"fun": {"call": "math:cos"}}, probe=True)
+    assert data["outputs"] == {"y": {"from": "return"}}

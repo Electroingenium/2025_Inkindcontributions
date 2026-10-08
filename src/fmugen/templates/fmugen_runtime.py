@@ -9,6 +9,7 @@ The user's code is never modified. The FMI-version-specific adapters translate
 FMI calls into the methods of `Engine`.
 """
 import ast
+import builtins
 import contextlib
 import copy
 import dataclasses
@@ -1204,17 +1205,42 @@ def parse_call_text(text):
 
 
 def call_reference(text):
-    """Call 'module:function(args)' and return the result. Arguments are Python literals or
-    dotted names of importable objects, e.g. load_from_hub(repo_id="sb3/x", filename="m.zip")."""
+    """Call 'module:function(args)' and return the result, e.g. load_from_hub(repo_id="sb3/x",
+    filename="m.zip"). Without parentheses, 'module:attr.path' is the object itself, not called
+    (a function to pass, an enum member). Arguments: see call_argument."""
+    target, paren, _ = text.partition("(")
+    if not paren:
+        return resolve_reference(target.strip())
     target, args, kwargs = parse_call_text(text)
+    return resolve_reference(target)(*[call_argument(a) for a in args],
+                                     **{k: call_argument(v) for k, v in kwargs.items()})
 
-    def value(node):
-        try:
-            return ast.literal_eval(node)
-        except ValueError:
-            return resolve_reference(ast.unparse(node))
 
-    return resolve_reference(target)(*[value(a) for a in args], **{k: value(v) for k, v in kwargs.items()})
+def call_argument(node):
+    """The value of an argument in a call constant: a Python literal; a dotted name of an importable
+    object or a builtin (numpy.sin, float); a call of one (numpy.linspace(0, 1, 5), float("inf")); or
+    a list, tuple, set or dict of these."""
+    with contextlib.suppress(ValueError, SyntaxError, TypeError):
+        return ast.literal_eval(node)
+    if isinstance(node, ast.Name) and hasattr(builtins, node.id):
+        return getattr(builtins, node.id)
+    if isinstance(node, (ast.Name, ast.Attribute)):
+        return resolve_reference(ast.unparse(node))
+    if isinstance(node, ast.Call) and isinstance(node.func, (ast.Name, ast.Attribute)):
+        if any(k.arg is None for k in node.keywords) or any(isinstance(a, ast.Starred) for a in node.args):
+            raise ValueError(f"{ast.unparse(node)!r}: * and ** arguments are not supported")
+        return call_argument(node.func)(*[call_argument(a) for a in node.args],
+                                        **{k.arg: call_argument(k.value) for k in node.keywords})
+    if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+        items = [call_argument(e) for e in node.elts]
+        return {ast.List: list, ast.Tuple: tuple, ast.Set: set}[type(node)](items)
+    if isinstance(node, ast.Dict) and None not in node.keys:
+        return {call_argument(k): call_argument(v) for k, v in zip(node.keys, node.values)}
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.USub, ast.UAdd)):
+        value = call_argument(node.operand)
+        return -value if isinstance(node.op, ast.USub) else value
+    raise ValueError(f"{ast.unparse(node)!r}: arguments must be literals, names of importable objects, "
+                     "calls of those, or lists/tuples/dicts of these")
 
 
 def converter(var):

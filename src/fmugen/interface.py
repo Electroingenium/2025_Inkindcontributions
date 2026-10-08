@@ -324,6 +324,8 @@ def _infer_function(fn, data, comments, arrays=False, starts=None, probe=False, 
         try:
             _run_setup(data)
             result = _probe_call(fn, data, comments)
+        except ConstantError:
+            raise
         except Exception as e:
             comments[("outputs", None)] = f"probe call failed ({e!r}); outputs below are read from the code"
         else:
@@ -425,6 +427,8 @@ def _probe_class(cls, method_name, data, comments, arrays, call_starts, create, 
         args, kwargs = _probe_args(data, ("parameters",), build, "constants")
         obj = build(*args, **_probe_constants(data, "constants"), **kwargs)
         _run_setup(data, obj)
+    except ConstantError:
+        raise
     except Exception as e:
         comments[("outputs", None)] = f"probe construction failed ({e!r}); outputs below are read from the code"
         if cls is not None:
@@ -451,6 +455,8 @@ def _probe_class(cls, method_name, data, comments, arrays, call_starts, create, 
     before = _numeric_attributes(obj, arrays)
     try:
         result = _probe_call(getattr(obj, method_name), data, comments, constants_key="call_constants")
+    except ConstantError:
+        raise
     except Exception as e:
         comments[("outputs", None)] = f"probe call failed ({e!r}); outputs below are read from the code"
         return obj, set(), set(getattr(obj, "__dict__", {}))
@@ -775,8 +781,20 @@ def _probe_constants(data, table, positional=False):
     """Constants set in the config (e.g. computed by a call), resolved as the FMU would: the keyword
     ones, or with positional=True {position: value} of those named "0", "1", ... (passed to *args)."""
     from fmugen.templates.fmugen_runtime import resolve_constant
-    return {(int(k) if positional else k): resolve_constant(v) for k, v in data["model"].get(table, {}).items()
-            if k.isdigit() == positional}
+    values = {}
+    for k, v in data["model"].get(table, {}).items():
+        if k.isdigit() != positional:
+            continue
+        try:
+            values[int(k) if positional else k] = resolve_constant(v)
+        except Exception as e:
+            what = f"call:{v['call']}" if isinstance(v, dict) and "call" in v else _value(v)
+            raise ConstantError(f"[model] {table}.{k} = {what} fails: {type(e).__name__}: {e}") from e
+    return values
+
+
+class ConstantError(InterfaceError):
+    """A constant (e.g. --start NAME=call:...) that can't be computed: the FMU would fail the same way."""
 
 
 def _probe_call(fn, data, comments, constants_key="constants"):
