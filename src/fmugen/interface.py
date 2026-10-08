@@ -134,7 +134,7 @@ def _infer_config(target, call, config_dir, fmi_version, starts, setup, kind, cr
     unknown = set(converts or {}) - variables
     if unknown:
         raise InterfaceError(f"--convert names that are not arguments of the model: {sorted(unknown)}")
-    unused = set(starts) - variables \
+    unused = set(starts) - variables - set(comments.get(POSITIONAL_STARTS, {})) \
         - {n for table in ("constants", "call_constants") for n in data["model"].get(table, {})} \
         - {str(info.get("to", "")).partition(":")[2].partition("[")[0]
            for sec in ("parameters", "inputs", "states") for info in data.get(sec, {}).values()}         - {str(info["to"]).partition(":")[2] for sec in ("parameters", "inputs", "states")
@@ -422,7 +422,7 @@ def _probe_class(cls, method_name, data, comments, arrays, call_starts, create, 
     try:
         _run_setup(data)
         build = factory or (getattr(cls, create) if create else cls)
-        args, kwargs = _probe_args(data, ("parameters",), build)
+        args, kwargs = _probe_args(data, ("parameters",), build, "constants")
         obj = build(*args, **_probe_constants(data, "constants"), **kwargs)
         _run_setup(data, obj)
     except Exception as e:
@@ -632,6 +632,7 @@ def _add_attributes(cls, method_name, data, comments, arrays, probe, seen):
 
 
 DATETIME_BY_NAME = ("init", "date-time by name")   # comments key (not rendered): [time] args only named like one
+POSITIONAL_STARTS = ("init", "positional starts")   # comments key (not rendered): {--start name: *args position}
 START_ERRORS = ("init", "start errors")   # comments key (not rendered): {--start name: why it can't be used}
 
 
@@ -770,10 +771,12 @@ def _apply_converts(data, converts):
 ARRAY_RETRIES = ("numpy", "torch:tensor")   # tried in order when a probe call fails with list inputs
 
 
-def _probe_constants(data, table):
-    """Constants set in the config (e.g. computed by a call), resolved as the FMU would."""
+def _probe_constants(data, table, positional=False):
+    """Constants set in the config (e.g. computed by a call), resolved as the FMU would: the keyword
+    ones, or with positional=True {position: value} of those named "0", "1", ... (passed to *args)."""
     from fmugen.templates.fmugen_runtime import resolve_constant
-    return {k: resolve_constant(v) for k, v in data["model"].get(table, {}).items()}
+    return {(int(k) if positional else k): resolve_constant(v) for k, v in data["model"].get(table, {}).items()
+            if k.isdigit() == positional}
 
 
 def _probe_call(fn, data, comments, constants_key="constants"):
@@ -817,7 +820,7 @@ def _probe_call(fn, data, comments, constants_key="constants"):
 
 
 def _call_with_probe_inputs(fn, data, constants_key):
-    args, kwargs = _probe_args(data, ("inputs",), fn)
+    args, kwargs = _probe_args(data, ("inputs",), fn, constants_key)
     kwargs.update(_time_kwargs(data.get("time", {})))
     kwargs.update(_probe_constants(data, constants_key))
     return fn(*args, **kwargs)
@@ -1044,19 +1047,30 @@ def _arguments(fn, section, data, comments, skip_self=False, allow_time=True, co
     extra = [name for name in starts
              if name not in names and "." not in name   # ARG.FIELD: a field of an object argument, not a keyword
              and name not in time_args]
-    if extra and section == "parameters" and any(p.kind is p.VAR_POSITIONAL for p in params) \
-            and all(p.kind in (p.VAR_POSITIONAL, p.VAR_KEYWORD) for p in params):
-        # A constructor that only declares (*args, **kwargs), e.g. StateSpace(A, B, C, D):
-        # the --start values go by position, in the order given.
-        for name in extra:
-            variables[name] = _extra_info(name, starts[name], arrays)
-            variables[name]["to"] = f"pos:{position}"
+    only_varargs = any(p.kind is p.VAR_POSITIONAL for p in params) \
+        and all(p.kind in (p.VAR_POSITIONAL, p.VAR_KEYWORD) for p in params)
+    by_position = only_varargs and (section == "parameters" or any(
+        isinstance(starts[n], dict) and "call" in starts[n] for n in extra))
+    for name in extra:
+        computed = isinstance(starts[name], dict) and "call" in starts[name]   # call:...: a constant
+        if by_position:
+            # A callable that only declares (*args, **kwargs), e.g. StateSpace(A, B, C, D):
+            # the --start values go by position, in the order given. Constants are named "0", "1", ...
+            if computed:
+                data["model"].setdefault(constants_key, {})[str(position)] = dict(starts[name])
+                comments[("model", f"{constants_key}.{position}")] = f"--start {name}, passed by position to *args"
+                comments.setdefault(POSITIONAL_STARTS, {})[name] = position
+            else:
+                variables[name] = _extra_info(name, starts[name], arrays)
+                variables[name]["to"] = f"pos:{position}"
+                comments[(section, name)] = "start from --start, passed by position to *args: check the order"
             position += 1
-            comments[(section, name)] = "start from --start, passed by position to *args: check the order"
-    elif any(p.kind is p.VAR_KEYWORD for p in params):  # **kwargs: --start values become keyword arguments
-        for name in extra:
-            variables[name] = _extra_info(name, starts[name], arrays)
-            comments[(section, name)] = "start from --start (passed through **kwargs)"
+        elif any(p.kind is p.VAR_KEYWORD for p in params):  # **kwargs: --start values become keyword arguments
+            if computed:
+                data["model"].setdefault(constants_key, {})[name] = dict(starts[name])
+            else:
+                variables[name] = _extra_info(name, starts[name], arrays)
+                comments[(section, name)] = "start from --start (passed through **kwargs)"
     if time_args and allow_time:
         data["time"] = time_args
     if not variables:
@@ -1218,15 +1232,19 @@ def _constant(value):
     return None
 
 
-def _probe_args(data, sections, fn=None):
-    """(positional args, keyword args) for a probe call from the inferred start values."""
+def _probe_args(data, sections, fn=None, constants_key=None):
+    """(positional args, keyword args) for a probe call from the inferred start values (and the
+    positional constants of `constants_key`)."""
     values = _probe_kwargs(data, sections)
-    positional = sorted(
+    positional = [
         (int(info["to"].split(":")[1]), name)
         for section in sections for name, info in data.get(section, {}).items()
         if str(info.get("to", "")).startswith("pos:")
-    )
-    args = [values.pop(name) for _, name in positional]
+    ]
+    by_position = {i: values.pop(name) for i, name in positional}
+    if constants_key:
+        by_position.update(_probe_constants(data, constants_key, positional=True))
+    args = [by_position[i] for i in sorted(by_position)]
     from fmugen.templates.fmugen_runtime import assemble_items
     targets = {name: str(info["to"]).partition(":")[2] for section in sections
                for name, info in data.get(section, {}).items()

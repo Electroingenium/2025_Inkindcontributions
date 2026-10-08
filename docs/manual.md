@@ -313,7 +313,7 @@ Fixed keyword arguments that are not FMU variables.
 - `constants` go to the constructor (classes) or the function.
 - `call_constants` go to the step method (classes only).
 
-Values use the [value syntax](#value-syntax). Each key must be an argument of the target, unless it accepts `**kwargs`.
+Values use the [value syntax](#value-syntax). Each key must be an argument of the target, unless it accepts `**kwargs`. A number key (`0 = ...`) is a positional argument, for `*args` callables (e.g. `nashpy.Game(A)`), numbered together with `to = "pos:N"` variables.
 
 ```toml
 [model.constants]
