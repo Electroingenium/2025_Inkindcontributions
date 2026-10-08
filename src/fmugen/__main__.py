@@ -339,8 +339,10 @@ def _init_warnings(data, comments, probe):
         comments.setdefault(("outputs", None), NO_OUTPUTS)
     guessed = guessed_outputs(data, comments)
     if guessed:
-        warnings.append(f"{_names(guessed)}: type not shown by the code, assumed Real; "
-                        + ("set type = ... if that's wrong" if probe else "run init --probe, or set type = ..."))
+        warnings.append(f"{_names(guessed)}: type not shown by the code, assumed a single Real; "
+                        + ("set type = ... if that's wrong" if probe else
+                           "it may be an array or a tuple, which fails the step: run init --probe, "
+                           "or set type = ... / dimensions = [...]"))
     by_reason = {}
     for name, why in unfit_outputs(comments).items():
         by_reason.setdefault(why, []).append(name)
