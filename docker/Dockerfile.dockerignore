@@ -1,0 +1,11 @@
+# Build context is the repository root; send only what the image uses.
+*
+!pyproject.toml
+!README.md
+!src/fmugen
+!examples
+!docker/app
+!docker/model
+!docker/models
+!docker/build_fmu.py
+**/__pycache__
