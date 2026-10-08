@@ -10,11 +10,13 @@
 
 Install fmugen into the virtual environment of your model, the one that already has the model's packages:
 
+fmugen is not on PyPI yet, so `pip install fmugen` doesn't work. Install it from a clone of this repository:
+
 ```bash
-pip install fmugen
+pip install path/to/2025_Inkindcontributions
 ```
 
-(or `uv add fmugen`). This also installs the two packages UniFMU's Python backend needs, `protobuf==5.27.3` and `pyzmq`. Then run the `fmugen` commands from that environment.
+(or `uv add path/to/2025_Inkindcontributions`). This also installs the two packages UniFMU's Python backend needs, `protobuf==5.27.3` and `pyzmq`. Then run the `fmugen` commands from that environment.
 
 You also need [UniFMU](https://github.com/INTO-CPS-Association/unifmu/releases) **0.14.0**, exactly this version, for `fmugen build`. fmugen runs `unifmu generate` to create each FMU's native binaries and Python backend. Put the `unifmu` executable on `PATH`, or set `FMUGEN_UNIFMU` to its path.
 
