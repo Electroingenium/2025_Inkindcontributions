@@ -12,6 +12,15 @@ NAMESPACE_URI = "urn:eium:opcua:fmu"
 RESULTS_BEGIN = "----- BEGIN RESULTS CSV -----"
 RESULTS_END = "----- END RESULTS CSV -----"
 
+
+def run_timeout(start_time, stop_time, step_size, step_delay, setting=None):
+    """Seconds a run may take before it is stopped: RUN_TIMEOUT if set (0: no limit), else 10 minutes
+    (for loading the model, which may compile code on first use) plus twice the paced stepping time."""
+    if setting not in (None, ""):
+        return float(setting)
+    steps = max(0.0, stop_time - start_time) / step_size if step_size > 0 else 0.0
+    return 600.0 + 2.0 * steps * step_delay
+
 logger = logging.getLogger("fmu_io")
 
 # FMI type -> (OPC UA type, Python type, FMI get/set suffix)

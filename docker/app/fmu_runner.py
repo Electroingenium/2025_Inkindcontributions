@@ -10,13 +10,14 @@ import logging
 import os
 import shutil
 import sys
+import threading
 import time
 
 import pandas as pd
 from fmpy import extract
 from fmpy.fmi2 import FMU2Slave
 from fmpy.fmi3 import FMU3Slave
-from fmu_io import NAMESPACE_URI, RESULTS_BEGIN, RESULTS_END, experiment, read_fmu
+from fmu_io import NAMESPACE_URI, RESULTS_BEGIN, RESULTS_END, experiment, read_fmu, run_timeout
 from opcua import Client as OPCClient
 from opcua import ua
 
@@ -33,6 +34,7 @@ STEP_SIZE = float(os.getenv("STEP_SIZE", 1.0))
 STEP_DELAY = float(os.getenv("STEP_DELAY", 0.5))  # wall-clock pause between steps [s]
 OPCUA_ENDPOINT = os.getenv("OPCUA_ENDPOINT", "opc.tcp://opcua-server:4840")
 OPC_TIMEOUT = float(os.getenv("OPC_TIMEOUT", 60))  # how long to retry connecting [s]
+RUN_TIMEOUT = run_timeout(START_TIME, STOP_TIME, STEP_SIZE, STEP_DELAY, os.getenv("RUN_TIMEOUT"))  # [s]; 0: none
 
 
 def connect(endpoint):
@@ -55,6 +57,27 @@ def folder_nodes(opc, folder_name):
     ns_idx = opc.get_namespace_index(NAMESPACE_URI)
     folder = opc.get_objects_node().get_child([ua.QualifiedName(folder_name, ns_idx)])
     return {child.get_browse_name().Name: child for child in folder.get_children()}
+
+
+class Watchdog:
+    """Stops the run when it takes longer than RUN_TIMEOUT: a call into the FMU that never returns
+    (e.g. its backend crashed) would otherwise keep the container or Job running forever. It logs
+    what the run was doing, prints the results so far, and exits with status 1."""
+
+    def __init__(self, timeout, report):
+        self.phase, self.report = "starting", report
+        if timeout > 0:
+            timer = threading.Timer(timeout, self._expire, args=(timeout,))
+            timer.daemon = True
+            timer.start()
+
+    def _expire(self, timeout):
+        logger.error(f"The run took longer than RUN_TIMEOUT={timeout:g} s while {self.phase}; stopping it")
+        try:
+            self.report()
+        finally:
+            sys.stderr.flush()
+            os._exit(1)   # the main thread is stuck in a call into the FMU: only exiting stops it
 
 
 class Slave:
@@ -119,6 +142,8 @@ def simulate_and_publish():
         if v.name not in input_nodes:
             logger.warning(f"Input '{v.name}' has no OPC UA node; it keeps its start value")
 
+    results = []
+    watchdog = Watchdog(RUN_TIMEOUT, lambda: report(results))
     unzipdir = extract(FMU_PATH)
     slave = Slave(md, unzipdir)
 
@@ -149,12 +174,13 @@ def simulate_and_publish():
                 logger.warning(f"Failed to update output {var.name}: {e}")
         return values
 
-    results = []
     try:
+        watchdog.phase = "instantiating the FMU (this loads the model)"
         slave.start(START_TIME)
         # Every input and parameter can be set during initialization; afterwards only
         # inputs and tunable parameters.
         row = {"time": START_TIME, **apply_inputs(inputs)}
+        watchdog.phase = "initializing the FMU"
         slave.fmu.exitInitializationMode()
         results.append({**row, **publish_outputs()})
 
@@ -164,6 +190,7 @@ def simulate_and_publish():
         while t < STOP_TIME - 1e-9 * max(1.0, abs(STOP_TIME)):
             h = step_size if fixed_step else min(step_size, STOP_TIME - t)
             row = apply_inputs(tunable)
+            watchdog.phase = f"stepping from t={t:g}"
             stop = slave.step(t, h)
             t = round(t + h, 12)
             out = publish_outputs()
@@ -174,6 +201,7 @@ def simulate_and_publish():
                 break
             time.sleep(STEP_DELAY)
         logger.info("Simulation complete.")
+        watchdog.phase = "terminating the FMU"
         slave.fmu.terminate()
     finally:
         # Cleanup must not hide the error that got us here (e.g. a failed instantiate)
@@ -183,16 +211,20 @@ def simulate_and_publish():
             except Exception as e:
                 logger.warning(f"Cleanup failed: {e}")
         shutil.rmtree(unzipdir, ignore_errors=True)
+        report(results)
 
-        df = pd.DataFrame(results).ffill()
-        if RESULTS_DIR:
-            csv_path = os.path.join(RESULTS_DIR, f"{RUN_NAME}.csv")
-            df.to_csv(csv_path, index=False)
-            logger.info(f"Results saved to {csv_path}")
-        buf = io.StringIO()
-        df.to_csv(buf, index=False)
-        sys.stderr.flush()
-        print(RESULTS_BEGIN, buf.getvalue().rstrip("\n"), RESULTS_END, sep="\n", flush=True)
+
+def report(results):
+    """Write the results to RESULTS_DIR (if set) and print them between the markers the UI reads."""
+    df = pd.DataFrame(results).ffill()
+    if RESULTS_DIR:
+        csv_path = os.path.join(RESULTS_DIR, f"{RUN_NAME}.csv")
+        df.to_csv(csv_path, index=False)
+        logger.info(f"Results saved to {csv_path}")
+    buf = io.StringIO()
+    df.to_csv(buf, index=False)
+    sys.stderr.flush()
+    print(RESULTS_BEGIN, buf.getvalue().rstrip("\n"), RESULTS_END, sep="\n", flush=True)
 
 
 if __name__ == "__main__":

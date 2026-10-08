@@ -940,3 +940,26 @@ def test_numbers_are_retried_as_one_element_arrays(tmp_path, make_fmu, adapter):
     fmu.initialize()
     assert fmu.fmi2DoStep(0.0, 1.0, False) == OK
     assert fmu.get("y") == pytest.approx(300.5)
+
+
+def test_debug_logging_of_the_backend_is_raised_to_info(tmp_path, make_fmu, adapter, monkeypatch):
+    # UniFMU's main.py sets the root logger to DEBUG; numba then writes megabytes while compiling
+    # (antropy), which crashes UniFMU 0.14 and hangs the importer
+    import logging
+    write(tmp_path, "chatty.py", """
+        import logging
+
+        def f(x=1.0):
+            logging.getLogger("numba.core.ssa").debug("Running <numba.core.ssa._FreshVarHandler>")
+            logging.getLogger("chatty").info("step")
+            return {"y": x}
+    """)
+    fmu_dir = make_fmu(tmp_path / "chatty.py")
+    root = logging.getLogger()
+    monkeypatch.setattr(root, "level", logging.DEBUG)
+    monkeypatch.setenv("UNIFMU_DISPATCHER_ENDPOINT", "tcp://127.0.0.1:1")
+    fmu = adapter(fmu_dir)
+    assert root.level == logging.INFO
+    fmu.initialize()
+    messages = [entry[2] for entry in fmu.logs]
+    assert any("[chatty] step" in m for m in messages) and not any("numba" in m for m in messages)
