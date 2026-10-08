@@ -440,3 +440,33 @@ def test_results_that_refuse_float_are_read_through_their_properties(tmp_path):
     '''))
     data, _ = infer(f"{tmp_path / 'errors.py'}:scaled")
     assert data["outputs"] == {"nominal_value": {}, "std_dev": {}}   # from = "return:<name>", the default
+
+
+def test_time_arguments_are_recognized_by_common_names(tmp_path):
+    (tmp_path / "clocks.py").write_text(textwrap.dedent('''
+        class Environment:   # like simpy's Environment.run(until)
+            def __init__(self):
+                self.now = 0.0
+
+            def run(self, until=None):
+                if until is None:
+                    return None
+                if until <= self.now:
+                    raise ValueError(f"until ({until}) must be greater than the current simulation time")
+                self.now = until
+                return self.now
+
+        class Solver:   # like tellurium's oneStep(currentTime, stepSize)
+            def oneStep(self, currentTime, stepSize):
+                return currentTime + stepSize
+    '''))
+    data, comments = infer(f"{tmp_path / 'clocks.py'}:Environment", call="run")
+    assert data["time"] == {"until": "end_time"} and data["outputs"]["y"] == {"from": "return"}
+    data, _ = infer(f"{tmp_path / 'clocks.py'}:Environment", call="run", probe=False)
+    assert "can also return None" in render_toml(data, _)
+    data, _ = infer(f"{tmp_path / 'clocks.py'}:Solver", call="oneStep")
+    assert data["time"] == {"currentTime": "time", "stepSize": "step_size"}
+    # given by --start, it is a fixed value, with a hint
+    data, comments = infer(f"{tmp_path / 'clocks.py'}:Environment", call="run", starts={"until": 5.0})
+    assert data["inputs"]["until"] == {"start": 5.0}
+    assert '[time] until = "end_time"' in comments[("inputs", "until")]
