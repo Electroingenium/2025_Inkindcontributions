@@ -894,3 +894,29 @@ def test_array_result_for_a_scalar_output(tmp_path, make_fmu, adapter):
     assert fmu.set("x", 1.0) == OK
     assert fmu.fmi2DoStep(0.0, 1.0, False) == ERROR
     assert "y is a tuple of shape [3], not a single value: give it dimensions = [3]" in fmu.logs[-1][2]
+
+
+def test_a_step_that_changes_nothing_also_runs_at_initialization(tmp_path, make_fmu, adapter):
+    write(tmp_path, "option.py", """
+        class Call:   # like blackscholes.BlackScholesCall(...).price()
+            def __init__(self, S=55.0, K=50.0):
+                self.S, self.K = S, K
+
+            def price(self):
+                return max(self.S - self.K, 0.0)
+
+        class Counter:
+            def __init__(self):
+                self.n = 0
+
+            def step(self, u=1.0):
+                self.n += 1
+                return self.n * u
+    """)
+    output, data = init(f"{tmp_path / 'option.py'}:Call", call="price", probe=True)
+    assert data["model"]["init_call"] is True
+    fmu = adapter(make_fmu(output))
+    fmu.initialize()
+    assert fmu.get("y") == 5.0   # at the start time, before any step
+    output, data = init(f"{tmp_path / 'option.py'}:Counter", output=tmp_path / "counter.toml", probe=True)
+    assert "init_call" not in data["model"]   # the step changes the object: running it twice would count twice

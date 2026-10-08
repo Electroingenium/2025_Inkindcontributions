@@ -19,6 +19,7 @@ import importlib.util
 import inspect
 import json
 import math
+import pickle
 import sys
 import types
 import typing
@@ -559,7 +560,7 @@ def _probe_class(cls, method_name, data, comments, arrays, call_starts, create, 
     _arguments(method, "inputs", data, comments, skip_self=not factory, constants_key="call_constants",
                arrays=arrays, starts=call_starts)
     _apply_converts(data, converts)
-    before = _numeric_attributes(obj, arrays)
+    before, state_before = _numeric_attributes(obj, arrays), _state_bytes(obj)
     try:
         result = _probe_call(getattr(obj, method_name), data, comments, constants_key="call_constants")
     except ConstantError:
@@ -569,6 +570,12 @@ def _probe_class(cls, method_name, data, comments, arrays, call_starts, create, 
         return obj, set(), set(getattr(obj, "__dict__", {}))
     comments[PROBED] = True
     after = _numeric_attributes(obj, arrays)
+    state_after = _state_bytes(obj)
+    if result is not None and _same(before, after) and (state_before is None or state_before == state_after):
+        # the step changed nothing: running it at initialization too gives the outputs at the start time
+        data["model"]["init_call"] = True
+        comments[("model", "init_call")] = (f"{method_name}() changed nothing in the probe, so it also runs at "
+                                            "initialization: outputs have values at the start time")
     _check_picklable(obj, data, comments)
 
     returned = set()
@@ -1012,6 +1019,14 @@ def _probe_once(fn, data, comments, constants_key="constants"):
                 comments[("inputs", name)] = f"passed as {shown}: the probe failed with lists"
             return result
         raise
+
+
+def _state_bytes(obj):
+    """The object's attributes pickled, to tell whether a call changed them; None if they can't be."""
+    try:
+        return pickle.dumps(vars(obj))
+    except Exception:
+        return None
 
 
 def _check_picklable(obj, data, comments):
