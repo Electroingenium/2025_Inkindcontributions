@@ -126,6 +126,7 @@ def _infer_config(target, call, config_dir, fmi_version, starts, setup, kind, cr
         _infer_function(entry, data, comments, **options)
     _add_data_files(data, comments, config_dir, Path(path).resolve() if path else None)
     _add_globals(data, comments, module, config_dir if path else None)
+    _rename_duplicates(data, comments)
     if fmi_version == 3:
         _rename_reserved(data, comments, is_class="call" in data["model"] or inspect.isclass(entry))
     else:
@@ -176,15 +177,40 @@ def _fmi2_types(data, comments):
 
 
 def _rename_reserved(data, comments, is_class):
-    """FMI 3 reserves `time`: an output or local read from the model's own `time` becomes `model_time`."""
-    for section in ("outputs", "locals"):
+    """FMI 3 reserves `time`: a variable for the model's own `time` (an argument, an output) becomes
+    `model_time`, bound to it with `to` / `from`."""
+    for section in ("parameters", "inputs", "states", "outputs", "locals"):
         variables = data.get(section, {})
-        if "time" in variables and "model_time" not in variables:
-            info = variables.pop("time")
+        if "time" not in variables:
+            continue
+        new = next(n for n in ("model_time", f"model_time_{section}") if n not in _taken(data))
+        info = variables.pop("time")
+        if section in ("outputs", "locals"):
             info.setdefault("from", "attr:time" if is_class else "return:time")
-            variables["model_time"] = info
-            comments.pop((section, "time"), None)
-            comments[(section, "model_time")] = "the model's `time` (FMI 3 reserves that name)"
+        else:
+            info.setdefault("to", "init:time" if section == "parameters" and is_class else "arg:time")
+        variables[new] = info
+        comments.pop((section, "time"), None)
+        comments[(section, new)] = "the model's `time` (FMI 3 reserves that name)"
+
+
+def _rename_duplicates(data, comments):
+    """A constructor argument and a step method argument with the same name (radioactivedecay's
+    Inventory(..., units).decay(..., units)) can't both be called NAME: the method's becomes
+    <method>_NAME, bound to it with `to`."""
+    method = data["model"].get("call", "call").strip("_")
+    parameters = data.get("parameters", {})
+    for section in ("inputs", "states"):
+        variables = data.get(section, {})
+        for name in [n for n in variables if n in parameters]:
+            new = f"{method}_{name}"
+            if new in _taken(data):
+                continue
+            info = variables.pop(name)
+            info.setdefault("to", f"arg:{name}")
+            variables[new] = info
+            comments[(section, new)] = f"{method}()'s {name} (the constructor also has a {name})"
+            comments.pop((section, name), None)
 
 
 def _run_setup(data, obj=None):
@@ -1041,6 +1067,7 @@ def _arguments(fn, section, data, comments, skip_self=False, allow_time=True, co
         params = []
     if skip_self and params:
         params = params[1:]
+    params = [_unwrap_descriptor(p) for p in params]
     position = 0
     for p in params:
         if p.kind in (p.VAR_POSITIONAL, p.VAR_KEYWORD):
@@ -1096,6 +1123,8 @@ def _arguments(fn, section, data, comments, skip_self=False, allow_time=True, co
             variables[p.name] = {"type": "Binary", "start": default.hex()}
         elif arrays and _array_info(default):
             variables[p.name] = _array_info(default, with_start=True)
+        elif p.name in starts and _constant(default):   # --start with a value that isn't an FMI one
+            data["model"].setdefault(constants_key, {})[p.name] = _constant(default)
         else:
             comments[("model", f"{constants_key}.{p.name}")] = _constant(default)
         if len(variables) > before and "dimensions" in variables[p.name]:
@@ -1143,6 +1172,16 @@ def _arguments(fn, section, data, comments, skip_self=False, allow_time=True, co
         data.pop(section)
 
 
+def _unwrap_descriptor(p):
+    """A default that is a descriptor (astropy's Parameter(default=3.04, ...) in FlatLambdaCDM's
+    signature) stands for the class's own handling of the argument: its `default` is the value."""
+    default = p.default
+    if p.default is p.empty or callable(default) \
+            or not hasattr(type(default), "__get__") or not hasattr(default, "default"):
+        return p
+    return p.replace(default=default.default)
+
+
 def _extra_info(name, value, arrays):
     """The variable for a --start value that no declared argument takes (*args, **kwargs)."""
     if isinstance(value, SCALARS):
@@ -1188,7 +1227,7 @@ def _split_items(p, value, variables, section, comments, arrays):
             flat = flatten(list(item))
             if all(isinstance(x, int) and not isinstance(x, bool) for x in flat):   # e.g. atomic numbers, indices
                 info.update(type="Int32", start=flat)
-        info["to"] = f"arg:{p.name}[{key}]"
+        info["to"] = f"{'init' if section == 'parameters' else 'arg'}:{p.name}[{key}]"
         converter = _converter(hints[i]) if i < len(hints) else None
         if converter == "numpy":
             info["numpy"] = True
@@ -1254,7 +1293,7 @@ def _split_fields(fn, p, variables, section, comments, starts, arrays):
         info = _array_info(value, with_start=True) if value is not None and not isinstance(value, SCALARS)             else _type_info(value, static.unwrap_optional(hint))
         if isinstance(info.get("start"), int) and not isinstance(info["start"], bool)                 and static.unwrap_optional(hint) is float:
             info["start"] = float(info["start"])
-        info["to"] = f"arg:{p.name}.{field}"
+        info["to"] = f"{'init' if section == 'parameters' else 'arg'}:{p.name}.{field}"   # a constructor's
         found[f"{p.name}_{field}"] = info
         if value is None:
             comments[(section, f"{p.name}_{field}")] = f"field {field!r} of {p.name} ({cls.__name__}); no default: check the start value"
@@ -1568,6 +1607,8 @@ def _scalar_of(value):
     else the value itself."""
     if hasattr(value, "magnitude") and hasattr(value, "units"):
         value = value.magnitude
+    elif hasattr(value, "unit") and hasattr(value, "to_value"):   # an astropy Quantity
+        value = value.value
     # numpy scalars (np.float32, ...) also have ndim 0, but are handled as they are, keeping their type
     if getattr(value, "ndim", None) == 0 and hasattr(value, "item") and type(value).__name__ not in NUMPY_SCALARS:
         try:
@@ -1593,6 +1634,9 @@ def _number_like(value):
 
 def _unit_of(value):
     """The unit of a pint quantity, written compactly ("m/s"); None for anything else or dimensionless."""
+    if hasattr(value, "unit") and hasattr(value, "to_value"):   # an astropy Quantity
+        unit = value.unit.to_string() if hasattr(value.unit, "to_string") else str(value.unit)
+        return unit or None
     units = getattr(value, "units", None)
     if units is None or not hasattr(value, "magnitude"):
         return None
@@ -1650,11 +1694,11 @@ def _shape(value):
 
 
 def _same(a, b):
-    if hasattr(a, "tolist"):
-        a = a.tolist()
-    if hasattr(b, "tolist"):
-        b = b.tolist()
     try:
+        if hasattr(a, "tolist"):
+            a = a.tolist()
+        if hasattr(b, "tolist"):
+            b = b.tolist()
         return a == b or (isinstance(a, float) and isinstance(b, float) and math.isnan(a) and math.isnan(b))
     except Exception:
         return False

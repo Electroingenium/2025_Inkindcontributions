@@ -342,3 +342,53 @@ def test_isolated_imports_forgets_namespace_subpackages(tmp_path):
         import pkg.ns.mod  # noqa: F401
     assert not {"pkg", "pkg.ns", "pkg.ns.mod"} & set(sys.modules)
     assert str(tmp_path) not in sys.path
+
+
+def test_names_build_would_reject_are_renamed(tmp_path):
+    (tmp_path / "names.py").write_text(textwrap.dedent('''
+        import dataclasses
+
+        def source(time, alpha=1.0):   # e.g. pygfunction's finite_line_source(time, alpha, ...)
+            return alpha * time
+
+        class Inventory:   # e.g. radioactivedecay's Inventory(contents, units).decay(decay_time, units)
+            def __init__(self, amount=1.0, units="Bq"):
+                self.amount, self.units = amount, units
+
+            def decay(self, decay_time, units="s"):
+                return self.amount / (1.0 + decay_time)
+
+        @dataclasses.dataclass(frozen=True)
+        class Parameter:   # a descriptor used as a signature default, like astropy.cosmology's
+            default: float = 0.0
+            doc: str = ""
+
+            def __get__(self, obj, owner=None):
+                return self
+
+        class Cosmology:
+            def __init__(self, H0, Neff=Parameter(default=3.04, doc="neutrino species")):
+                self.H0, self.Neff = H0, Neff
+
+            def age(self, z):
+                return 1.0 / (self.H0 * (1.0 + z))
+    '''))
+    # FMI 3 reserves `time`: the argument becomes model_time, bound to it
+    data, _ = infer(f"{tmp_path / 'names.py'}:source", starts={"time": 10.0}, fmi_version=3)
+    assert data["inputs"]["model_time"] == {"start": 10.0, "to": "arg:time"} and "time" not in data["inputs"]
+    # the step method's units, beside the constructor's
+    data, _ = infer(f"{tmp_path / 'names.py'}:Inventory", call="decay", starts={"decay_time": 1.0, "units": "y"})
+    assert data["parameters"]["units"] == {"start": "Bq"}
+    assert data["inputs"]["decay_units"] == {"start": "y", "to": "arg:units"}
+    # a descriptor default stands for its `default`; it isn't split into fields
+    data, _ = infer(f"{tmp_path / 'names.py'}:Cosmology", call="age", starts={"H0": 70.0, "z": 1.0})
+    assert data["parameters"] == {"H0": {"start": 70.0}, "Neff": {"start": 3.04}}
+    for target, kwargs in ((f"{tmp_path / 'names.py'}:source", {"starts": {"time": 10.0}, "fmi_version": 3}),
+                           (f"{tmp_path / 'names.py'}:Inventory", {"call": "decay",
+                                                                   "starts": {"decay_time": 1.0, "units": "y"}})):
+        output = tmp_path / "fmugen.toml"
+        with isolated_imports():
+            init(target, output=output, force=True, probe=True, **kwargs)
+        load_config(output)   # and build accepts it:
+        from fmugen.__main__ import build
+        build(output, tmp_path / "out", output_format="folder")
