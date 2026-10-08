@@ -573,7 +573,6 @@ energy = { unit = "J" }
 interval = 1.0
 call = "sample"
 
-
 [clocks.overheat]
 causality = "output"
 from = "attr:overheated"
