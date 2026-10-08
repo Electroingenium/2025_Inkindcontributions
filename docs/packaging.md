@@ -18,7 +18,7 @@ Install fmugen into your model's virtual environment (fmugen is not on PyPI yet:
 ### `fmugen init`
 
 ```
-fmugen init MODEL [-o OUTPUT] [--call METHOD] [--fmi {2,3}] [--start NAME=VALUE ...] [--setup CALL ...] [--kind function] [--create CLASSMETHOD] [--force]
+fmugen init MODEL [-o OUTPUT] [--call METHOD] [--fmi {2,3}] [--start NAME=VALUE ...] [--setup CALL ...] [--kind function] [--create CLASSMETHOD] [--probe] [--convert NAME=module:function ...] [--force]
 ```
 
 | Argument | Description |
