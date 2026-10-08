@@ -392,3 +392,23 @@ def test_names_build_would_reject_are_renamed(tmp_path):
         load_config(output)   # and build accepts it:
         from fmugen.__main__ import build
         build(output, tmp_path / "out", output_format="folder")
+
+
+def test_entry_keeps_the_name_it_was_given(tmp_path):
+    # PyCO2SYS:sys is engine.nd.CO2SYS, while PyCO2SYS:CO2SYS is an older, different function;
+    # rdkit's Descriptors.MolWt is a lambda
+    (tmp_path / "carbonate_engine.py").write_text("def CO2SYS(par1=1.0):\n    return {'new': par1}\n")
+    (tmp_path / "carbonate.py").write_text(textwrap.dedent('''
+        from carbonate_engine import CO2SYS as sys
+
+        def CO2SYS(par1=1.0, old_option=0):
+            return {"old": par1}
+
+        MolWt = lambda *x, **y: 46.069
+    '''))
+    data, _ = infer(f"{tmp_path / 'carbonate.py'}:sys")
+    assert data["model"]["entry"] == "carbonate.py:sys" and "new" in data["outputs"]
+    output = tmp_path / "fmugen.toml"
+    with isolated_imports():
+        init(f"{tmp_path / 'carbonate.py'}:MolWt", output=output, starts={"mol": 1.0}, probe=True)
+    assert load_config(output).model["entry"] == "carbonate.py:MolWt"

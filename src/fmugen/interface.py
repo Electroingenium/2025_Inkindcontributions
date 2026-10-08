@@ -94,11 +94,14 @@ def _infer_config(target, call, config_dir, fmi_version, starts, setup, kind, cr
         raise InterfaceError(f"cannot import {target}: {e} (is it installed in this environment?)") from e
     entry = _pick_entry(module, name)
 
+    # the name it was given: an alias (PyCO2SYS:sys) or a lambda (rdkit's Descriptors.MolWt) has
+    # another __name__, which may name a different object or none
+    entry_name = name or entry.__name__
     if path:
         rel = Path(path).resolve().relative_to(config_dir).as_posix()
-        entry_ref = f"{rel}:{entry.__name__}"
+        entry_ref = f"{rel}:{entry_name}"
     else:
-        entry_ref = f"{module_name}:{entry.__name__}"
+        entry_ref = f"{module_name}:{entry_name}"
 
     data = {"model": {"entry": entry_ref}}
     if fmi_version:
