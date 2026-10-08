@@ -1,0 +1,57 @@
+[project]
+name = "fmugen"
+version = "0.1.0"
+description = "Turn ordinary Python models into FMI 2.0 / 3.0 Co-Simulation FMUs (UniFMU), without changing their code"
+readme = "README.md"
+requires-python = ">=3.13"
+authors = [{ name = "Tomas Robino" }]
+keywords = ["fmi", "fmu", "co-simulation", "unifmu", "simulation", "digital twin", "modelica"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Software Development :: Code Generators",
+]
+# The FMU runs with the Python fmugen is installed in (the model's virtual environment),
+# so that environment needs what UniFMU 0.14's Python backend imports.
+dependencies = [
+    "protobuf==5.27.3",
+    "pyzmq>=27.2.0",
+    "cloudpickle>=3.0",   # FMU state save/restore when pickle can't (lambdas, local functions)
+]
+
+[project.optional-dependencies]
+# fmugen build --compile pyinstaller | nuitka
+pyinstaller = [
+    "pyinstaller>=6.10",
+]
+nuitka = [
+    "nuitka>=2.5",
+]
+
+[project.scripts]
+fmugen = "fmugen.__main__:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/fmugen"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    # tests validate and simulate the FMUs with FMPy
+    "fmpy>=0.3.32",
+    # example models
+    "filterpy==1.4.5",
+    "simple-pid==2.0.1",
+]
+
+[tool.pytest.ini_options]
+markers = ["slow: builds compiled FMUs (minutes); deselect with -m \"not slow\""]

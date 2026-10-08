@@ -1,0 +1,107 @@
+"""Model shapes found by testing published neural networks (docs/tested-models.md):
+factory functions, computed constants, tuple/dict arguments, NamedTuple and 0-d results,
+and array inputs that must be numpy arrays without saying so."""
+import textwrap
+
+from fmugen.__main__ import _parse_starts, init, isolated_imports
+from fmugen.interface import infer_config
+
+
+def write(tmp_path, source):
+    (tmp_path / "lib.py").write_text(textwrap.dedent(source))
+    return tmp_path / "lib.py"
+
+
+def test_start_values_in_toml_spelling_and_computed_constants():
+    starts = _parse_starts(["fast=true", "slow=FALSE", "n=3", "name=abc", "path=call:os.path:join('a', 'b')"])
+    assert starts == {"fast": True, "slow": False, "n": 3, "name": "abc", "path": {"call": "os.path:join('a', 'b')"}}
+
+
+def test_factory_function_with_a_computed_constant(tmp_path, make_fmu, adapter):
+    # like silero_vad.load_silero_vad / torchani.models.ANI2x: a function returns the model object
+    model = write(tmp_path, '''
+        class Gain:
+            def __init__(self, k, path):
+                self.k, self.path = k, path
+            def step(self, u):
+                return self.k * u
+
+        def make(path, k=2.0, verbose=False):
+            return Gain(k, path)
+
+        def weights_file():                     # like huggingface_sb3.load_from_hub(...)
+            return "weights.bin"
+    ''')
+    with isolated_imports():
+        init(f"{model}:make", call="step", probe=True, starts=_parse_starts(["path=call:lib:weights_file()", "u=1.0"]))
+    text = (tmp_path / "fmugen.toml").read_text()
+    assert 'call = "step"' in text and "[model.constants]" in text and 'path = { call = "lib:weights_file()" }' in text
+    assert "k = { start = 2.0 }" in text and "verbose = { start = false }" in text
+
+    fmu = adapter(make_fmu(tmp_path))
+    fmu.initialize()
+    assert fmu.engine.obj.path == "weights.bin"        # computed when the FMU initializes
+    assert fmu.set("u", 3.0) == 0 and fmu.fmi2DoStep(0.0, 1.0, False) == 0
+    assert fmu.get("y") == 6.0
+
+
+def test_tuple_argument_namedtuple_and_0d_results_numpy_retry(tmp_path, make_fmu, adapter):
+    # like torchani: forward((species, coordinates)) returning SpeciesEnergies(species, energies)
+    model = write(tmp_path, '''
+        from collections import namedtuple
+        import numpy as np
+
+        Result = namedtuple("Result", "total count")
+
+        def combine(pair, scale=1.0):
+            offset, values = pair
+            return Result(np.array(offset + scale * values.sum()), values.size)   # values must be an ndarray
+    ''')
+    with isolated_imports():
+        data, comments = infer_config(f"{model}:combine", fmi_version=3, probe=True, starts={"pair": (1.0, [1.0, 2.0, 3.0])})
+    assert data["inputs"]["pair_0"] == {"start": 1.0, "to": "arg:pair[0]"}
+    assert data["inputs"]["pair_1"] == {"dimensions": [3], "start": [1.0, 2.0, 3.0], "to": "arg:pair[1]", "numpy": True}
+    assert "the probe failed with lists" in comments[("inputs", "pair_1")]
+    assert data["outputs"] == {"total": {}, "count": {}}    # functions: from = "return:<name>" is the default
+
+    with isolated_imports():
+        init(f"{model}:combine", fmi_version=3, probe=True, starts={"pair": (1.0, [1.0, 2.0, 3.0])})
+    fmu = adapter(make_fmu(tmp_path), fmi=3)
+    fmu.initialize()
+    assert fmu.get("total") == 7.0
+    assert fmu.set("pair_1", [2.0, 2.0, 2.0]) == 0 and fmu.fmi3DoStep(0.0, 1.0, False)[0] == 0
+    assert fmu.get("total", "count") == [7.0, 3.0]
+
+
+def test_dict_argument(tmp_path, make_fmu, adapter):
+    # like surfaces' test functions: f({"n_estimators": ..., "max_depth": ...})
+    model = write(tmp_path, '''
+        def score(params):
+            return params["a"] * params["b"]
+    ''')
+    with isolated_imports():
+        init(f"{model}:score", starts={"params": {"a": 2.0, "b": 3.0}})
+    text = (tmp_path / "fmugen.toml").read_text()
+    assert 'a = { start = 2.0, to = "arg:params[a]" }' in text
+    fmu = adapter(make_fmu(tmp_path))
+    fmu.initialize()
+    assert fmu.get("y") == 6.0
+    assert fmu.set("a", 4.0) == 0 and fmu.fmi2DoStep(0.0, 1.0, False) == 0
+    assert fmu.get("y") == 12.0
+
+
+def test_only_the_models_own_properties_become_outputs(tmp_path):
+    # like transformers models: framework base classes add properties that aren't results
+    model = write(tmp_path, '''
+        from fractions import Fraction
+
+        class Sensor(Fraction):                  # Fraction (stdlib) has properties numerator/denominator
+            @property
+            def reading(self):
+                return 1.5
+            def step(self, u=0.0):
+                return None
+    ''')
+    with isolated_imports():
+        data, _ = infer_config(f"{model}:Sensor", call="step", probe=True)
+    assert set(data["outputs"]) == {"reading"}

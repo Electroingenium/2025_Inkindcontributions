@@ -1,0 +1,47 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: streamlit-ui
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: streamlit-ui}
+  template:
+    metadata:
+      labels: {app: streamlit-ui}
+    spec:
+      serviceAccountName: streamlit-ui
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - {key: liqo.io/type, operator: NotIn, values: [virtual-node]}
+      containers:
+        - name: streamlit-ui
+          image: fmugen-sim
+          imagePullPolicy: IfNotPresent
+          command: ["streamlit", "run", "streamlit_app.py", "--server.address=0.0.0.0", "--server.port=8501"]
+          ports:
+            - containerPort: 8501
+          env:
+            - name: RUN_BACKEND
+              value: kubernetes
+            - name: RUN_PLACEMENT        # remote (Liqo virtual nodes) | local | any
+              value: remote
+            - name: OPCUA_ENDPOINT
+              value: opc.tcp://opcua-server:4840
+            - name: POD_NAME             # runs use this pod's image
+              valueFrom:
+                fieldRef: {fieldPath: metadata.name}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: streamlit-ui
+spec:
+  selector: {app: streamlit-ui}
+  ports:
+    - name: http
+      port: 8501
+      targetPort: 8501

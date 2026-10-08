@@ -1,2 +1,7 @@
 venv/
 .idea/
+*unifmu
+fmus/generated/
+__pycache__/
+out/
+docker/model/*.fmu

@@ -1,0 +1,15 @@
+# kubectl apply -k docker/k8s
+# The image must be pullable by every cluster a run can land on (with Liqo, the peered
+# clusters too): push it to a registry and set it here, or `kind load` it (liqo/up.sh).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: fmu-sim
+resources:
+  - namespace.yaml
+  - rbac.yaml
+  - opcua-server.yaml
+  - streamlit-ui.yaml
+images:
+  - name: fmugen-sim
+    newName: fmugen-sim      # e.g. ghcr.io/<org>/fmugen-sim
+    newTag: latest

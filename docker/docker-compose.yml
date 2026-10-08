@@ -1,46 +1,40 @@
+# Local stack. For Kubernetes / Liqo see k8s/ and liqo/.
+# Another model: MODEL=examples/simple_pid docker compose up --build
 networks:
   simnet:
-    name: simnet     # Nombre fijo y visible para todos los servicios
+    name: simnet     # Fixed name, used by the FMU runs started from Streamlit
     driver: bridge
+
+x-image: &image
+  image: fmugen-sim:latest
+  build:
+    context: ..
+    dockerfile: docker/Dockerfile
+    args:
+      MODEL: ${MODEL:-examples/psychrometry}
+      FMUGEN_ARGS: ${FMUGEN_ARGS:-}
+      PREBUILT: ${PREBUILT:-0}
 
 services:
   opcua-server:
-    build: ./opcua_server
+    <<: *image
     container_name: opcua-server
+    command: ["python", "opcua_server.py"]
     networks: [simnet]
     ports:
       - "4841:4840"
 
   streamlit-ui:
-    build: ./streamlit_ui
+    <<: *image
     container_name: streamlit-ui
+    command: ["streamlit", "run", "streamlit_app.py", "--server.address=0.0.0.0", "--server.port=8501"]
     networks: [simnet]
     ports: ["8501:8501"]
+    depends_on: [opcua-server]
     environment:
       - OPCUA_ENDPOINT=opc.tcp://opcua-server:4840
+      - RUN_BACKEND=docker
       - DOCKER_NETWORK=simnet
-      - FMU_IMAGE=fmu-client:latest
-      - FMU_CONTAINER_NAME_BASE=fmu-run
-      - HOST_FMU_PATH=${HOST_FMU_PATH}
-      - HOST_RESULTS_PATH=${HOST_RESULTS_PATH}
+      - FMU_IMAGE=fmugen-sim:latest
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - ./results:/results
-
-
-
-  fmu-client:
-    build: ./fmu_client
-    image: fmu-client:latest
-    container_name: fmu-client
-    networks: [simnet]
-    environment:
-      - OPCUA_ENDPOINT=opc.tcp://opcua-server:4840
-      - FMU_PATH=/app/model.fmu
-      - RESULTS_DIR=/results
-      - OPC_WAIT=10
-    volumes:
-      - ./model/ORIGINAL_generated_auto.fmu:/app/model.fmu:ro
-      - ./results:/results
-    entrypoint: ["tail", "-f", "/dev/null"]
-
