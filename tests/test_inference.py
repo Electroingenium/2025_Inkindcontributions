@@ -470,3 +470,19 @@ def test_time_arguments_are_recognized_by_common_names(tmp_path):
     data, comments = infer(f"{tmp_path / 'clocks.py'}:Environment", call="run", starts={"until": 5.0})
     assert data["inputs"]["until"] == {"start": 5.0}
     assert '[time] until = "end_time"' in comments[("inputs", "until")]
+
+
+def test_requirements_are_the_installed_distributions_the_model_uses(tmp_path):
+    import importlib.metadata
+    (tmp_path / "helper.py").write_text("SCALE = 2.0\n")
+    (tmp_path / "uses.py").write_text(textwrap.dedent('''
+        import json
+        import pytest   # a third-party package, as numpy would be
+        from helper import SCALE
+
+        def f(x=1.0):
+            return {"y": SCALE * x}
+    '''))
+    data, comments = infer(tmp_path / "uses.py", probe=False)
+    assert data["model"]["requirements"] == [f"pytest=={importlib.metadata.version('pytest')}"]
+    assert "requirements = [" in render_toml(data, comments)

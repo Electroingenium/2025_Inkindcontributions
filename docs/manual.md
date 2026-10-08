@@ -303,7 +303,7 @@ Each error names the section and key, e.g. `[inputs] x: unknown key(s) ['strat']
 | `description` | string | first docstring line of the entry, else of its module | FMU description. |
 | `author` | string | `""` | `author`. `build --author` overrides it. |
 | `sources` | list of paths | `[]` | Extra files or directories to copy into the FMU, keeping their paths. The entry file is always copied. Their folders go on `sys.path`, so flat and package imports both work. |
-| `requirements` | list of strings | `[]` | pip requirement specifiers, e.g. `"simple-pid==2.0.1"`. Written to `resources/requirements.txt`, as a record of what the FMU's environment must contain. They must be installed in the environment fmugen runs in. |
+| `requirements` | list of strings | `[]` | pip requirement specifiers, e.g. `"simple-pid==2.0.1"`. Written to `resources/requirements.txt`, as a record of what the FMU's environment must contain. They must be installed in the environment fmugen runs in. `init` writes them: the installed distributions that provide the entry's package, the modules the model's own files import, and the modules named in `setup`, computed constants, `convert` and `enum`, pinned to the installed versions. |
 | `init_call` | bool | `true` for functions with a step, else `false` | Call the model when leaving initialization mode to compute initial outputs. States are not advanced by this call. |
 | `terminate` | string | none | Classes: a method called on terminate, e.g. `"close"`. |
 
