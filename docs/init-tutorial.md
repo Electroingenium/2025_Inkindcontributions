@@ -126,7 +126,7 @@ fmugen init simple_pid:PID -o -
 warning: setpoint: typed Integer because the default is an int; write a float start if it is Real
 warning: input_: no default in the code: the start value is made up, check it
 warning: components, tunings, output_limits: properties of unknown type left commented out: uncomment the numbers
-warning: y: type not shown by the code, assumed Real; run init --probe, or set type = ...
+warning: y: type not shown by the code, assumed a single Real; it may be an array or a tuple, which fails the step: run init --probe, or set type = ... / dimensions = [...]
 ```
 
 ```toml

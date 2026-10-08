@@ -624,10 +624,33 @@ class Engine:
                 return list(enum).index(value) + 1
         if value is None:
             raise TypeError(f"{var['name']} is None")
+        value = self._single_value(var, value)
         if isinstance(value, str) and var["type"] not in ("String", "Boolean", "Binary") and not _is_number(value):
             raise TypeError(f"{var['name']} is a string ({value[:80]!r}), not a {var['type']}: "
                             f"set type = \"String\" for it in the config")
         return coerce(var["type"], plain_number(value, var.get("unit")))
+
+    @staticmethod
+    def _single_value(var, value):
+        """The value of a scalar variable: a one-element array, list or tuple gives its element;
+        a longer one is an error saying the variable needs dimensions."""
+        if isinstance(value, (str, bytes, Mapping)):
+            return value
+        shape = getattr(value, "shape", None)
+        if shape is not None and hasattr(value, "tolist") and not isinstance(shape, Mapping):
+            shape = tuple(int(n) for n in shape)
+            if shape == () or math.prod(shape) == 1:
+                return flatten(value.tolist())[0] if shape else value
+        elif isinstance(value, (list, tuple)):
+            shape = (len(value),)
+            if len(value) == 1:
+                return value[0]
+        else:
+            return value
+        kind = "a tuple" if isinstance(value, tuple) else "an array" if hasattr(value, "tolist") else "a list"
+        raise TypeError(f"{var['name']} is {kind} of shape {list(shape)}, not a single value: give it "
+                        f"dimensions = {list(shape)} (FMI 3) or read one element (from = \"...:0\"); "
+                        "fmugen init --probe finds them")
 
     def _resolve_constants(self):
         """[model] constants and call_constants as Python values, computed once."""

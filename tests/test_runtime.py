@@ -871,3 +871,26 @@ def test_init_stops_when_a_computed_constant_fails(tmp_path):
         init(tmp_path / "deriv.py", starts={"fun": {"call": "math:nosuch"}}, probe=True)
     _, data = init(tmp_path / "deriv.py", output="-", starts={"fun": {"call": "math:cos"}}, probe=True)
     assert data["outputs"] == {"y": {"from": "return"}}
+
+
+def test_array_result_for_a_scalar_output(tmp_path, make_fmu, adapter):
+    pytest.importorskip("numpy")
+    write(tmp_path, "enu.py", """
+        import numpy
+
+        def enu(x=1.0):   # like pymap3d's geodetic2enu: a tuple; or an array of one element
+            return (x, 2 * x, 3 * x) if x > 0 else numpy.array([x])
+    """, """
+        [model]
+        entry = "enu.py:enu"
+        [inputs]
+        x = { start = -1.0 }
+        [outputs]
+        y = { from = "return" }
+    """)
+    fmu = adapter(make_fmu(tmp_path / "fmugen.toml"))
+    fmu.initialize()
+    assert fmu.get("y") == -1.0   # one element: its value
+    assert fmu.set("x", 1.0) == OK
+    assert fmu.fmi2DoStep(0.0, 1.0, False) == ERROR
+    assert "y is a tuple of shape [3], not a single value: give it dimensions = [3]" in fmu.logs[-1][2]
