@@ -135,6 +135,27 @@ def test_exceptions_become_errors_with_traceback(tmp_path, make_fmu, adapter):
     assert "ZeroDivisionError" in fmu.logs[-1][2] and "fragile.py" in fmu.logs[-1][2]
 
 
+def test_failing_computed_constant_is_an_initialization_error(tmp_path, make_fmu, adapter):
+    write(tmp_path, "deriv.py", """
+        def derivative(fun, x=0.5):
+            return fun(x)
+    """, """
+        [model]
+        entry = "deriv.py:derivative"
+        [model.constants]
+        fun = { call = "math:nosuch" }
+        [inputs]
+        x = { start = 0.5 }
+        [outputs]
+        y = { from = "return" }
+    """)
+    fmu = adapter(make_fmu(tmp_path / "fmugen.toml"))   # instantiating doesn't compute constants
+    assert fmu.fmi2SetupExperiment(0.0, None, None) == OK and fmu.fmi2EnterInitializationMode() == OK
+    assert fmu.fmi2ExitInitializationMode() == ERROR
+    message = fmu.logs[-1][2]
+    assert "constants.fun = 'math:nosuch' failed" in message and "AttributeError" in message
+
+
 def test_enumeration(tmp_path, make_fmu, adapter):
     write(tmp_path, "valve.py", '''
         import enum

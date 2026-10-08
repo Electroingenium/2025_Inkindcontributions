@@ -93,9 +93,9 @@ class Engine:
                 name: resolve_reference(td["enum"])
                 for name, td in self.interface.get("type_definitions", {}).items() if td.get("enum")
             }
-            self.constants = {k: resolve_constant(v) for k, v in self.interface.get("constants", {}).items()}
-            self.call_constants = {k: resolve_constant(v)
-                                   for k, v in self.interface.get("call_constants", {}).items()}
+            # constants ({ call = ... } may download or compute) are resolved when the FMU initializes,
+            # where a failure is reported to the importer with its traceback (resolve_constants)
+            self.constants = self.call_constants = None
             self.converters = {v["name"]: converter(v) for v in self.variables if v.get("convert")}
             # [model] globals: module-level state, put back to its import-time value on reset
             self.globals = [split_global(ref) for ref in self.interface.get("globals", [])]
@@ -141,6 +141,7 @@ class Engine:
 
     def exit_initialization_mode(self, next_mode="step"):
         def initialize():
+            self._resolve_constants()
             self._run_setup(after_construction=False)
             if self.is_class:
                 kwargs = keyword_constants(self.constants)
@@ -626,6 +627,21 @@ class Engine:
             raise TypeError(f"{var['name']} is a string ({value[:80]!r}), not a {var['type']}: "
                             f"set type = \"String\" for it in the config")
         return coerce(var["type"], plain_number(value, var.get("unit")))
+
+    def _resolve_constants(self):
+        """[model] constants and call_constants as Python values, computed once."""
+        if self.constants is not None:
+            return
+        resolved = {}
+        for table in ("constants", "call_constants"):
+            resolved[table] = {}
+            for name, value in self.interface.get(table, {}).items():
+                try:
+                    resolved[table][name] = resolve_constant(value)
+                except Exception as e:
+                    shown = value["call"] if isinstance(value, dict) and "call" in value else value
+                    raise RuntimeError(f"[model] {table}.{name} = {shown!r} failed: {e!r}") from e
+        self.constants, self.call_constants = resolved["constants"], resolved["call_constants"]
 
     def _run_setup(self, after_construction):
         """[model] setup: "module:function" calls run before construction, method names after it."""
