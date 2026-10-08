@@ -609,6 +609,7 @@ class Engine:
 
     def _from_python(self, var, value):
         if var.get("dimensions"):
+            value = plain_number(value, var.get("unit"))   # an array quantity (pint, astropy)
             flat = flatten(value.tolist() if hasattr(value, "tolist") else value)
             n = self.size(var)
             if len(flat) != n:
@@ -1273,12 +1274,18 @@ def _labelled(obj):
 
 
 def plain_number(value, unit=None):
-    """A pint quantity (anything with .magnitude and .units) as a number, in `unit` when given;
+    """A pint quantity (anything with .magnitude and .units) or an astropy one as a number, in `unit`
+    when given;
     a one-value pandas/xarray column as its value."""
     if type(value).__module__.split(".")[0] in ("pandas", "xarray") and getattr(value, "size", None) == 1:
         value = value.item()
     if hasattr(value, "magnitude") and hasattr(value, "units"):
         return value.m_as(unit) if unit and hasattr(value, "m_as") else value.magnitude
+    if hasattr(value, "unit") and hasattr(value, "to_value"):   # an astropy Quantity
+        try:
+            return value.to_value(unit) if unit else value.value
+        except Exception:   # a unit astropy doesn't know: the value in its own unit
+            return value.value
     return value
 
 
