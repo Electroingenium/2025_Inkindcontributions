@@ -90,7 +90,7 @@ Each key is an argument of the step function or method (or of a clock's `call` t
 dt = "step_size"
 ```
 
-For a model that takes a date-time (pvlib, pandas, weather data), write the entry as a table with an `epoch`: the argument then gets `epoch + t` seconds as a `datetime.datetime`. FMU time 0 is the epoch.
+For a model that takes a date-time (pvlib, pandas, weather data), write the entry as a table with an `epoch`: the argument then gets `epoch + t` seconds as a `datetime.datetime`. FMU time 0 is the epoch. An epoch with a time zone (`+00:00`) gives aware date-times; one without gives naive ones.
 
 ```toml
 [time]

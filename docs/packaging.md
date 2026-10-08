@@ -13,12 +13,12 @@
 
 ## CLI
 
-Install fmugen into your model's virtual environment (`pip install fmugen`) and run it from there. `fmugen build` also needs the UniFMU 0.14.0 CLI (see [UniFMU version](#unifmu-version)). To work on fmugen itself, `uv sync` installs it in editable mode with the test dependencies.
+Install fmugen into your model's virtual environment (fmugen is not on PyPI yet: `pip install path/to/2025_Inkindcontributions`) and run it from there. `fmugen build` also needs the UniFMU 0.14.0 CLI (see [UniFMU version](#unifmu-version)). To work on fmugen itself, `uv sync` installs it in editable mode with the test dependencies.
 
 ### `fmugen init`
 
 ```
-fmugen init MODEL [-o OUTPUT] [--call METHOD] [--fmi {2,3}] [--start NAME=VALUE ...] [--setup CALL ...] [--kind function] [--create CLASSMETHOD] [--force]
+fmugen init MODEL [-o OUTPUT] [--call METHOD] [--fmi {2,3}] [--start NAME=VALUE ...] [--setup CALL ...] [--kind function] [--create CLASSMETHOD] [--probe] [--convert NAME=module:function ...] [--force]
 ```
 
 | Argument | Description |
@@ -171,7 +171,7 @@ macos = ["sh", "-c", "chmod +x dist/main/main && ./dist/main/main"]
 windows = ["powershell", "-command", "./dist/main/main.exe"]
 ```
 
-Install the compiler in your environment first: `pip install fmugen[pyinstaller]` or `pip install fmugen[nuitka]`.
+Install the compiler in your environment first: `pip install "path/to/2025_Inkindcontributions[pyinstaller]"` or `[nuitka]` (fmugen is not on PyPI yet).
 
 | | PyInstaller | Nuitka |
 |---|---|---|
