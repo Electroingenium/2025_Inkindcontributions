@@ -507,7 +507,7 @@ When it is true after a step or a clock tick, the FMU returns `terminateSimulati
 ## What `fmugen init` infers
 
 ```bash
-fmugen init path/to/model.py[:Name] [--call METHOD] [--fmi 3] [--start NAME=VALUE ...] [--setup CALL ...] [--kind function] [--probe] [--convert NAME=module:function ...] [-o fmugen.toml | -o -] [--force]
+fmugen init {path/to/model.py[:Name] | package.module:Name} [--call METHOD] [--fmi {2,3}] [--start NAME=VALUE ...] [--setup CALL ...] [--kind function] [--create CLASSMETHOD] [--probe] [--convert NAME=module:function ...] [-o fmugen.toml | -o -] [--force]
 ```
 
 It imports the module, picks the entry, reads the signatures and **the source code**, and writes a commented config. **It does not call the model**: no object is built, no setup call or step is run. Models that need a device, a network or a licence can be configured anywhere. (Importing the module runs its top-level code, as any import does.)
