@@ -262,7 +262,7 @@ fixed_step = true      # the model only works at step_size; any other doStep is 
 
 ### `[time]`: passing time and step size
 
-Arguments that receive the simulation time instead of being inputs. `init` recognizes them by name: `dt`, `step_size`, `h` → `"step_size"`; `t`, `time` → `"time"`.
+Arguments that receive the simulation time instead of being inputs. `init` recognizes them by name: `dt`, `h`, `step_size`, `stepSize`, `time_step` (step size); `t`, `time`, `currentTime`, `t_now` (time at the start of the step); `until`, `end_time`, `t_end`, `t_next` (time at its end, e.g. simpy's `Environment.run(until)`). Case and underscores don't matter. A `--start` for one of them makes it a fixed input instead, with a hint.
 
 ```toml
 [time]

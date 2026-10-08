@@ -26,6 +26,7 @@ class Returned:
     types: dict = dataclasses.field(default_factory=dict)    # name -> FMI type (when known)
     array: bool = False      # the whole result is an array (size unknown)
     unknown: str = None      # why the result couldn't be read, if it couldn't
+    may_be_none: bool = False   # some return statements return None (simpy's Environment.run)
 
 
 def function_node(fn):
@@ -211,13 +212,15 @@ def returned(fn, namespace=None, attributes=None):
             return attributes.get(value.attr)
         return _literal_type(value)
 
-    shapes = []
+    shapes, none = [], False
     for item in _own_nodes(node):
-        if not isinstance(item, ast.Return) or item.value is None:
+        if not isinstance(item, ast.Return):
             continue
         value = item.value
-        if isinstance(value, ast.Constant) and value.value is None or \
-                isinstance(value, ast.Name) and value.id == self_name:
+        if value is None or isinstance(value, ast.Constant) and value.value is None:
+            none = True
+            continue
+        if isinstance(value, ast.Name) and value.id == self_name:
             continue
         if isinstance(value, ast.Dict) and _str_keys(value):
             leaves = _dict_leaves(value, kind)
@@ -243,7 +246,7 @@ def returned(fn, namespace=None, attributes=None):
     if len(kinds) == 1 and kinds <= {"tuple", "single"} and len({len(n) for _, n, _ in shapes}) == 1:
         kind, names, types = shapes[0]
         sources = {n: f"return:{i}" for i, n in enumerate(names)} if kind == "tuple" else {"y": "return"}
-        return Returned(names, sources, {k: t for k, t in types.items() if t})
+        return Returned(names, sources, {k: t for k, t in types.items() if t}, may_be_none=none)
     return Returned(unknown="its return statements return different shapes")
 
 

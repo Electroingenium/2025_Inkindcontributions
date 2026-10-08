@@ -28,7 +28,16 @@ from pathlib import Path
 from fmugen import static
 from fmugen.config import InterfaceError
 
-TIME_NAMES = {"dt": "step_size", "step_size": "step_size", "h": "step_size", "t": "time", "time": "time"}
+# Argument names (lowercase, without "_") that take the simulation time, and which one: the time at the
+# start of the step, the step size, or the time at its end (simpy's Environment.run(until))
+TIME_NAMES = {"t": "time", "time": "time", "currenttime": "time", "tcurrent": "time", "tnow": "time",
+              "dt": "step_size", "h": "step_size", "stepsize": "step_size", "timestep": "step_size",
+              "until": "end_time", "endtime": "end_time", "tend": "end_time", "tnext": "end_time"}
+
+
+def _time_source(name):
+    """The [time] source for an argument named like a time (currentTime, step_size, until), or None."""
+    return TIME_NAMES.get(name.lower().replace("_", ""))
 CALL_NAMES = ("step", "do_step", "update", "__call__")
 PROBE_STEP_SIZE = 1.0
 SCALARS = (bool, int, float, str)
@@ -628,6 +637,8 @@ def _add_returned(read, data, comments, is_class, arrays, probe, seen):
         data.setdefault("outputs", {})[name] = info
         if probe:
             comments[("outputs", name)] = "from the code; not seen in the probe"
+        elif read.may_be_none and source == "return":
+            comments[("outputs", name)] = "the code can also return None, which fails the step: check it, or run init --probe"
 
 
 def _add_attributes(cls, method_name, data, comments, arrays, probe, seen):
@@ -723,6 +734,9 @@ ASSUMPTIONS = (
     ("epoch in UTC", "a date-time epoch taken as UTC (the probe failed without a time zone)"),
     ("passed by position to *args", "passed by position to *args in the order of --start: check the order"),
     ("passed through **kwargs", "passed through **kwargs: check the model uses them"),
+    ("can also return None", "the code can also return None, which fails the step: check it, or run init --probe"),
+    ("so a fixed value; to pass the simulation time", "named like a time but given by --start, so a fixed "
+                                                     "value: add [time] NAME = ... to pass the simulation time"),
     ("the probe failed with lists", "passed as arrays of another kind, since the probe failed with lists"),
     ("fed back from", "taken as states from their names (x_prev fed back from x / x_next)"),
     ("set its dimensions and uncomment", "arrays left commented out: set their dimensions and uncomment"),
@@ -1077,9 +1091,12 @@ def _arguments(fn, section, data, comments, skip_self=False, allow_time=True, co
             continue
         if p.kind is p.POSITIONAL_ONLY and not positional:
             continue
-        if allow_time and p.name in TIME_NAMES and p.name not in starts:
-            time_args[p.name] = TIME_NAMES[p.name]
+        if allow_time and _time_source(p.name) and p.name not in starts:
+            time_args[p.name] = _time_source(p.name)
             continue
+        if allow_time and _time_source(p.name) and isinstance(starts.get(p.name), (int, float)):
+            comments[(section, p.name)] = (f"from --start, so a fixed value; to pass the simulation time instead, "
+                                           f"remove it and add [time] {p.name} = \"{_time_source(p.name)}\"")
         how = _is_datetime(fn, p) if allow_time and p.name not in starts else None
         if how == "name":
             comments.setdefault(DATETIME_BY_NAME, []).append(p.name)
@@ -1111,7 +1128,7 @@ def _arguments(fn, section, data, comments, skip_self=False, allow_time=True, co
         if not has_default or isinstance(default, SCALARS):
             info = _type_info(default, p.annotation)
             if p.name in starts:
-                comments[(section, p.name)] = "start from --start"
+                comments.setdefault((section, p.name), "start from --start")
             elif not has_default:
                 comments[(section, p.name)] = "no default in the code: check the start value"
             elif type(default) is int and static.unwrap_optional(p.annotation) is not int:
@@ -1391,7 +1408,7 @@ def _time_kwargs(time_args):
         if isinstance(source, dict):   # { source = ..., epoch = ... }: a date-time
             kwargs[arg] = datetime.datetime.fromisoformat(source["epoch"])
         else:
-            kwargs[arg] = PROBE_STEP_SIZE if source == "step_size" else 0.0
+            kwargs[arg] = {"step_size": PROBE_STEP_SIZE, "end_time": PROBE_STEP_SIZE}.get(source, 0.0)
     return kwargs
 
 

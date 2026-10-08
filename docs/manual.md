@@ -132,7 +132,7 @@ fmugen init MODEL [-o OUTPUT] [--call METHOD] [--fmi {2,3}]
 | Entry | the name after `:`; else the only public function or class defined in the module |
 | Inputs (functions) / parameters (classes) | arguments with a `bool`/`int`/`float`/`str` default, without a default, or given `--start` |
 | Start values and types | the default or `--start` value; otherwise the annotation; otherwise Real `0.0` |
-| Time arguments | arguments named `dt`, `step_size`, `h` (step size) or `t`, `time` (time) |
+| Time arguments | arguments named `dt`, `h`, `step_size`, `stepSize`, `time_step` (step size); `t`, `time`, `currentTime`, `t_now` (time at the start of the step); `until`, `end_time`, `t_end`, `t_next` (time at its end, e.g. simpy's `Environment.run(until)`). Case and underscores don't matter. A `--start` for one of them makes it a fixed input instead, with a hint |
 | Outputs from the return value | read from the code: dict keys (also a dict built in a variable), tuple positions (`y0`, `y1`, …), a single value (`y`), NamedTuple/dataclass fields, or the return annotation. An argument returned as it is keeps its type (e.g. an enum) |
 | Class outputs and locals | public attributes the step method assigns, following the methods it calls on `self`: also assigned in `__init__` → local, else output. Properties of the model's own classes with a type annotation → outputs; without one → a commented line (reading a property runs code) |
 | Types of outputs | annotations; booleans from comparisons and `True`/`False`; strings; otherwise Real. Lists, arrays and objects are never written as scalars |
