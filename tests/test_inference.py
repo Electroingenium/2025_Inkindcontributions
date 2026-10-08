@@ -412,3 +412,31 @@ def test_entry_keeps_the_name_it_was_given(tmp_path):
     with isolated_imports():
         init(f"{tmp_path / 'carbonate.py'}:MolWt", output=output, starts={"mol": 1.0}, probe=True)
     assert load_config(output).model["entry"] == "carbonate.py:MolWt"
+
+
+def test_results_that_refuse_float_are_read_through_their_properties(tmp_path):
+    (tmp_path / "errors.py").write_text(textwrap.dedent('''
+        class Affine:   # like uncertainties' AffineScalarFunc: __float__ raises
+            __slots__ = ("_value", "_sigma")
+
+            def __init__(self, value, sigma):
+                self._value, self._sigma = value, sigma
+
+            def __float__(self):
+                raise TypeError("can't convert an affine function to float; use x.nominal_value")
+
+            @property
+            def nominal_value(self):
+                return self._value
+
+            n = nominal_value
+
+            @property
+            def std_dev(self):
+                return self._sigma
+
+        def scaled(x=1.0, sigma=0.1):
+            return Affine(2 * x, 2 * sigma)
+    '''))
+    data, _ = infer(f"{tmp_path / 'errors.py'}:scaled")
+    assert data["outputs"] == {"nominal_value": {}, "std_dev": {}}   # from = "return:<name>", the default

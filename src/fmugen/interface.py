@@ -1452,8 +1452,11 @@ def _outputs_from_return(result, data, comments, default_name, is_class, arrays=
         items = [(f"{default_name}{i}", v, f"return:{i}") for i, v in enumerate(result)]
     elif _fmi_value(result) or (result is not None and _misfit(result)):
         items = [(default_name, result, "return")]
-    elif result is not None and hasattr(result, "__dict__"):
-        items = [(k, v, f"return:{k}") for k, v in vars(result).items() if not k.startswith("_")]
+    elif result is not None and (hasattr(result, "__dict__") or _public_properties(result)):
+        # an object: its public attributes and properties, e.g. uncertainties' nominal_value, std_dev
+        public = {k: v for k, v in getattr(result, "__dict__", {}).items() if not k.startswith("_")}
+        public.update({k: v for k, v in _public_properties(result).items() if k not in public})
+        items = [(k, v, f"return:{k}") for k, v in public.items()]
     else:
         items = []
     looked_at = {name for name, _, _ in items}
@@ -1525,6 +1528,25 @@ def _table_children(value):
     except Exception:
         return None
     return [(k, v) for k, v in pairs if isinstance(k, str)]
+
+
+def _public_properties(obj):
+    """{name: value} of the public properties of obj's class whose value is an FMI value; of
+    properties that are the same object under several names (uncertainties' n and nominal_value),
+    only the longest name."""
+    by_property = {}
+    for name, prop in inspect.getmembers(type(obj), lambda m: isinstance(m, property)):
+        if not name.startswith("_") and len(name) > len(by_property.get(id(prop), "")):
+            by_property[id(prop)] = name
+    values = {}
+    for name in sorted(by_property.values()):
+        try:
+            value = getattr(obj, name)
+        except Exception:
+            continue
+        if _fmi_value(value):
+            values[name] = value
+    return values
 
 
 def _dotted_name(name):
@@ -1632,7 +1654,13 @@ def _number_like(value):
     """Decimal, Fraction, numpy.float16, ... : anything that converts to a float or an int and isn't an array."""
     if getattr(value, "ndim", 0) or isinstance(value, (str, bytes, complex)):
         return False
-    return hasattr(type(value), "__float__") or hasattr(type(value), "__index__")
+    if not (hasattr(type(value), "__float__") or hasattr(type(value), "__index__")):
+        return False
+    try:   # uncertainties' AffineScalarFunc has __float__, but it raises
+        float(value)
+    except Exception:
+        return False
+    return True
 
 
 def _unit_of(value):
