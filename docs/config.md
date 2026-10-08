@@ -1,6 +1,6 @@
 # `fmugen.toml` reference
 
-`fmugen.toml` describes how an unmodified Python model becomes an FMU. For worked examples of each key, see [models.md](models.md) and the configs in [tested-models.md](tested-models.md). It sits in the model's folder, and every path in it is relative to that folder. `fmugen init` writes a first version (see [models.md](models.md#what-fmugen-init-infers)). This page lists every key.
+`fmugen.toml` describes how an unmodified Python model becomes an FMU. For worked examples of each key, see [models.md](models.md) and the configs in [tested-models.md](tested-models.md). It sits in the model's folder, and every path in it is relative to that folder. `fmugen init` writes a first version (see [models.md](models.md#what-fmugen-init-infers)). This page lists every key; for a guided walk through a generated config, see [init-tutorial.md](init-tutorial.md).
 
 Unknown keys are rejected with an error, so typos don't go unnoticed. Keys marked **FMI 3** are only accepted when building FMI 3 (`[model] fmi_version = 3` or `fmugen build --fmi 3`). Building such a config as FMI 2 fails with an error that says so. Otherwise the same config builds either version.
 
