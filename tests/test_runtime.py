@@ -614,6 +614,28 @@ def test_star_args_constructor_gets_positional_parameters(tmp_path, make_fmu, ad
     assert fmu.get("y") == 3.5
 
 
+def test_star_args_constructor_and_method_split_by_the_probe(tmp_path, make_fmu, adapter):
+    write(tmp_path, "normal.py", """
+        import math
+
+        class Normal:   # like SWIG's openturns.Normal(mu, sigma).computePDF(x)
+            def __init__(self, *args):
+                self.mu, self.sigma = args
+
+            def pdf(self, *args):
+                (x,) = args
+                return math.exp(-((x - self.mu) / self.sigma) ** 2 / 2) / (self.sigma * math.sqrt(2 * math.pi))
+    """)
+    starts = {"mu": 0.0, "sigma": 1.0, "x": 0.5}
+    output, data = init(f"{tmp_path / 'normal.py'}:Normal", call="pdf", starts=starts, probe=True)
+    assert data["parameters"] == {"mu": {"start": 0.0, "to": "pos:0"}, "sigma": {"start": 1.0, "to": "pos:1"}}
+    assert data["inputs"] == {"x": {"start": 0.5, "to": "pos:0"}}
+    fmu = adapter(make_fmu(output))
+    fmu.initialize()
+    assert fmu.fmi2DoStep(0.0, 1.0, False) == OK
+    assert fmu.get("y") == pytest.approx(0.3520653267642995)
+
+
 def test_computed_constant_for_star_args(tmp_path, make_fmu, adapter):
     write(tmp_path, "affine.py", """
         class Affine:
