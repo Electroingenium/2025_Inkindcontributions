@@ -486,3 +486,14 @@ def test_requirements_are_the_installed_distributions_the_model_uses(tmp_path):
     data, comments = infer(tmp_path / "uses.py", probe=False)
     assert data["model"]["requirements"] == [f"pytest=={importlib.metadata.version('pytest')}"]
     assert "requirements = [" in render_toml(data, comments)
+
+
+def test_result_keys_that_are_not_names_get_valid_ones(tmp_path):
+    (tmp_path / "decay.py").write_text(textwrap.dedent('''
+        def decay(t=1.0):   # like radioactivedecay's Inventory.contents
+            return {"contents": {"C-14": 1.0 - t / 10, "N-14": t / 10}, "2x": 2 * t, "class": 0.5}
+    '''))
+    data, _ = infer(tmp_path / "decay.py")
+    assert data["outputs"] == {"contents.C_14": {"from": "return:contents.C-14"},
+                               "contents.N_14": {"from": "return:contents.N-14"},
+                               "_2x": {"from": "return:2x"}, "_class": {"from": "return:class"}}

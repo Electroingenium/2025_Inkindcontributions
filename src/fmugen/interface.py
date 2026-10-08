@@ -18,8 +18,10 @@ import importlib
 import importlib.util
 import inspect
 import json
+import keyword
 import math
 import pickle
+import re
 import sys
 import types
 import typing
@@ -1600,6 +1602,8 @@ def _outputs_from_return(result, data, comments, default_name, is_class, arrays=
         items = []
     looked_at = {name for name, _, _ in items}
     items = [leaf for name, value, source in items for leaf in _nested(name, value, source, arrays)]
+    # keys that aren't names (radioactivedecay's "N-14"): a valid name, the real key kept in `from`
+    items = [(_valid_name(name), value, source) for name, value, source in items]
     taken = {n for section in ("parameters", "inputs", "states") for n in data.get(section, {})}
     for name, value, source in items:
         if name in taken:  # e.g. an object that echoes its inputs as attributes
@@ -1686,6 +1690,18 @@ def _public_properties(obj):
         if _fmi_value(value):
             values[name] = value
     return values
+
+
+def _valid_name(name):
+    """A dotted variable name for a result key: other characters become "_" ("N-14" -> "N_14"), and a
+    part that starts with a digit or is a keyword gets a leading "_"."""
+    parts = []
+    for part in str(name).split("."):
+        part = re.sub(r"\W", "_", part) or "_"
+        if part[0].isdigit() or keyword.iskeyword(part):
+            part = f"_{part}"
+        parts.append(part)
+    return ".".join(parts)
 
 
 def _dotted_name(name):
