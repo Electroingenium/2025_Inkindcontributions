@@ -497,3 +497,29 @@ def test_result_keys_that_are_not_names_get_valid_ones(tmp_path):
     assert data["outputs"] == {"contents.C_14": {"from": "return:contents.C-14"},
                                "contents.N_14": {"from": "return:contents.N-14"},
                                "_2x": {"from": "return:2x"}, "_class": {"from": "return:class"}}
+
+
+def test_outputs_are_read_from_the_object_the_step_returns(tmp_path):
+    (tmp_path / "fluid.py").write_text(textwrap.dedent('''
+        class Fluid:   # like pyfluids' Fluid(...).with_state(...): a new object, read through properties
+            def __init__(self, name="Water"):
+                self.__name, self.__temperature = name, None
+
+            def with_state(self, temperature=20.0):
+                fluid = Fluid(self.__name)
+                fluid.__temperature = temperature
+                return fluid
+
+            @property
+            def temperature(self) -> float:
+                if self.__temperature is None:
+                    raise ValueError("Invalid or not defined state!")
+                return self.__temperature
+
+            @property
+            def density(self) -> float:
+                return 1000.0 - 0.2 * self.temperature
+    '''))
+    data, _ = infer(f"{tmp_path / 'fluid.py'}:Fluid", call="with_state", starts={"temperature": 20.0})
+    assert data["inputs"] == {"temperature": {"start": 20.0}}   # echoed back: not an output too
+    assert data["outputs"] == {"density": {"from": "return:density"}}   # not the original object's raising ones
