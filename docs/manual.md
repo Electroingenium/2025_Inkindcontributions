@@ -181,7 +181,7 @@ Packages the model into an FMU. Before writing the FMU, it runs the packaged mod
 
 ```
 fmugen build MODEL -o OUTPUT [--fmi {2,3}] [--format {fmu,folder}]
-                   [--name NAME] [--author AUTHOR] [--call METHOD]
+                   [--name NAME] [--author AUTHOR] [--call METHOD] [--probe]
                    [--vendor [--platform TAG ...] [--python-version X.Y ...] | --compile {pyinstaller,nuitka}]
                    [--capture-output] [--hf-weights | --no-hf-weights]
 ```
@@ -195,6 +195,7 @@ fmugen build MODEL -o OUTPUT [--fmi {2,3}] [--format {fmu,folder}]
 | `--name NAME` | `[model] name`, else the entry's name | `modelName` in `modelDescription.xml`. |
 | `--author AUTHOR` | `[model] author`, else empty | `author` in `modelDescription.xml`. |
 | `--call METHOD` | as `init` | Only when `MODEL` is a model target with a class. |
+| `--probe` | off | Only when `MODEL` is a model target: infer its config like `init --probe` (calls the model once). |
 | `--vendor` | off | Put wheels of every requirement (`[model] requirements` and the backend's) into `resources/wheels/`. On its first run on a machine, the FMU installs them into a cached virtual environment, offline. The target needs Python. See [packaging.md](packaging.md#fmus-for-other-machines). |
 | `--platform TAG` | this machine | With `--vendor`: also vendor wheels for this platform, e.g. `win_amd64`, `manylinux2014_x86_64`, `macosx_11_0_arm64`. Repeatable. |
 | `--python-version X.Y` | this Python | With `--vendor`: vendor wheels for this Python version. Repeatable. |
