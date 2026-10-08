@@ -138,6 +138,7 @@ def _infer_config(target, call, config_dir, fmi_version, starts, setup, kind, cr
         _infer_function(entry, data, comments, **options)
     _add_data_files(data, comments, config_dir, Path(path).resolve() if path else None)
     _add_globals(data, comments, module, config_dir if path else None)
+    _add_requirements(data, comments, module_name, config_dir, Path(path).resolve() if path else None)
     _rename_duplicates(data, comments)
     if fmi_version == 3:
         _rename_reserved(data, comments, is_class="call" in data["model"] or inspect.isclass(entry))
@@ -329,6 +330,72 @@ def _add_globals(data, comments, entry_module, local_dir=None):
         data["model"]["globals"] = sorted(set(found))
         comments[("model", "globals")] = ("module-level state the model changes while it runs: "
                                           "put back on reset and saved with the FMU state")
+
+
+def _add_requirements(data, comments, module_name, config_dir, entry_file):
+    """[model] requirements: the installed distributions (pinned to their versions here) that provide
+    the entry's package, the modules the local model files import, and modules named in setup,
+    computed constants, convert and enum. A Docker image or --vendor installs these."""
+    import importlib.metadata
+    tops = set()
+    if module_name:
+        tops.add(module_name.split(".")[0])
+    files = [entry_file] if entry_file else []
+    for source in data["model"].get("sources", []):
+        source = config_dir / source
+        files += sorted(source.rglob("*.py")) if source.is_dir() else [source] if source.suffix == ".py" else []
+    for file in files:
+        try:
+            tree = ast.parse(file.read_text(encoding="utf-8"))
+        except (OSError, SyntaxError, UnicodeDecodeError):
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                tops |= {alias.name.split(".")[0] for alias in node.names}
+            elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                tops.add(node.module.split(".")[0])
+    references = [step if isinstance(step, str) else step.get("call", "") for step in data["model"].get("setup", [])]
+    for table in ("constants", "call_constants"):
+        references += [v["call"] for v in data["model"].get(table, {}).values() if isinstance(v, dict) and "call" in v]
+    references += [info[key] for section in ("parameters", "inputs", "states")
+                   for info in data.get(section, {}).values() for key in ("convert", "enum") if key in info]
+    for ref in references:
+        if ":" in ref:   # module:function(numpy.linspace(...)): the module, and the dotted names in the arguments
+            tops.add(ref.partition(":")[0].split(".")[0])
+            tops |= {name.split(".")[0] for name in _dotted_names(ref.partition("(")[2])}
+    if any(info.get("numpy") for section in ("parameters", "inputs", "states") for info in data.get(section, {}).values()):
+        tops.add("numpy")
+    distributions = importlib.metadata.packages_distributions()
+    found, unknown = {}, []
+    for top in sorted(tops):
+        if top in sys.stdlib_module_names or top == "fmugen" or importlib.util.find_spec(top) is None:
+            continue
+        spec = importlib.util.find_spec(top)
+        origin = Path(spec.origin).resolve() if spec.origin else None
+        if origin is not None and origin.is_relative_to(config_dir) and "site-packages" not in origin.parts:
+            continue   # one of the model's own files
+        names = distributions.get(top, [])
+        if len(set(names)) != 1:
+            unknown.append(top)
+            continue
+        dist = importlib.metadata.distribution(names[0])
+        found[dist.metadata["Name"]] = f"{dist.metadata['Name']}=={dist.version}"
+    if found:
+        data["model"]["requirements"] = sorted(found.values(), key=str.lower)
+        comments[("model", "requirements")] = "the versions installed here; installed into Docker images and by --vendor"
+    if unknown:
+        comments[("model", "#requirements")] = (f"add the PyPI packages that provide {', '.join(unknown)} to "
+                                                "requirements (they could not be told from what is installed)")
+
+
+def _dotted_names(text):
+    """Dotted names (numpy.linspace) in a Python expression, or [] if it doesn't parse."""
+    try:
+        tree = ast.parse(text.rstrip().removesuffix(")") or "0", mode="eval")
+    except SyntaxError:
+        return []
+    return [ast.unparse(n) for n in ast.walk(tree) if isinstance(n, ast.Name)
+            or isinstance(n, ast.Attribute) and isinstance(n.value, (ast.Name, ast.Attribute))]
 
 
 def _pick_entry(module, name):
@@ -767,6 +834,9 @@ def assumptions(comments):
                 notes.append(f"[{section}] {text}")
             continue
         name = str(name)
+        if name == "#requirements":
+            notes.append(f"[model] {text}")
+            continue
         if name.count("#") > 1 or name == "#save_state":   # unfit outputs: reported on their own
             continue
         for fragment, warning in ASSUMPTIONS:
@@ -1795,6 +1865,8 @@ def render_toml(data, comments=None):
             lines.append(_with_comment(f"{_key(key)} = {_value(value)}", comments.get(("model", key))))
     if "save_state" not in data["model"] and ("model", "#save_state") in comments:
         lines.append(f"# {comments[('model', '#save_state')]}")
+    if ("model", "#requirements") in comments:
+        lines.append(f"# {comments[('model', '#requirements')]}")
     for table in ("constants", "call_constants"):
         real = data["model"].get(table, {})
         examples = [
