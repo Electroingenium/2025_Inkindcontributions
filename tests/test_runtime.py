@@ -593,6 +593,25 @@ def test_star_args_constructor_gets_positional_parameters(tmp_path, make_fmu, ad
     assert fmu.get("y") == 3.5
 
 
+def test_computed_constant_for_star_args(tmp_path, make_fmu, adapter):
+    write(tmp_path, "affine.py", """
+        class Affine:
+            def __init__(self, *args):   # e.g. nashpy.Game(A)
+                self.a, self.b = args
+
+            def step(self, x=1.0):
+                return self.a * x + self.b
+    """)
+    output, data = init(tmp_path / "affine.py", starts={"a": {"call": "math:sqrt(4.0)"}, "b": 0.5})
+    assert data["model"]["constants"] == {"0": {"call": "math:sqrt(4.0)"}}
+    assert data["parameters"] == {"b": {"start": 0.5, "to": "pos:1"}}
+    assert '0 = { call = "math:sqrt(4.0)" }' in output.read_text()
+    fmu = adapter(make_fmu(output))
+    fmu.initialize()
+    assert fmu.fmi2DoStep(0.0, 1.0, False) == OK
+    assert fmu.get("y") == 2.5
+
+
 def test_namedtuple_argument_fields(tmp_path, make_fmu, adapter):
     write(tmp_path, "meal.py", """
         from typing import NamedTuple

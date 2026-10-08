@@ -278,10 +278,13 @@ def normalize(config, entry_obj, module_name, sys_path, model_name=None, author=
 
     constants = model.get("constants", {})
     call_constants = model.get("call_constants", {})
+    # constants named "0", "1", ... are positional arguments (for *args); checked with the variables' positions
     for name in constants:
-        check_arg(init_sig if is_class else call_sig, name, f"[model] constants.{name}")
+        if not name.isdigit():
+            check_arg(init_sig if is_class else call_sig, name, f"[model] constants.{name}")
     for name in call_constants:
-        check_arg(call_sig, name, f"[model] call_constants.{name}")
+        if not name.isdigit():
+            check_arg(call_sig, name, f"[model] call_constants.{name}")
     for table, values in (("constants", constants), ("call_constants", call_constants)):
         for name, value in values.items():
             if isinstance(value, dict) and "call" in value:   # computed when the FMU initializes
@@ -345,8 +348,12 @@ def normalize(config, entry_obj, module_name, sys_path, model_name=None, author=
     if not any("from" in v for v in variables):
         notes.append("the FMU has no outputs: add [outputs] to read results from the model")
     for pos_kind, clock_name in [("initpos", None), *(("pos", c) for c in [None, *clock_names])]:
-        positions = sorted(int(v["to"]["name"]) for v in variables
-                           if v.get("to", {}).get("kind") == pos_kind and (v.get("clocks") or [None])[0] == clock_name)
+        positions = [int(v["to"]["name"]) for v in variables
+                     if v.get("to", {}).get("kind") == pos_kind and (v.get("clocks") or [None])[0] == clock_name]
+        if clock_name is None:
+            table = call_constants if is_class and pos_kind == "pos" else constants
+            positions += [int(k) for k in table if k.isdigit()]
+        positions.sort()
         if positions != list(range(len(positions))):
             where = "the constructor's" if pos_kind == "initpos" else "the call's"
             raise InterfaceError(f"{where} positional arguments (to = \"pos:N\") must be numbered 0, 1, 2, ... "

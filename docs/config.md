@@ -57,7 +57,7 @@ These are fixed keyword arguments that are not FMU variables, typically values t
 | `{ ref = "module:attr.path" }` or `{ ref = "module.attr" }` | the imported object, e.g. a class or function |
 | `{ call = "module:function(args)" }` | the result of calling it when the FMU initializes. Arguments are literals or dotted names, keyword arguments allowed, e.g. `"huggingface_sb3:load_from_hub(repo_id='sb3/demo-hf-CartPole-v1', filename='ppo-CartPole-v1.zip')"`. `init --start "NAME=call:..."` writes it. |
 
-Every key must be an argument of the constructor, function or method (unless it accepts `**kwargs`).
+Every key must be an argument of the constructor, function or method (unless it accepts `**kwargs`). A key that is a number (`0 = ...`, `1 = ...`) is a positional argument instead, for callables that only take `*args` such as `nashpy.Game(A)`; positions are counted together with variables bound to `to = "pos:N"` and must be numbered 0, 1, 2, ... without gaps. `init --start NAME=call:...` writes one for a `*args` callable.
 
 ---
 

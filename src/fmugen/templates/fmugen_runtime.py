@@ -142,7 +142,7 @@ class Engine:
         def initialize():
             self._run_setup(after_construction=False)
             if self.is_class:
-                kwargs = dict(self.constants)
+                kwargs = keyword_constants(self.constants)
                 kwargs.update(self._bound("init"))
                 create = self.interface["entry"].get("create")
                 self.obj = (getattr(self.entry, create) if create else self.entry)(
@@ -639,12 +639,15 @@ class Engine:
     def _positional(self, clock=None, kind="pos"):
         """Values of variables bound to positional arguments (to = "pos:N"), in order: of the call
         ("pos"), or of the constructor ("initpos", a class's parameters)."""
-        bound = sorted(
-            (int(v["to"]["name"]), self._to_python(v, self.values[v["name"]]))
+        bound = {
+            int(v["to"]["name"]): self._to_python(v, self.values[v["name"]])
             for v in self.variables
             if v.get("to", {}).get("kind") == kind and _clock_of(v) == clock
-        )
-        return [value for _, value in bound]
+        }
+        if clock is None:   # constants named "0", "1", ...: positions of *args
+            constants = self.call_constants if self.is_class and kind == "pos" else self.constants
+            bound.update((int(k), value) for k, value in constants.items() if k.isdigit())
+        return [bound[i] for i in sorted(bound)]
 
     def _bound_target(self, kind, clock):
         """The function whose arguments `kind` ("init" or "arg") variables are bound to."""
@@ -681,7 +684,7 @@ class Engine:
 
     def _call(self, time, step_size, clock=None):
         if clock is None:
-            kwargs = dict(self.call_constants if self.is_class else self.constants)
+            kwargs = keyword_constants(self.call_constants if self.is_class else self.constants)
             kwargs.update(self._bound("arg"))
         else:
             kwargs = self._bound("arg", clock=clock)
@@ -1169,6 +1172,11 @@ def build_object(fn, name, fields):
     if cls is None:
         raise ValueError(f"{name}: no default and no class annotation to build it from {sorted(fields)}")
     return cls(**fields)
+
+
+def keyword_constants(constants):
+    """The constants passed by keyword: all but those named "0", "1", ... (positions of *args)."""
+    return {k: v for k, v in constants.items() if not k.isdigit()}
 
 
 def resolve_constant(value):
