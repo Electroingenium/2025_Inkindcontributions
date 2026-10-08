@@ -45,9 +45,9 @@ A step takes the inputs at time `t`. The outputs it produces are the values at `
 ## A function
 
 ```python
-def compute_balances_simplified(temp_1, vfr_5, vfr_8, vfr_13, temp_11):
+def compute_balances_simplified(regen_target_temp, ..., temp_1, ..., vfr_5, ..., vfr_13):
     ...
-    return {"mass_balance": m, "energy_balance": e}
+    return {"mass_balance": m, "energy_balance": e, ...}
 ```
 
 ```toml
