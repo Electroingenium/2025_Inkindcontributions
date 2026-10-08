@@ -634,6 +634,12 @@ def _add_returned(read, data, comments, is_class, arrays, probe, seen):
             info["type"] = kind
         elif kind is None:
             _guessed(comments, name)
+        if name in read.nullable and not probe:   # e.g. a database column: None fails the step
+            comments[("outputs", f"#{name}")] = f"{_key(name)} = {_value(info)}"
+            comments.setdefault(("outputs", None), "results that can be None (nullable database columns) are "
+                                                   "commented out: uncomment the ones this model always has, "
+                                                   "or run init --probe")
+            continue
         data.setdefault("outputs", {})[name] = info
         if probe:
             comments[("outputs", name)] = "from the code; not seen in the probe"
@@ -746,7 +752,7 @@ ASSUMPTIONS = (
 # Section notes (and [model] comments) that are warnings as they are.
 NOTE_WARNINGS = ("probe call failed", "probe construction failed", "outputs could not be read",
                  "cannot inspect the signature", "is known only by running it", "skipped ",
-                 "can't be pickled", "both take *args")
+                 "can't be pickled", "both take *args", "results that can be None")
 
 
 def assumptions(comments):
