@@ -1000,7 +1000,10 @@ def _probe_once(fn, data, comments, constants_key="constants"):
         plain = [info for info in data.get("inputs", {}).values()
                  if "dimensions" in info and not info.get("numpy") and not info.get("convert")]
         if not plain:
-            raise
+            result = _retry_as_arrays(call, data, comments)
+            if result is _FAILED:
+                raise
+            return result
         for converter in ARRAY_RETRIES:
             module = "numpy" if converter == "numpy" else converter.partition(":")[0]
             if importlib.util.find_spec(module) is None:
@@ -1019,6 +1022,31 @@ def _probe_once(fn, data, comments, constants_key="constants"):
                 comments[("inputs", name)] = f"passed as {shown}: the probe failed with lists"
             return result
         raise
+
+
+_FAILED = object()
+
+
+def _retry_as_arrays(call, data, comments):
+    """When a call fails with numbers as inputs, call it again with each number as a one-element numpy
+    array (convert = "numpy:atleast_1d"): some libraries take only arrays (thermofeel's
+    calculate_heat_index_simplified calls numpy.nonzero on its inputs). Returns the result, or _FAILED."""
+    numbers = {name: info for name, info in data.get("inputs", {}).items()
+               if isinstance(info.get("start"), (int, float)) and not isinstance(info.get("start"), bool)
+               and "dimensions" not in info and not info.get("convert") and not info.get("numpy")}
+    if not numbers or importlib.util.find_spec("numpy") is None:
+        return _FAILED
+    for info in numbers.values():
+        info["convert"] = "numpy:atleast_1d"
+    try:
+        result = call()
+    except Exception:
+        for info in numbers.values():
+            del info["convert"]
+        return _FAILED
+    for name in numbers:
+        comments[("inputs", name)] = "passed as numpy.atleast_1d(...): the probe failed with plain numbers"
+    return result
 
 
 def _state_bytes(obj):
@@ -1548,6 +1576,9 @@ def _outputs_from_return(result, data, comments, default_name, is_class, arrays=
     """Outputs from a probe result. Returns the names of the parts it looked at (dict keys,
     tuple positions y0, y1, ...), also those left out because they aren't FMI values."""
     outputs = data.setdefault("outputs", {})
+    wrapped = any(info.get("convert") == "numpy:atleast_1d" for info in data.get("inputs", {}).values())
+    if wrapped and getattr(result, "size", None) == 1 and hasattr(result, "reshape"):
+        result = result.reshape(())[()]   # numbers passed as one-element arrays: a number comes back as one
     if isinstance(result, Mapping):
         items = [(str(k), v, f"return:{k}") for k, v in result.items()]
     elif _table_children(result) is not None:   # pandas Series / one-row DataFrame, xarray Dataset

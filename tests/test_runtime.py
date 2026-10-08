@@ -920,3 +920,23 @@ def test_a_step_that_changes_nothing_also_runs_at_initialization(tmp_path, make_
     assert fmu.get("y") == 5.0   # at the start time, before any step
     output, data = init(f"{tmp_path / 'option.py'}:Counter", output=tmp_path / "counter.toml", probe=True)
     assert "init_call" not in data["model"]   # the step changes the object: running it twice would count twice
+
+
+def test_numbers_are_retried_as_one_element_arrays(tmp_path, make_fmu, adapter):
+    pytest.importorskip("numpy")
+    write(tmp_path, "heat.py", """
+        import numpy as np
+
+        def heat_index(t2_k, rh):   # like thermofeel: numpy.nonzero refuses 0-d arrays
+            t2_k = np.asarray(t2_k)
+            out = t2_k.copy()
+            out[np.nonzero(rh > 40)] += 0.01 * rh
+            return out
+    """)
+    output, data = init(tmp_path / "heat.py", starts={"t2_k": 300.0, "rh": 50.0}, probe=True)
+    assert data["inputs"]["t2_k"] == {"start": 300.0, "convert": "numpy:atleast_1d"}
+    assert data["outputs"] == {"y": {"from": "return"}}
+    fmu = adapter(make_fmu(output))
+    fmu.initialize()
+    assert fmu.fmi2DoStep(0.0, 1.0, False) == OK
+    assert fmu.get("y") == pytest.approx(300.5)
