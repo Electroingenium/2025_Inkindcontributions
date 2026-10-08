@@ -47,11 +47,13 @@ The complete reference for the `fmugen` command and the `fmugen.toml` config, on
 
 Install fmugen into your model's virtual environment, the one that already has the model's packages:
 
+fmugen is not on PyPI yet, so `pip install fmugen` doesn't work. Install it from a clone of this repository:
+
 ```bash
-pip install fmugen
+pip install path/to/2025_Inkindcontributions
 ```
 
-(or `uv add fmugen`). This also installs `protobuf==5.27.3` and `pyzmq`, which UniFMU's Python backend needs to run the FMU. Run `fmugen` from that environment: `init` and `build` import your model, and the FMU runs with the environment's Python.
+(or `uv add path/to/2025_Inkindcontributions`). This also installs `protobuf==5.27.3` and `pyzmq`, which UniFMU's Python backend needs to run the FMU. Run `fmugen` from that environment: `init` and `build` import your model, and the FMU runs with the environment's Python.
 
 You also need [UniFMU](https://github.com/INTO-CPS-Association/unifmu/releases) **0.14.0** (exactly this version) for `fmugen build`. fmugen runs `unifmu generate` to get each FMU's native binaries and Python backend. Put `unifmu` on `PATH`, or set the environment variable `FMUGEN_UNIFMU` to the executable. `fmugen init` works without it.
 
@@ -196,7 +198,7 @@ fmugen build MODEL -o OUTPUT [--fmi {2,3}] [--format {fmu,folder}]
 | `--vendor` | off | Put wheels of every requirement (`[model] requirements` and the backend's) into `resources/wheels/`. On its first run on a machine, the FMU installs them into a cached virtual environment, offline. The target needs Python. See [packaging.md](packaging.md#fmus-for-other-machines). |
 | `--platform TAG` | this machine | With `--vendor`: also vendor wheels for this platform, e.g. `win_amd64`, `manylinux2014_x86_64`, `macosx_11_0_arm64`. Repeatable. |
 | `--python-version X.Y` | this Python | With `--vendor`: vendor wheels for this Python version. Repeatable. |
-| `--compile {pyinstaller,nuitka}` | off | Freeze the model, its packages and Python into an executable (`resources/dist/main/`). The FMU contains no source code and needs no Python, but only runs on the OS it was built on. Needs `pip install fmugen[pyinstaller]` or `fmugen[nuitka]`. |
+| `--compile {pyinstaller,nuitka}` | off | Freeze the model, its packages and Python into an executable (`resources/dist/main/`). The FMU contains no source code and needs no Python, but only runs on the OS it was built on. Needs the `pyinstaller` or `nuitka` extra, e.g. `pip install "path/to/2025_Inkindcontributions[pyinstaller]"`. |
 | `--hf-weights` | on with `--vendor` / `--compile` | Put the Hugging Face models the model loads into the FMU, which then loads them offline. See [packaging.md](packaging.md#hugging-face-models---hf-weights). |
 | `--capture-output` | off | Send what the model prints (stdout and stderr, also from C code) to the importer's log, prefixed `[output]`, instead of the console. Use it for models that print more than a few KB (warnings, progress bars): UniFMU 0.14 crashes when the FMU's Python writes that much to the console, and the importer hangs. The importer may only show these messages with debug logging on. |
 
