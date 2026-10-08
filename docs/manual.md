@@ -115,7 +115,7 @@ fmugen init MODEL [-o OUTPUT] [--call METHOD] [--fmi {2,3}]
 | `-o`, `--output PATH` | `fmugen.toml` next to the model (current directory for an installed module) | Where to write the config; missing folders are created. `-o -` prints it instead. A model file must be inside the config's folder. |
 | `--call METHOD` | `step`, `do_step`, `update`, `__call__`, or the only public method | Classes: the method run on each step. |
 | `--fmi {2,3}` | none (FMI 2) | Writes `fmi_version` into the config. With `3`, list/tuple/numpy values are inferred as arrays, `bytes` as Binary and numpy `float32` as Float32. |
-| `--start NAME=VALUE` | none | Start value (and, with `--probe`, the value it is called with) for an argument; repeatable. `VALUE` is a Python literal (`1e5`, `"Water"`, `[1.0, 0.0]`); a bare word is taken as a string. `true`/`false` are booleans. A tuple or dict value is split into one variable per item. `call:module:function(args)` makes a [computed constant](#value-syntax) instead of a variable. Use it for arguments without a default, or whose default breaks the model. |
+| `--start NAME=VALUE` | none | Start value (and, with `--probe`, the value it is called with) for an argument; repeatable. `VALUE` is a Python literal (`1e5`, `"Water"`, `[1.0, 0.0]`); a bare word is taken as a string. `true`/`false` are booleans. A tuple or dict value is split into one variable per item. `call:module:function(args)` makes a [computed constant](#value-syntax) instead of a variable (`call:module:attr` without parentheses passes the object itself, e.g. a function). Use it for arguments without a default, or whose default breaks the model. |
 | `--setup CALL` | none | A [setup call](#model), written to `[model] setup`; with `--probe` it is also run before the probe. Repeatable. E.g. `"psychrolib:SetUnitSystem(psychrolib.SI)"`, `reset`. |
 | `--kind function` | none | Treat a class whose constructor does the work as a function called on every step (writes `[model] kind`). |
 | `--create CLASSMETHOD` | none | Classes built by a factory: the classmethod that creates the object, e.g. `from_pretrained`. Its arguments become parameters (writes `[model] create`). |
@@ -483,7 +483,7 @@ from = "attr:overflowed"
 | TOML string, number, bool, array, table | that value (arrays become lists) |
 | `{ python = "<literal>" }` | `ast.literal_eval`, e.g. `"None"`, `"(0, 100)"` |
 | `{ ref = "module:attr" }` or `{ ref = "module.attr" }` | the imported object |
-| `{ call = "module:function(args)" }` | the result of calling it when the FMU initializes. Arguments are literals or dotted names, keyword arguments allowed, e.g. `"huggingface_sb3:load_from_hub(repo_id='sb3/demo-hf-CartPole-v1', filename='ppo-CartPole-v1.zip')"`. `init --start "NAME=call:..."` writes it. |
+| `{ call = "module:function(args)" }` | the result of calling it when the FMU initializes. Arguments are literals, dotted names of importable objects or builtins, calls of those (`numpy.linspace(0, 20, 200)`, `float("inf")`), and lists, tuples and dicts of these; keyword arguments allowed. Without parentheses, `"module:attr.path"` is the object itself, not called: a function to pass (`"numpy:sin"`) or an enum member (`"pyfluids:FluidsList.Water"`). `init --probe` stops if the call fails. Example: `"huggingface_sb3:load_from_hub(repo_id='sb3/demo-hf-CartPole-v1', filename='ppo-CartPole-v1.zip')"`. `init --start "NAME=call:..."` writes it. |
 
 **Setup calls** (`[model] setup`, `init --setup`):
 
