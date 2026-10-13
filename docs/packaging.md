@@ -163,7 +163,7 @@ The FMU then sets `HF_HUB_CACHE` to that folder and `HF_HUB_OFFLINE=1` before im
 
 ### `--compile`
 
-`fmugen build --compile pyinstaller` (or `nuitka`) freezes UniFMU's backend, fmugen's adapter and runtime, your model and every package it imports, together with the Python interpreter, into `resources/dist/main/`. All `.py` files, `fmugen_model/`, `interface.json` and `requirements.txt` are removed from the FMU; `resources/` keeps only `dist/` and `launch.toml`:
+`fmugen build --compile pyinstaller` (or `nuitka`) freezes UniFMU's backend, fmugen's adapter and runtime, your model and every package it imports, together with the Python interpreter, into `resources/dist/main/`. All `.py` files, `fmugen_model/`, `interface.json` and `requirements.txt` are removed from the FMU; `resources/` keeps only `dist/` and `launch.toml` (the exceptions inside `dist/` are listed [below](#what-the-compiler-is-told)):
 
 ```toml
 linux = ["sh", "-c", "chmod +x dist/main/main && ./dist/main/main"]
@@ -183,7 +183,19 @@ Neither can cross-compile: the executable runs only on the OS and CPU architectu
 
 With `cwd` set, `fmugen_model/` stays, without its `.py` files, so the model still finds its data files.
 
-fmugen tells the compiler about the modules the runtime imports by name (the model's entry, `setup` calls, enums, references in constants, clock calls) and bundles the model's non-Python files next to its modules. A package that imports parts of itself dynamically may still be missed; the build's error, or the FMU's log, then names the missing module.
+#### What the compiler is told
+
+A freezer only follows `import` statements. Libraries also read files next to their code, find plugins through package metadata, and import modules by name, and none of that is followed. So fmugen also tells the compiler:
+
+- **The modules the runtime imports by name:** the model's entry, `setup` calls, enums, clock calls, and the modules in constants (`ref` and `{ call = "module:fn(...)" }`, including dotted names in the arguments, such as `numpy.linspace`).
+- **The model's packages, with every submodule:** the packages of those modules and of `[model] requirements`.
+- **Their whole dependency tree, with every package's data files, binaries and metadata.** The tree is read from the installed packages' metadata, and also includes the optional dependencies of the model's own packages that are installed. This is how, for example, iapws's `VERSION`, ahrs's `WMM.COF`, mendeleev's `elements.db`, pymsis's `msis21.parm`, silero-vad's ONNX file and pybamm's parameter sets get into the FMU.
+- **The packages the model's packages depend on, imported by name** (pybamm imports `anytree` that way).
+- **Folders of `.py` files inside the model's packages that aren't packages** (no `__init__.py`), e.g. pyromat's `registry`. Libraries load these by path, so they ship as files.
+- **numpy's `numpy.core` compatibility modules**, which older pickles name, e.g. data loaded with `numpy.load`.
+- **The `.py` sources of packages built on transformers** (PyInstaller only). transformers reads the source of the classes it decorates, as PyInstaller's own hook already arranges for transformers itself. These sources are in the FMU.
+
+A model that unpickles objects, e.g. `joblib.load` of a scikit-learn model, needs the packages of those objects listed in `[model] requirements` (`init` can't see them): then their submodules are collected too. The FMU grows by the collected files: in the tests, 0 to 25 MB more than before this change (pvlib, mesa) for models that already worked. The model's non-Python files are bundled next to its modules. If something is still missed, the build's error or the FMU's log names it. When the importer shows nothing, see [unifmu-limitations.md §13](unifmu-limitations.md#13-a-backend-that-exits-during-a-call-can-abort-the-importer) for running the frozen backend directly to read its error.
 
 ---
 
