@@ -285,7 +285,7 @@ def build(target, output, model_name=None, author=None, output_format="fmu", cal
             vendor_wheels([*BACKEND_REQUIREMENTS, *requirements], resources / "wheels",
                           platforms, python_versions)
         if compiler:
-            compile_fmu(compiler, resources, interface, Path(tmp) / "compile")
+            compile_fmu(compiler, resources, interface, Path(tmp) / "compile", requirements)
         _write_launch_toml(resources, "vendor" if vendor else "compile" if compiler else None)
 
         stamp_guid(fmu_dir)

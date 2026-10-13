@@ -60,6 +60,24 @@ def test_compiled_fmu_has_no_sources_and_simulates(tmp_path, compiler):
     assert _simulate_pid(fmu)[-1] != 0
 
 
+def test_compile_finds_the_modules_of_computed_constants():
+    from fmugen.distribute import _modules
+    interface = {"entry": {"module": "joblib"}, "constants": {
+        "filename": {"call": "huggingface_hub:hf_hub_download(repo_id='x', grid=numpy.linspace(0, 1, 3))"}}}
+    assert {"joblib", "huggingface_hub", "numpy"} <= set(_modules(interface))
+
+
+def test_compile_collects_the_dependencies_of_the_model_packages():
+    from fmugen.distribute import _packages
+    direct, packages, distributions, imports = _packages(["fmpy.simulation", "cloudpickle"])
+    assert direct == ["cloudpickle", "fmpy"]   # their submodules are collected
+    assert {"fmpy", "numpy", "lxml"} <= set(packages)   # data files and binaries of the whole tree
+    assert {"fmpy", "numpy"} <= set(distributions)
+    assert {"numpy", "lxml"} <= set(imports)   # fmpy's own dependencies, imported by name
+    assert "fmugen" not in packages and "os" not in direct
+    assert _packages(["os", "not_installed_anywhere"]) == ([], [], [], [])
+
+
 def test_hugging_face_model_ids_are_found(tmp_path):
     from fmugen.distribute import hf_models
     (tmp_path / "data").mkdir()
