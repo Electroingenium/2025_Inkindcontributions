@@ -86,6 +86,11 @@ def infer_config(target, call=None, config_dir=None, fmi_version=None, starts=No
     """
     path, _module_name, name = parse_target(target)
     config_dir = Path(config_dir or (path.parent if path else ".")).resolve()
+    if path and not path.resolve().is_relative_to(config_dir):
+        raise InterfaceError(
+            f"the config must be in the folder of {path.name} or a folder above it, since it names the model "
+            f"by a path relative to itself: write it to {path.resolve().parent / 'fmugen.toml'} "
+            f"(not {config_dir})")
     if path:
         target = f"{path.resolve()}" + (f":{name}" if name else "")
     with contextlib.chdir(config_dir):
