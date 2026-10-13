@@ -5,7 +5,7 @@ Problems that come from [UniFMU](https://github.com/INTO-CPS-Association/unifmu)
 | # | Problem | Kind | Workaround in fmugen |
 |---|---|---|---|
 | 1 | [The importer hangs when the model prints more than ~4 KB](#1-the-importer-hangs-when-the-model-prints-more-than-4-kb) | Bug | `build --capture-output` |
-| 2 | [The backend keeps running after an FMU error](#2-the-backend-keeps-running-after-an-fmu-error) | Bug | None. Send the importer's output to a file, not a pipe |
+| 2 | [The backend keeps running after an FMU error](#2-the-backend-keeps-running-after-an-fmu-error) | Limitation | Free the instance after an error ([FMPy doesn't](fmpy-limitations.md#1-simulate_fmu-doesnt-free-the-instance-after-an-fmu-error)) |
 | 3 | [Error messages are lost when logging is off](#3-error-messages-are-lost-when-logging-is-off) | Limitation | None. Turn on debug logging in the importer |
 | 4 | [Log messages only during an FMI call](#4-log-messages-only-during-an-fmi-call) | Limitation | None |
 | 5 | [Unsupported FMI functions stop the backend](#5-unsupported-fmi-functions-stop-the-backend) | Limitation | Never declared, so compliant importers don't call them |
@@ -40,17 +40,17 @@ Found with Chronos-Bolt ([tested-models.md](tested-models.md), [AUDIT.md §5.7](
 
 ## 2. The backend keeps running after an FMU error
 
-When an FMU call fails (an error status from `exitInitializationMode` or `doStep`), the importer exits, but UniFMU's Python backend stays alive: 2 processes (`venv\Scripts\python.exe main.py` and the base `python.exe main.py`). Successful runs leave nothing behind. Seen with FMI 2 and FMI 3, on Windows with FMPy.
+When an importer exits without calling `fmi2FreeInstance` / `fmi3FreeInstance`, UniFMU's Python backend stays alive: 2 processes (`venv\Scripts\python.exe main.py` and the base `python.exe main.py`). Seen with FMI 2 and FMI 3, on Windows with FMPy, after an FMU call failed (an error status from `exitInitializationMode` or `doStep`).
 
-Effects:
-- The orphaned backend holds the importer's stdout/stderr. Anything that reads them through a pipe (`subprocess.run(capture_output=True)`, `fmpy simulate x.fmu | grep …`) waits forever.
-- The orphans pile up: 31 pairs in the first round-2 run, 14 in the rerun. One held a lock on the FMU's work folder until killed.
+**The importer is the cause, not UniFMU:** FMPy's `simulate_fmu` skips `freeInstance` after an error: [fmpy-limitations.md §1](fmpy-limitations.md#1-simulate_fmu-doesnt-free-the-instance-after-an-fmu-error). When the instance is freed after the failed call, the backend exits within 3 s, in FMI 2 and FMI 3 (checked on 2026-10-13). This entry first said "probably `fmi2FreeInstance` isn't reached, or doesn't stop the backend": it isn't reached.
 
-Probably `fmi2FreeInstance` / `fmi3FreeInstance` isn't reached, or doesn't stop the backend, after an error status.
+**UniFMU's part:** the backend can't tell that the importer has gone. Its loop (`abstract_backend.py`, `recv_command`) waits on a ZeroMQ `socket.recv()` with no timeout and doesn't watch its parent process, and on Windows a child process isn't stopped when its parent exits. So whenever an importer skips the free (an error path, a crash, a kill), the backend waits forever. A receive timeout or a parent check would make it exit.
+
+Effects: the orphaned backend holds the importer's stdout/stderr, so anything reading them through a pipe waits forever, and the orphans pile up. Details in [fmpy-limitations.md §1](fmpy-limitations.md#1-simulate_fmu-doesnt-free-the-instance-after-an-fmu-error).
 
 Found in [tested-models-round2.md](tested-models-round2.md) (problem 1). Reproduce: `fmpy simulate failing.fmu 2>&1 | Out-Null` in PowerShell never returns, and the count of `main.py` processes goes up by 2.
 
-**Workaround:** send the importer's output to a file, not a pipe, and kill leftover `main.py` processes.
+**Workaround:** free the instance after an error (see the FMPy entry). With `fmpy simulate`, send the output to a file, not a pipe, and kill leftover `main.py` processes.
 
 ## 3. Error messages are lost when logging is off
 
