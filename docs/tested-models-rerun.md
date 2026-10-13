@@ -11,7 +11,30 @@ All models from [tested-models.md](tested-models.md), [round 2](tested-models-ro
 
 Setup: Windows 11, Python 3.13, uv venvs (round 1: two new ones; round 2: the shared `ctv` venv; round 3: its per-model venvs), fmugen editable from this checkout, FMPy 0.3.32, PyInstaller 6.22.3, UniFMU 0.14. Six models ran in parallel.
 
-## Summary
+## Fixes after the rerun (2026-10-09)
+
+Four findings of this rerun were fixed or corrected the same day. The per-model table below still shows the first run.
+
+| Finding | What it was | Result |
+|---|---|---|
+| python-control `StateSpace` "regression" | **Not a regression: my test setup.** Round 2's options were rebuilt from the configs that run wrote, keeping only the starts marked `# start from --start`. With `--probe`, `init` writes array starts without that marker, so `--start x=[1.0, 0.0]` and `u=[0.0]` were dropped. No other model lost a start. | With the original starts, `init --probe` writes the 2026-10-07 config again. FMI 2: y = (0.0, −2.0) = A·x. The code-only config still fails, as before (array result assumed a single Real). |
+| `--compile` leaves out package data, modules and extensions | `compile_fmu` gave the freezer only the modules the runtime imports by name. Constants written `{ call = "module:fn(...)" }` were also missed. | fmugen now also collects the model's packages with all their submodules, the data files, binaries and metadata of their whole dependency tree, and more ([packaging.md](packaging.md#what-the-compiler-is-told)). **All 22 compiled FMUs that failed now simulate**, among them the 3 PyTorch ones. The cause of each was found by running the frozen backend directly: [unifmu-limitations.md §13](unifmu-limitations.md#13-a-backend-that-exits-during-a-call-can-abort-the-importer). skops also needs `scikit-learn` in `[model] requirements`, since its model is unpickled (added by hand). |
+| `stamp_guid` reads every file whole | `MemoryError` on surfaces's large frozen file. `_write_zip` read each file whole too. | Both now stream the files (`hashlib.file_digest`, `shutil.copyfileobj`). GUIDs and zips are unchanged (the reproducible-build test passes). surfaces compiles (294 MB) and simulates. |
+| `init -o` outside a script model's folder | a raw `ValueError … is not in the subpath of …` traceback | `fmugen: error: the config must be in the folder of psychrometry.py or a folder above it, …`, naming where to write it. |
+
+**After the fixes:**
+
+| | Before | After |
+|---|---|---|
+| Simulate correctly with FMI 2 | 106 | **107** (StateSpace) |
+| Fail with FMI 2 and FMI 3 | 12 | **11** |
+| Compiled FMU simulates | 83 | **106**: the 22, plus surfaces |
+
+Compiled with the final code: the 23 fixed models, plus 10 that already compiled (gsw, pvwatts_dc, Chronos, haversine, QuantLib, simple_pid, timezonefinder, pythermalcomfort, mesa, GHFilter), which still simulate. The FMUs grew by 0 to 25 MB (pvwatts_dc 133 → 157 MB, mesa 111 → 137 MB, gsw 103 → 104 MB, haversine unchanged at 24 MB). Granite TTM (3,170 outputs) and Chronos also ship their `.py` sources, see [packaging.md](packaging.md#what-the-compiler-is-told).
+
+Not checked: Nuitka (not installed here), and the 33 models' compiled values against their uncompiled runs (only that they simulate).
+
+## Summary (first run)
 
 | | Count |
 |---|---|
@@ -32,22 +55,27 @@ The FMI 3 retry never rescued a model: each of the 12 fails the same way in both
 
 **`--compile pyinstaller`** (new, not tested before):
 
-1. **UniFMU backend panic in 12 compiled FMUs** whose uncompiled FMU passes: `_TSat_P`, `IAPWS97`, Madgwick, Mahony, cantera, pymsis, py_vollib, pyromat, mendeleev, openap, radioactivedecay, tellurium. The Rust side panics in `zeromq-0.4.1/src/rep.rs:168: not yet implemented` right after `Connection established!`, and the process aborts. Reproduced alone (no parallel load): the `_TSat_P` compiled FMU crashes 3 of 3 times. It looks like a timing issue in UniFMU's ZeroMQ REP socket when the frozen backend answers in a different way or at a different speed than plain Python. Not investigated further.
-2. **Package data files are not collected** by PyInstaller, so the model fails at run time: simglucose (`params/vpatient_params.csv`), thermo/chemicals (`Identifiers/…pubchem…`), hplib (its CSV database), pybamm (parameter sets: `'Marquis2019' is not a valid parameter set`), roboticstoolbox (`meshes/FRANKA-EMIKA/Panda`), silero-vad (`No module named 'silero_vad.data'`, the ONNX file). fmugen would need to add `--collect-data` for the model's packages.
-3. **Modules imported only by a `{ call = … }` constant are not frozen**: skops (`No module named 'huggingface_hub'`, from `hf_hub_download` in a constant).
-4. **PyTorch models** (Granite TTM, SB3 PPO, TorchANI) build (290–300 MB) but the backend exits with status 1 on instantiation and prints nothing. Chronos (also PyTorch) works (323 MB).
-5. **`MemoryError` in `stamp_guid`** for surfaces: [description.py:338](../src/fmugen/description.py#L338) reads each FMU file whole (`file.read_bytes()`) to hash it, which runs out of memory on a large frozen file. Hashing in chunks would fix it.
-6. Compiled FMUs are large: 25 MB (pure-Python libraries) to 135 MB (pvlib, gymnasium), 300+ MB with PyTorch. A compile took 3–15 minutes.
+1. **Package data files, modules and extensions left out of the frozen FMU: 22 compiled FMUs fail** whose uncompiled FMU passes. The frozen backend dies at instantiation or initialization:
+   - Data files: iapws (`VERSION`; `_TSat_P`, `IAPWS97`), ahrs (`WMM2025/WMM.COF`; Madgwick, Mahony), openap (`data/aircraft/_synonym.csv`), radioactivedecay (`decay_data.npz`), pyromat (`registry`), tellurium (`antimony`), mendeleev (`elements.db`), pymsis (`msis21.parm`), simglucose (`params/vpatient_params.csv`), thermo/chemicals (`Identifiers/…pubchem…`), hplib (its CSV database), pybamm (parameter sets: `'Marquis2019' is not a valid parameter set`), roboticstoolbox (`meshes/FRANKA-EMIKA/Panda`), silero-vad (`No module named 'silero_vad.data'`, the ONNX file).
+   - Modules: py_vollib (`No module named 'py_vollib'`); skops (`No module named 'huggingface_hub'`, imported only by the `hf_hub_download` constant).
+   - Extensions: cantera (`ImportError: dynamic module does not define module export function (PyInit_drawnetwork)`).
+   - PyTorch: Granite TTM, SB3 PPO and TorchANI build (290–300 MB), but the backend exits with status 1 at instantiation. Their backend error wasn't looked at. Chronos (also PyTorch) works (323 MB).
+
+   fmugen would need to pass `--collect-data` / `--collect-submodules` (or hooks) for the model's packages.
+
+   For 12 of these (`_TSat_P`, `IAPWS97`, Madgwick, Mahony, openap, radioactivedecay, pyromat, tellurium, mendeleev, pymsis, py_vollib, cantera), the importer saw no error status: UniFMU panicked (`zeromq-0.4.1/src/rep.rs:168: not yet implemented`) and **aborted the importer's process**, hiding the backend's traceback. The errors above were found by running each frozen backend directly against a ZeroMQ socket. The panic is UniFMU's handling of a backend that exits mid-call, not the cause: see [unifmu-limitations.md §13](unifmu-limitations.md#13-a-backend-that-exits-during-a-call-can-abort-the-importer).
+2. **`MemoryError` in `stamp_guid`** for surfaces: [description.py:338](../src/fmugen/description.py#L338) reads each FMU file whole (`file.read_bytes()`) to hash it, which runs out of memory on a large frozen file. Hashing in chunks would fix it.
+3. Compiled FMUs are large: 25 MB (pure-Python libraries) to 135 MB (pvlib, gymnasium), 300+ MB with PyTorch. A compile took 3–15 minutes.
 
 **`init` (code only)** — known limits, mostly fixed by `--probe` (102 of 112 probe configs simulate, vs 65 code-only):
 
-7. **Results that are arrays, tuples, dicts or objects are typed as a single Real**, and the run fails: `y is an array of shape [4], not a single value: … fmugen init --probe finds them` (aoi, Q_discrete_white_noise, colour, neurokit2, pymap3d, pywt, rainflow, tmm, commpy, torchani, …), `float() argument must be … not 'dict'/'DataFrame'/'SE3'/'Inventory'/'Solution'`. The error message points to `--probe`, which fixes each of them.
-8. **String results typed Real** (thermo `CAS`, pythermalcomfort `tsv`, `sports_heat_stress_risk` advice text): `set type = "String"`; fixed by `--probe`.
-9. **Integer outputs that overflow**: CartPole and Pendulum's `np_random_seed` (a 128-bit seed) is typed Integer: `… is out of range for Integer`. `--probe` leaves it out.
-10. `init` without `--probe` refuses `--start` names it can't see in a factory or `**kwargs` (silero_vad `x`/`sr`, Granite `past_values`, pyromat `T`, skops `X`): `--start names that are not arguments of the model`. With `--probe` they work.
-11. **Example scripts: `init -o` outside the model's folder fails** with `ValueError: '…\psychrometry.py' is not in the subpath of '…'` (a raw traceback, not a `fmugen: error`). With the config next to the model, both examples work.
+4. **Results that are arrays, tuples, dicts or objects are typed as a single Real**, and the run fails: `y is an array of shape [4], not a single value: … fmugen init --probe finds them` (aoi, Q_discrete_white_noise, colour, neurokit2, pymap3d, pywt, rainflow, tmm, commpy, torchani, …), `float() argument must be … not 'dict'/'DataFrame'/'SE3'/'Inventory'/'Solution'`. The error message points to `--probe`, which fixes each of them.
+5. **String results typed Real** (thermo `CAS`, pythermalcomfort `tsv`, `sports_heat_stress_risk` advice text): `set type = "String"`; fixed by `--probe`.
+6. **Integer outputs that overflow**: CartPole and Pendulum's `np_random_seed` (a 128-bit seed) is typed Integer: `… is out of range for Integer`. `--probe` leaves it out.
+7. `init` without `--probe` refuses `--start` names it can't see in a factory or `**kwargs` (silero_vad `x`/`sr`, Granite `past_values`, pyromat `T`, skops `X`): `--start names that are not arguments of the model`. With `--probe` they work.
+8. **Example scripts: `init -o` outside the model's folder fails** with `ValueError: '…\psychrometry.py' is not in the subpath of '…'` (a raw traceback, not a `fmugen: error`). With the config next to the model, both examples work.
 
-**Still failing (both FMI versions), as in earlier rounds:** `PropsSI` (C extension, no signature: hand config needed), `fluids.units` ×2 (pint: `1.0 has no quantity`; hand config needed), metpy (pint), pyet (`'float' object has no attribute 'time'`: needs pandas Series), psychrolib (`GetHumRatioFromRelHum` is a numba ufunc: FMI 2 crashes FMPy with an access violation, FMI 3 `unexpected keyword arguments to ufunc`), python-control `StateSpace` (`len(x) must be equal to number of states`; passed on 2026-10-07: **regression**), simpy (`until` not bound to time), pyquaternion (`*args` constructor gets the step's arguments), heartpy (`data.csv` not in the working folder: my input), nashpy (`Game has no method 'is_zero_sum'`: my input), sgp4 (C built-in factory: `--start names that are not arguments`).
+**Still failing (both FMI versions), as in earlier rounds:** `PropsSI` (C extension, no signature: hand config needed), `fluids.units` ×2 (pint: `1.0 has no quantity`; hand config needed), metpy (pint), pyet (`'float' object has no attribute 'time'`: needs pandas Series), psychrolib (`GetHumRatioFromRelHum` is a numba ufunc, which takes no keyword arguments: `unexpected keyword arguments to ufunc`. In FMI 2 with logging on, FMPy then crashes with an access violation, because the traceback contains `%s`: UniFMU bug [§12](unifmu-limitations.md#12-fmi-2-log-messages-are-used-as-printf-format-strings)), python-control `StateSpace` (`len(x) must be equal to number of states`: a start value my rebuilt options dropped, not a regression, see [above](#fixes-after-the-rerun-2026-10-09)), simpy (`until` not bound to time), pyquaternion (`*args` constructor gets the step's arguments), heartpy (`data.csv` not in the working folder: my input), nashpy (`Game has no method 'is_zero_sum'`: my input), sgp4 (C built-in factory: `--start names that are not arguments`).
 
 **Fixed since the earlier rounds (now pass):** openturns `Normal`, uncertainties `ufloat`, thermofeel (0-d array retry), PyCO2SYS `sys`, pygfunction (`time` argument), radioactivedecay (`units`), astropy, rdkit `MolWt`, mesa, river, pyloudnorm, numdifftools, pyfluids, Madgwick/Mahony with FMI 2, all 6 neural networks with FMI 2 (arrays as one scalar per element).
 
@@ -73,7 +101,7 @@ Columns: **init / init --probe**: config written. **build + simulate**: per conf
 | `fluids.friction:friction_factor` | 2 | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 133.8 MB |  |
 | `fluids.core:Reynolds` | 2 | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 133.8 MB |  |
 | `ht.conv_internal:Nu_conv_internal` | 2 | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 134.1 MB |  |
-| `iapws.iapws97:_TSat_P` | 2 | ✓ | ✓ | plain ✓ / probe ✓ | probe: build ✓, sim ✗, 128.8 MB | UniFMU backend panic (rep.rs:168:40: not yet implemented) |
+| `iapws.iapws97:_TSat_P` | 2 | ✓ | ✓ | plain ✓ / probe ✓ | probe: build ✓, sim ✗, 128.8 MB | compiled: the frozen backend exits (iapws/VERSION missing); UniFMU then aborts the importer (rep.rs:168 panic, [§13](unifmu-limitations.md#13-a-backend-that-exits-during-a-call-can-abort-the-importer)) |
 | `filterpy.common:Q_discrete_white_noise` | 2 | ✓ | ✓ | plain build ✓, sim ✗ / probe ✓ | probe: ✓, 128.8 MB | TypeError: y is an array of shape [2, 2], not a single value: give it dimensions = [2, 2] (FMI 3) or read one element (from = "...:0"); fmugen init --probe finds them |
 | `psychrolib:GetHumRatioFromRelHum` | 2 → 3 | ✓ | ✓ | plain build ✓, sim ✗ / probe build ✓, sim ✗ | probe: build ✓, sim ✗, 128.7 MB | FMI 2: OSError('exception: access violation reading 0x00000000000009AA') — FMI 3: TypeError: unexpected keyword arguments to ufunc: 'Pressure', 'RelHum', 'TDryBulb' |
 | `CoolProp.CoolProp:PropsSI` | 2 → 3 | ✓ | ✓ | plain ✗ / probe ✗ | probe: ✗ | FMI 2: fmugen: error: the config defines no FMU variables: add [inputs]/[parameters] and [outputs] (the model's arguments and results could not be inferred) — FMI 3: fmugen: error: the config defines no FMU variables: add [inputs]/[parameters] and [outputs] (the model's arguments and results could not be inferred) |
@@ -82,7 +110,7 @@ Columns: **init / init --probe**: config written. **build + simulate**: per conf
 | `tclab:TCLabModel` | 2 | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 128.8 MB |  |
 | `gymnasium.envs.classic_control.cartpole:CartPoleEnv` | 2 | ✓ | ✓ | plain build ✓, sim ✗ / probe ✓ | probe: ✓, 135.6 MB | ValueError: 147626572821865577400907706530850663577 is out of range for Integer |
 | `gymnasium.envs.classic_control.pendulum:PendulumEnv` | 2 | ✓ | ✓ | plain build ✓, sim ✗ / probe ✓ | probe: ✓, 135.6 MB | ValueError: 172939238529957257140098871392319507192 is out of range for Integer |
-| `ahrs.filters:Madgwick` | 2 | ✓ | ✓ | plain ✓ / probe ✓ | probe: build ✓, sim ✗, 129.0 MB | UniFMU backend panic (rep.rs:168:40: not yet implemented) |
+| `ahrs.filters:Madgwick` | 2 | ✓ | ✓ | plain ✓ / probe ✓ | probe: build ✓, sim ✗, 129.0 MB | compiled: the frozen backend exits (ahrs/utils/WMM2025/WMM.COF missing); UniFMU then aborts the importer (rep.rs:168 panic, [§13](unifmu-limitations.md#13-a-backend-that-exits-during-a-call-can-abort-the-importer)) |
 | `ahrs.filters:Mahony` | 2 | ✓ | ✓ | plain build ✓, sim ✗ / probe ✓ | probe: build ✓, sim ✗, 129.0 MB | TypeError: b is an array of shape [3], not a single value: give it dimensions = [3] (FMI 3) or read one element (from = "...:0"); fmugen init --probe finds them |
 | `fluids.units:Reynolds` | 2 → 3 | ✓ | ✓ | plain build ✓, sim ✗ / probe build ✓, sim ✗ | probe: build ✓, sim ✗, 133.8 MB | FMI 2: TypeError: 1.0 has no quantity — FMI 3: TypeError: 1.0 has no quantity |
 | `fluids.units:head_from_P` | 2 → 3 | ✓ | ✓ | plain build ✓, sim ✗ / probe build ✓, sim ✗ | probe: build ✓, sim ✗, 133.8 MB | FMI 2: TypeError: 100000.0 has no quantity — FMI 3: TypeError: 100000.0 has no quantity |
@@ -106,7 +134,7 @@ Columns: **init / init --probe**: config written. **build + simulate**: per conf
 |---|---|---|---|---|---|---|
 | `ambiance:Atmosphere` | 2 | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 101.5 MB |  |
 | `astral.sun:elevation` | 2 | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 101.9 MB |  |
-| `cantera:Solution` | 2 | ✓ | ✓ | plain ✓ / probe ✓ | probe: build ✓, sim ✗, 105.9 MB | UniFMU backend panic (rep.rs:168:40: not yet implemented) |
+| `cantera:Solution` | 2 | ✓ | ✓ | plain ✓ / probe ✓ | probe: build ✓, sim ✗, 105.9 MB | compiled: the frozen backend exits (ImportError: PyInit_drawnetwork); UniFMU then aborts the importer (rep.rs:168 panic, [§13](unifmu-limitations.md#13-a-backend-that-exits-during-a-call-can-abort-the-importer)) |
 | `colour.temperature:CCT_to_xy_CIE_D` | 2 | ✓ | ✓ | plain build ✓, sim ✗ / probe ✓ | probe: ✓, 113.1 MB | TypeError: y is an array of shape [2], not a single value: give it dimensions = [2] (FMI 3) or read one element (from = "...:0"); fmugen init --probe finds them |
 | `control:StateSpace` | 2 → 3 | ✓ | ✓ | plain build ✓, sim ✗ / probe build ✓, sim ✗ | probe: build ✓, sim ✗, 103.0 MB | FMI 2: ValueError: len(x) must be equal to number of states — FMI 3: ValueError: len(x) must be equal to number of states |
 | `erfa:gmst06` | 2 | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 101.8 MB |  |
@@ -120,7 +148,7 @@ Columns: **init / init --probe**: config written. **build + simulate**: per conf
 | `ppigrf:igrf` | 2 | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 101.5 MB |  |
 | `pybamm:Simulation` | 2 | ✓ | ✓ | plain build ✓, sim ✗ / probe ✓ | probe: build ✓, sim ✗, 130.2 MB | TypeError: float() argument must be a string or a real number, not 'Solution' |
 | `pyet:pm_fao56` | 2 → 3 | ✓ | ✓ | plain build ✓, sim ✗ / probe build ✓, sim ✗ | probe: build ✓, sim ✗, 111.1 MB | FMI 2: AttributeError: 'float' object has no attribute 'time' — FMI 3: AttributeError: 'float' object has no attribute 'time' |
-| `pymsis:calculate` | 2 | ✓ | ✓ | plain ✓ / probe ✓ | probe: build ✓, sim ✗, 102.5 MB | UniFMU backend panic (rep.rs:168:40: not yet implemented) |
+| `pymsis:calculate` | 2 | ✓ | ✓ | plain ✓ / probe ✓ | probe: build ✓, sim ✗, 102.5 MB | compiled: the frozen backend exits (msis21.parm missing); UniFMU then aborts the importer (rep.rs:168 panic, [§13](unifmu-limitations.md#13-a-backend-that-exits-during-a-call-can-abort-the-importer)) |
 | `pyproj:Transformer` | 2 | ✓ | ✓ | plain build ✓, sim ✗ / probe ✓ | probe: ✓, 107.9 MB | TypeError: y is a tuple of shape [2], not a single value: give it dimensions = [2] (FMI 3) or read one element (from = "...:0"); fmugen init --probe finds them |
 | `pyromat:get` | 2 | ✗ | ✓ | probe ✓ | probe: build ✓, sim ✗, 101.5 MB | fmugen: error: --start names that are not arguments of the model: ['T'] |
 | `pysolar.solar:get_altitude` | 2 | ✓ | ✓ | plain build ✓, sim ✗ / probe ✓ | probe: ✓, 101.5 MB | pysolar.tzinfo_check.NoTimeZoneInfoError: datetime value '2026-10-09 00:00:00' given for arg 'when' should be made timezone-aware. |
@@ -132,7 +160,7 @@ Columns: **init / init --probe**: config written. **build + simulate**: per conf
 | `simglucose.patient.t1dpatient:T1DPatient` | 2 | ✓ | ✓ | plain ✓ / probe ✓ | probe: build ✓, sim ✗, 101.7 MB | FileNotFoundError: [Errno 2] No such file or directory: 'C:\\Users\\TomasRobino\\AppData\\Local\\Temp\\tmpbukrcnai\\resources\\dist\\main\\_internal\\simglucose\\params\\vpatient_params.csv' |
 | `joblib:load` | 2 | ✗ | ✓ | probe ✓ | probe: build ✓, sim ✗, 101.9 MB | fmugen: error: --start names that are not arguments of the model: ['X'] |
 | `thermo:Chemical` | 2 | ✓ | ✓ | plain build ✓, sim ✗ / probe ✓ | probe: build ✓, sim ✗, 112.8 MB | TypeError: CAS is a string ('7732-18-5'), not a Real: set type = "String" for it in the config |
-| `py_vollib.black_scholes:black_scholes` | 2 | ✓ | ✓ | plain ✓ / probe ✓ | probe: build ✓, sim ✗, 101.5 MB | UniFMU backend panic (rep.rs:168:40: not yet implemented) |
+| `py_vollib.black_scholes:black_scholes` | 2 | ✓ | ✓ | plain ✓ / probe ✓ | probe: build ✓, sim ✗, 101.5 MB | compiled: the frozen backend exits (No module named 'py_vollib'); UniFMU then aborts the importer (rep.rs:168 panic, [§13](unifmu-limitations.md#13-a-backend-that-exits-during-a-call-can-abort-the-importer)) |
 | `windpowerlib.wind_speed:logarithmic_profile` | 2 | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 101.5 MB |  |
 
 ## Round 3 (tested-models-round3.md)
@@ -155,7 +183,7 @@ Columns: **init / init --probe**: config written. **build + simulate**: per conf
 | `numpy_financial:pmt` | 2 | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 24.7 MB |  |
 | `numdifftools:Derivative` | 2 | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 52.3 MB |  |
 | `obspy.geodetics:gps2dist_azimuth` | 2 | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 77.0 MB |  |
-| `openap:Thrust` | 2 | ✓ | ✓ | plain ✓ / probe ✓ | probe: build ✓, sim ✗, 66.5 MB | UniFMU backend panic (rep.rs:168:40: not yet implemented) |
+| `openap:Thrust` | 2 | ✓ | ✓ | plain ✓ / probe ✓ | probe: build ✓, sim ✗, 66.5 MB | compiled: the frozen backend exits (openap/data/aircraft/_synonym.csv missing); UniFMU then aborts the importer (rep.rs:168 panic, [§13](unifmu-limitations.md#13-a-backend-that-exits-during-a-call-can-abort-the-importer)) |
 | `cv2:KalmanFilter` | 2 | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 66.3 MB |  |
 | `openturns:Normal` | 2 | ✓ | ✓ | plain build ✓, sim ✗ / probe ✓ | probe: ✓, 79.9 MB | TypeError: Wrong number or type of arguments for overloaded function 'new_Normal'. |
 | `pedon:Genuchten` | 2 | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 83.7 MB |  |
@@ -183,7 +211,7 @@ Columns: **init / init --probe**: config written. **build + simulate**: per conf
 | `skfuzzy:interp_membership` | 2 | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 52.3 MB |  |
 | `skimage.color:rgb2hsv` | 2 | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 52.8 MB |  |
 | `statsmodels.stats.proportion:proportion_confint` | 2 | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 71.3 MB |  |
-| `tellurium:loada` | 2 | ✓ | ✓ | plain ✓ / probe ✓ | probe: build ✓, sim ✗, 129.4 MB | UniFMU backend panic (rep.rs:168:40: not yet implemented) |
+| `tellurium:loada` | 2 | ✓ | ✓ | plain ✓ / probe ✓ | probe: build ✓, sim ✗, 129.4 MB | compiled: the frozen backend exits (antimony missing); UniFMU then aborts the importer (rep.rs:168 panic, [§13](unifmu-limitations.md#13-a-backend-that-exits-during-a-call-can-abort-the-importer)) |
 | `thermofeel:calculate_heat_index_simplified` | 2 | ✓ | ✓ | plain build ✓, sim ✗ / probe ✓ | probe: ✓, 24.7 MB | ValueError: Calling nonzero on 0d arrays is not allowed. Use np.atleast_1d(scalar).nonzero() instead. If the context of this error is of the form `arr[nonzero(cond)]`, just use `arr[cond]`. |
 | `timezonefinder:TimezoneFinder` | 2 | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 58.0 MB |  |
 | `tmm:coh_tmm` | 2 | ✓ | ✓ | plain build ✓, sim ✗ / probe ✓ | probe: ✓, 24.6 MB | TypeError: kz_list is an array of shape [3], not a single value: give it dimensions = [3] (FMI 3) or read one element (from = "...:0"); fmugen init --probe finds them |

@@ -1,6 +1,6 @@
 # UniFMU: bugs and limitations
 
-Problems that come from [UniFMU](https://github.com/INTO-CPS-Association/unifmu) **0.14.0** (the version fmugen requires), not from fmugen. Each entry says where it was found, its effect on fmugen FMUs, and the workaround, if any. Sources: fmugen's own testing ([tested-models.md](tested-models.md), [tested-models-round2.md](tested-models-round2.md), [AUDIT.md](../AUDIT.md)) and the [UniFMU README](https://github.com/INTO-CPS-Association/unifmu/blob/master/README.md).
+Problems that come from [UniFMU](https://github.com/INTO-CPS-Association/unifmu) **0.14.0** (the version fmugen requires), not from fmugen. Each entry says where it was found, its effect on fmugen FMUs, and the workaround, if any. Sources: fmugen's own testing ([tested-models.md](tested-models.md), [tested-models-round2.md](tested-models-round2.md), [tested-models-rerun.md](tested-models-rerun.md), [AUDIT.md](../AUDIT.md)) and the [UniFMU README](https://github.com/INTO-CPS-Association/unifmu/blob/master/README.md).
 
 | # | Problem | Kind | Workaround in fmugen |
 |---|---|---|---|
@@ -16,16 +16,23 @@ Problems that come from [UniFMU](https://github.com/INTO-CPS-Association/unifmu)
 | 10 | [FMI 3 template declares `fmiVersion="3.0-beta.4"`](#10-fmi-3-template-declares-fmiversion30-beta4) | Bug | fmugen writes its own `modelDescription.xml` |
 | 11 | [Smaller limitations from the README](#11-smaller-limitations-from-the-readme) | Limitation | — |
 | 12 | [FMI 2 log messages are used as printf format strings](#12-fmi-2-log-messages-are-used-as-printf-format-strings) | Bug | None yet. Turn off debug logging, or avoid `%` in log messages |
+| 13 | [A backend that exits during a call can abort the importer](#13-a-backend-that-exits-during-a-call-can-abort-the-importer) | Bug | None. Find the backend's error by running it directly |
 
 ---
 
 ## 1. The importer hangs when the model prints more than ~4 KB
 
-When the FMU's Python process writes more than about 4 KB in total to stdout/stderr, UniFMU's native library panics (`zeromq-0.4.1/src/rep.rs:168:40: not yet implemented`) and the importer waits forever, with no error.
+When the FMU's Python process writes more than about 4 KB in total to stdout/stderr, the backend blocks and the importer waits forever, with no error.
 
-- 3,900 characters printed: fine. 4,200: crash. Small flushed writes still crash, so it is the total amount.
-- Large messages are not the cause: a 160 KB array output and a 70,000-character log message through the FMI logger both work.
+**Cause:** UniFMU starts the backend with its stdout going to a pipe and stderr merged into it, and reads that pipe only after the backend has exited. In v0.14.0, `fmiapi/src/common/dispatcher/backend_subprocess.rs`, `BackendSubprocess::create` passes `stdout: Redirection::Pipe, stderr: Redirection::Merge`. The only read is in `monitor_subprocess`, once `poll()` returns an exit status, to put the output in the "backend exited unexpectedly" message. While the backend runs, nobody empties the pipe. When it is full, the backend's next write blocks, so it never answers the pending FMI call.
+
+- Rechecked on 2026-10-09 with pvlib's `alt2pres` (FMI 2, built without `--capture-output`) and `setup = [{ call = "builtins:print", args = ["xxx…"] }]`: 1,000, 3,600, 3,700 and 3,800 characters printed simulate; 3,900, 4,200, 8,000 and 20,000 hang (killed after 120 s). The backend also writes its own startup line (`INFO:…main.py:dispatcher endpoint received: …`) to the same pipe, so the total at the limit is about 4,096 bytes, the default size of a Windows pipe.
+- During the hang, `py-spy dump --native` of the backend shows its main thread in `ZwWriteFile` ← `WriteFile` ← `fflush`: it is blocked writing its output.
+- The printed text never reaches the importer's console, even when the run succeeds: it stays in the pipe.
+- Large messages through UniFMU's protocol are not affected: a 160 KB array output and a 70,000-character log message through the FMI logger both work.
 - Typical triggers: library warnings, progress bars (Hugging Face model loading), printed tracebacks.
+
+**The panic is a consequence, not the cause.** This entry first said UniFMU panics here (`zeromq-0.4.1/src/rep.rs:168:40: not yet implemented`). The recheck didn't show a panic while the backend was blocked. The panic appeared, followed by the importer aborting (exit code `0xC0000409`), when the blocked backend was then killed: that is [§13](#13-a-backend-that-exits-during-a-call-can-abort-the-importer). So a hang that ends with the backend being killed, or dying, can look like a panic.
 
 Found with Chronos-Bolt ([tested-models.md](tested-models.md), [AUDIT.md §5.7](../AUDIT.md)).
 
@@ -123,8 +130,45 @@ The callback type is variadic (`fmiapi/src/fmi2/fmi2_types.rs`, `Fmi2CallbackLog
 - Calling FMPy's proxy directly with a message containing `%27%27x` returns `%27x`, which shows the text is formatted.
 - Plain `fmpy simulate` doesn't crash, because logging is off and nothing is formatted.
 
+**Also found with:** psychrolib's `GetHumRatioFromRelHum` in FMI 2 ([tested-models-rerun.md](tested-models-rerun.md)). The FMU fails at initialization for its own reason: the function is a numba ufunc, which takes no keyword arguments (`TypeError: unexpected keyword arguments to ufunc: 'Pressure', 'RelHum', 'TDryBulb'`). fmugen sends the traceback to the log, and the traceback quotes numba's source line `raise TypeError("unexpected keyword arguments to ufunc: %s" % …)`, so the message contains `%s`. Results:
+- `simulate_fmu(…, debug_logging=True, logger=…)`: `OSError: exception: access violation reading 0x00000000000009AA`, before the logger gets any message.
+- Logging off: a clean `fmi2ExitInitializationMode failed with status 3`, no crash.
+- The same model in FMI 3, with logging on: the `TypeError` is reported cleanly.
+- The message's text was read by running the backend directly (`UNIFMU_DISPATCHER_ENDPOINT` and a ZeroMQ REP socket, `logging_on = true`): it is the first log message and the only one before the crash.
+
+So any error whose traceback quotes a line with a `%` (common in library code: `"%s" % x`, `"50%"`) turns an FMI 2 error status into an importer crash when logging is on.
+
 **Who is affected:** any FMI 2 UniFMU FMU (not just fmugen's) whose code, or a library it uses, logs a `%`: URLs, `"50%"`, printf-style strings. This applies with any importer that formats FMI 2 messages as the standard says, not only FMPy.
 
 **Fix upstream:** call `(self.callback)(env, name, status, category, c"%s".as_ptr(), c_message.as_ptr())`, or double each `%` to `%%` in `log()`. No upstream issue was found (a search of the UniFMU issues for "logger format", "printf", "access violation" and "percent" returned nothing).
 
 **Workaround in fmugen:** none yet. Possible: the FMI 2 adapter doubles each `%` before sending a message. Since fmugen pins UniFMU 0.14.0 exactly, that is safe, but it must be removed when UniFMU fixes the bug, or `%%` would show in the log.
+
+## 13. A backend that exits during a call can abort the importer
+
+When the backend process exits while UniFMU waits for its reply, UniFMU's native library may panic instead of returning an error status. The panic is `zeromq-0.4.1/src/rep.rs:168:40: not yet implemented` (also seen when a backend blocked by [§1](#1-the-importer-hangs-when-the-model-prints-more-than-4-kb) is killed), followed by `panic in a function that cannot unwind … aborting`. That line is the `Some((_peer_id, _)) => todo!()` arm of `RepSocket::recv` in zeromq 0.4.1: the socket received an error from the peer connection, and that case isn't implemented. Because the panic can't unwind through the FMI C function, **the importer's whole process is aborted**. The importer gets no error status, and the backend's own error (its Python traceback) is not shown anywhere.
+
+The underlying failure is in the backend, not in UniFMU. UniFMU's part is turning it into a process abort instead of an error. Other backend exits are reported cleanly: in the same runs, three PyTorch FMUs whose backend exited at instantiation got `Instantiation of fmi2 slave failed; … backend exited unexpectedly with exit status 1`, and so did the round-3 FMUs whose `{ call = … }` constant failed. What decides between the clean error and the panic wasn't established.
+
+**Found with:** 12 FMUs built with `fmugen build --compile pyinstaller` in [tested-models-rerun.md](tested-models-rerun.md). The same configs without `--compile` simulate. Running each frozen backend (`resources/dist/main/main.exe`) directly against a ZeroMQ REP socket, and sending it UniFMU's own FMI 2 commands, showed that each backend **exits** during a call:
+
+| FMU | Call | Backend error |
+|---|---|---|
+| iapws `_TSat_P`, `IAPWS97` | instantiate | `FileNotFoundError: …\_internal\iapws\VERSION` |
+| ahrs Madgwick, Mahony | instantiate | `FileNotFoundError: …\_internal\ahrs\utils\WMM2025\WMM.COF` |
+| openap `Thrust` | instantiate | `FileNotFoundError: …\_internal\openap\data/aircraft/_synonym.csv` |
+| radioactivedecay `Inventory` | instantiate | `FileNotFoundError: …\icrp107_ame2020_nubase2020\decay_data.npz` |
+| pyromat `get` | instantiate | `FileNotFoundError: …\_internal\pyromat\registry` |
+| tellurium `loada` | instantiate | `FileNotFoundError: …\_internal\antimony` |
+| mendeleev `element` | instantiate | SQLAlchemy can't connect: `mendeleev/elements.db` isn't in the frozen FMU |
+| py_vollib `black_scholes` | instantiate | `ModuleNotFoundError: No module named 'py_vollib'` |
+| cantera `Solution` | instantiate | `ImportError: dynamic module does not define module export function (PyInit_drawnetwork)` |
+| pymsis `calculate` | exitInitializationMode | `MSIS parameter set …\pymsis/msis21.parm not found. Stopping.` (Fortran `STOP`, exit code 0) |
+
+Every one of these is a file, module or extension that PyInstaller left out of the frozen FMU, which is an fmugen `--compile` problem ([tested-models-rerun.md](tested-models-rerun.md)). fmugen now collects them ([packaging.md](packaging.md#what-the-compiler-is-told)), and all 12 compiled FMUs simulate. The UniFMU behaviour described here is unchanged: any other backend exit still aborts the importer. Through FMPy, each of these 12 FMUs aborted the Python process with the panic above, every time. `_TSat_P` was rerun alone, with no other load: 3 aborts out of 3. Building without `--capture-output` didn't make the backend's output visible either.
+
+**Who is affected:** any UniFMU FMU whose backend can exit during a call, e.g. a frozen backend with a missing file, an uncaught exception in the backend's own code, or native code that calls `exit`. Since the importer process dies, a co-simulation master loses every other FMU too.
+
+**Workaround in fmugen:** none. To find the backend's error, run it outside the importer: set `UNIFMU_DISPATCHER_ENDPOINT` to a ZeroMQ REP socket you bind, start `resources/dist/main/main.exe` (or `python main.py` for an uncompiled FMU), answer the handshake and send an `Fmi2Instantiate` command built with `resources/schemas/fmi2_messages_pb2.py` from an uncompiled build of the same config. The backend prints its traceback to its stdout.
+
+**Fix upstream:** handle the error arm in UniFMU's receive path (return an error status when the peer connection fails or the backend exits), and don't let a panic cross the `extern "C"` FMI functions. Not reported upstream yet.
