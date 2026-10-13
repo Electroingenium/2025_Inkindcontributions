@@ -335,7 +335,8 @@ def stamp_guid(fmu_dir):
     digest = hashlib.sha256()
     for file in sorted(f for f in fmu_dir.rglob("*") if f.is_file() and "__pycache__" not in f.parts):
         digest.update(file.relative_to(fmu_dir).as_posix().encode() + b"/")
-        digest.update(hashlib.sha256(file.read_bytes()).digest())
+        with open(file, "rb") as f:   # in chunks: a frozen FMU can hold files of hundreds of MB
+            digest.update(hashlib.file_digest(f, "sha256").digest())
     description = fmu_dir / "modelDescription.xml"
     token = "{" + str(uuid.uuid5(GUID_NAMESPACE, digest.hexdigest())) + "}"
     description.write_bytes(description.read_bytes().replace(GUID_PLACEHOLDER.encode(), token.encode()))

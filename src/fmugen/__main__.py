@@ -214,7 +214,8 @@ def _write_zip(fmu_dir, output):
                 else:
                     executable = bool(file.stat().st_mode & 0o111)
                 info.external_attr = (0o100755 if executable else 0o100644) << 16
-                zipf.writestr(info, file.read_bytes())
+                with open(file, "rb") as src, zipf.open(info, "w", force_zip64=True) as dst:
+                    shutil.copyfileobj(src, dst)   # streamed: frozen FMUs have files of hundreds of MB
 
 
 def build(target, output, model_name=None, author=None, output_format="fmu", call=None, fmi_version=None,
