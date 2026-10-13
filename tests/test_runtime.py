@@ -781,6 +781,14 @@ def test_misspelled_field_and_unknown_argument_are_named(tmp_path):
         init(f"{tmp_path / 'objs.py'}:f", starts={"w.T": 1.0, "v.T": 1.0})
 
 
+def test_init_start_for_a_callable_without_signature():
+    from fmugen.config import InterfaceError
+
+    # max is a C built-in: inspect.signature fails, so the --start names can't be placed
+    with pytest.raises(InterfaceError, match=r"--start a, b: cannot tell which arguments these are, since max has no signature"):
+        init("builtins:max", starts={"a": 1.0, "b": 2.0})
+
+
 def test_probe_retries_a_date_time_in_utc(tmp_path):
     write(tmp_path, "sun.py", """
         def altitude(when):

@@ -168,6 +168,12 @@ def _infer_config(target, call, config_dir, fmi_version, starts, setup, kind, cr
         for name in explained:
             by_message.setdefault(errors[name], []).append(name)
         raise InterfaceError("; ".join(f"--start {', '.join(names)}: {message}" for message, names in by_message.items()))
+    if unused and comments.get(NO_SIGNATURE):
+        unreadable = list(dict.fromkeys(comments[NO_SIGNATURE]))
+        raise InterfaceError(
+            f"--start {', '.join(sorted(unused))}: cannot tell which arguments these are, since "
+            f"{' and '.join(unreadable)} {'has' if len(unreadable) == 1 else 'have'} no signature (e.g. a C built-in); "
+            "write the config by hand, with to = \"pos:N\" for arguments passed by position (docs/config.md)")
     if unused:
         raise InterfaceError(f"--start names that are not arguments of the model: {sorted(unused)}")
     return data, comments
@@ -474,7 +480,10 @@ def _infer_class(cls, call, data, comments, arrays=False, starts=None, create=No
         constructor = factory
         # The step method's arguments may be known only once the object exists: names the factory
         # declares go to it, everything else to the step method (even if the factory takes **kwargs).
-        declared = inspect.signature(factory).parameters
+        try:
+            declared = inspect.signature(factory).parameters
+        except (TypeError, ValueError):   # a C built-in: _arguments reports it
+            declared = {}
         init_starts = {k: v for k, v in (starts or {}).items() if k in declared}
         call_starts = {k: v for k, v in (starts or {}).items() if k not in declared}
     else:
@@ -769,6 +778,7 @@ def _add_attributes(cls, method_name, data, comments, arrays, probe, seen):
 DATETIME_BY_NAME = ("init", "date-time by name")   # comments key (not rendered): [time] args only named like one
 POSITIONAL_STARTS = ("init", "positional starts")   # comments key (not rendered): {--start name: *args position}
 START_ERRORS = ("init", "start errors")   # comments key (not rendered): {--start name: why it can't be used}
+NO_SIGNATURE = ("init", "no signature")   # comments key (not rendered): callables whose arguments can't be read
 
 
 def _start_error(comments, name, message):
@@ -1205,6 +1215,7 @@ def _arguments(fn, section, data, comments, skip_self=False, allow_time=True, co
     try:
         params = list(inspect.signature(fn).parameters.values())
     except (TypeError, ValueError):  # e.g. some C extensions
+        comments.setdefault(NO_SIGNATURE, []).append(getattr(fn, "__qualname__", repr(fn)))
         comments[(section, None)] = f"cannot inspect the signature of {getattr(fn, '__qualname__', fn)}; " \
                                     "add the variables by hand (to = \"pos:N\" for positional arguments)"
         params = []
@@ -1683,8 +1694,11 @@ def _public_properties(obj):
     properties that are the same object under several names (uncertainties' n and nominal_value),
     only the longest name."""
     by_property = {}
-    for name, prop in inspect.getmembers(type(obj), lambda m: isinstance(m, property)):
-        if not name.startswith("_") and len(name) > len(by_property.get(id(prop), "")):
+    for name in dir(type(obj)):
+        # static lookup: getattr on the class runs descriptors, which can fail (SQLAlchemy hybrid properties)
+        prop = inspect.getattr_static(type(obj), name, None)
+        if isinstance(prop, property) and not name.startswith("_") \
+                and len(name) > len(by_property.get(id(prop), "")):
             by_property[id(prop)] = name
     values = {}
     for name in sorted(by_property.values()):
