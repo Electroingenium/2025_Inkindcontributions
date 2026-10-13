@@ -28,14 +28,15 @@ Four findings of this rerun were fixed or corrected the same day, two more on 20
 
 | | Before | After |
 |---|---|---|
-| `init --probe` writes a config | 112 | **113** (mendeleev) |
-| Simulate correctly with FMI 2 | 106 | **107** (StateSpace) |
-| Fail with FMI 2 and FMI 3 | 12 | **11** |
+| `init` writes a config (of 116; the 2 FMI 3 examples have no `init` run) | 110 | **111** (nashpy, with a real method) |
+| `init --probe` writes a config | 112 | **115** (mendeleev; heartpy and nashpy, with corrected inputs) |
+| Simulate correctly with FMI 2 | 106 | **108** (StateSpace, heartpy) |
+| Fail with FMI 2 and FMI 3 | 12 | **10** |
 | Compiled FMU simulates | 83 | **106**: the 22, plus surfaces |
 
 Compiled with the final code: the 23 fixed models, plus 10 that already compiled (gsw, pvwatts_dc, Chronos, haversine, QuantLib, simple_pid, timezonefinder, pythermalcomfort, mesa, GHFilter), which still simulate. The FMUs grew by 0 to 25 MB (pvwatts_dc 133 → 157 MB, mesa 111 → 137 MB, gsw 103 → 104 MB, haversine unchanged at 24 MB). Granite TTM (3,170 outputs) and Chronos also ship their `.py` sources, see [packaging.md](packaging.md#what-the-compiler-is-told).
 
-**The models `init` wrote no config for.** Of the 8 without a code-only config and the 6 without a `--probe` one, 2 are the FMI 3 examples (`examples/kalman`, `examples/sampled_pid`), where `init` wasn't run. The 4 that only `--probe` handles (silero_vad, Granite `get_model`, pyromat, `joblib:load`) are problem 7. Of the 4 that failed both ways: mendeleev and sgp4 are the fixes above; heartpy and nashpy were my inputs. heartpy with its own `data/data.csv` given by full path gets a `--probe` config (20 variables). nashpy 0.0.43 has no `is_zero_sum` method. With a real one (`support_enumeration`) `init` writes a config, but the method returns a generator, so `--probe` finds no outputs.
+**The models `init` wrote no config for.** Of the 8 without a code-only config and the 6 without a `--probe` one, 2 are the FMI 3 examples (`examples/kalman`, `examples/sampled_pid`), where `init` wasn't run. The 4 that only `--probe` handles (silero_vad, Granite `get_model`, pyromat, `joblib:load`) are problem 7. Of the 4 that failed both ways: mendeleev and sgp4 are the fixes above; heartpy and nashpy were my inputs. heartpy with its own `data/data.csv` given by full path gets a `--probe` config (20 variables). heartpy then builds and simulates with FMI 2 (e.g. bpm 58.9). nashpy 0.0.43 has no `is_zero_sum` method. With a real one (`support_enumeration`) both modes write a config, but the method returns a generator: `--probe` finds no outputs, and the code-only config fails the step (`float() argument must be … not 'generator'`). nashpy and sgp4 stay among the 10 failures.
 
 Not checked: Nuitka (not installed here), and the 33 models' compiled values against their uncompiled runs (only that they simulate).
 
