@@ -71,6 +71,13 @@ def test_rendered_config_round_trips(tmp_path):
         init(tmp_path / "tank.py")
 
 
+def test_config_of_a_model_file_must_be_next_to_it_or_above(tmp_path):
+    model = EXAMPLES / "psychrometry" / "psychrometry.py"
+    with pytest.raises(InterfaceError, match="must be in the folder of psychrometry.py or a folder above"):
+        init(model, tmp_path / "fmugen.toml")
+    assert not (tmp_path / "fmugen.toml").exists()
+
+
 def test_ambiguous_module_needs_a_name(tmp_path):
     (tmp_path / "two.py").write_text("def a(x=1.0):\n    return x\n\ndef b(x=1.0):\n    return x\n")
     with pytest.raises(InterfaceError, match="cannot tell which"):
