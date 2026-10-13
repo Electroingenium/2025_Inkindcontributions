@@ -13,24 +13,29 @@ Setup: Windows 11, Python 3.13, uv venvs (round 1: two new ones; round 2: the sh
 
 ## Fixes after the rerun (2026-10-09)
 
-Four findings of this rerun were fixed or corrected the same day. The per-model table below still shows the first run.
+Four findings of this rerun were fixed or corrected the same day, two more on 2026-10-13. The per-model table below still shows the first run.
 
 | Finding | What it was | Result |
 |---|---|---|
 | python-control `StateSpace` "regression" | **Not a regression: my test setup.** Round 2's options were rebuilt from the configs that run wrote, keeping only the starts marked `# start from --start`. With `--probe`, `init` writes array starts without that marker, so `--start x=[1.0, 0.0]` and `u=[0.0]` were dropped. No other model lost a start. | With the original starts, `init --probe` writes the 2026-10-07 config again. FMI 2: y = (0.0, −2.0) = A·x. The code-only config still fails, as before (array result assumed a single Real). |
 | `--compile` leaves out package data, modules and extensions | `compile_fmu` gave the freezer only the modules the runtime imports by name. Constants written `{ call = "module:fn(...)" }` were also missed. | fmugen now also collects the model's packages with all their submodules, the data files, binaries and metadata of their whole dependency tree, and more ([packaging.md](packaging.md#what-the-compiler-is-told)). **All 22 compiled FMUs that failed now simulate**, among them the 3 PyTorch ones. The cause of each was found by running the frozen backend directly: [unifmu-limitations.md §13](unifmu-limitations.md#13-a-backend-that-exits-during-a-call-can-abort-the-importer). skops also needs `scikit-learn` in `[model] requirements`, since its model is unpickled (added by hand). |
 | `stamp_guid` reads every file whole | `MemoryError` on surfaces's large frozen file. `_write_zip` read each file whole too. | Both now stream the files (`hashlib.file_digest`, `shutil.copyfileobj`). GUIDs and zips are unchanged (the reproducible-build test passes). surfaces compiles (294 MB) and simulates. |
+| mendeleev `init --probe` crash (2026-10-13) | **A regression** since round 3: listing the result's properties with `inspect.getmembers` reads each attribute on the class, which runs SQLAlchemy's hybrid properties; mendeleev's `ionenergies` raises `NotImplementedError` there, and `init` stopped with a raw traceback. | Properties are now looked up with `inspect.getattr_static`, which runs nothing. `--probe` writes 79 variables; FMI 2: Fe gives atomic_number 26, atomic_weight 55.845. |
+| sgp4: misleading `--start names that are not arguments of the model` (2026-10-13) | `Satrec.twoline2rv` and `Satrec.sgp4` are C built-ins with no signature, so no `--start` name can be placed. A C built-in factory given with `--call` also crashed with a raw `ValueError`. | `fmugen: error: --start fr, jd, line1, line2: cannot tell which arguments these are, since Satrec.twoline2rv and Satrec.sgp4 have no signature (e.g. a C built-in); write the config by hand, with to = "pos:N" …`. sgp4 still needs a hand config. |
 | `init -o` outside a script model's folder | a raw `ValueError … is not in the subpath of …` traceback | `fmugen: error: the config must be in the folder of psychrometry.py or a folder above it, …`, naming where to write it. |
 
 **After the fixes:**
 
 | | Before | After |
 |---|---|---|
+| `init --probe` writes a config | 112 | **113** (mendeleev) |
 | Simulate correctly with FMI 2 | 106 | **107** (StateSpace) |
 | Fail with FMI 2 and FMI 3 | 12 | **11** |
 | Compiled FMU simulates | 83 | **106**: the 22, plus surfaces |
 
 Compiled with the final code: the 23 fixed models, plus 10 that already compiled (gsw, pvwatts_dc, Chronos, haversine, QuantLib, simple_pid, timezonefinder, pythermalcomfort, mesa, GHFilter), which still simulate. The FMUs grew by 0 to 25 MB (pvwatts_dc 133 → 157 MB, mesa 111 → 137 MB, gsw 103 → 104 MB, haversine unchanged at 24 MB). Granite TTM (3,170 outputs) and Chronos also ship their `.py` sources, see [packaging.md](packaging.md#what-the-compiler-is-told).
+
+**The models `init` wrote no config for.** Of the 8 without a code-only config and the 6 without a `--probe` one, 2 are the FMI 3 examples (`examples/kalman`, `examples/sampled_pid`), where `init` wasn't run. The 4 that only `--probe` handles (silero_vad, Granite `get_model`, pyromat, `joblib:load`) are problem 7. Of the 4 that failed both ways: mendeleev and sgp4 are the fixes above; heartpy and nashpy were my inputs. heartpy with its own `data/data.csv` given by full path gets a `--probe` config (20 variables). nashpy 0.0.43 has no `is_zero_sum` method. With a real one (`support_enumeration`) `init` writes a config, but the method returns a generator, so `--probe` finds no outputs.
 
 Not checked: Nuitka (not installed here), and the 33 models' compiled values against their uncompiled runs (only that they simulate).
 
