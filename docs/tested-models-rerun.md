@@ -32,7 +32,17 @@ Four findings of this rerun were fixed or corrected the same day, two more on 20
 | `init --probe` writes a config | 112 | **115** (mendeleev; heartpy and nashpy, with corrected inputs) |
 | Simulate correctly with FMI 2 | 106 | **108** (StateSpace, heartpy) |
 | Fail with FMI 2 and FMI 3 | 12 | **10** |
-| Compiled FMU simulates | 83 | **106**: the 22, plus surfaces |
+| Compiled FMU simulates | 83 | **108**: the 22, surfaces, StateSpace and heartpy |
+
+**Why compiled FMUs failed (2026-10-13).** Of the 116 compile attempts, 33 failed in the first run. Only the first group was caused by compiling:
+
+| Failures | Cause | Now |
+|---|---|---|
+| 22 | The frozen FMU lacked the model's package data, modules or extensions (problem 1): fmugen gave PyInstaller only the modules the runtime imports by name. In 12 of them UniFMU's panic hid the backend's error. | Fixed by collecting the model's packages and their dependency tree's files: all 22 simulate. |
+| 9 | The model fails uncompiled too (psychrolib, fluids.units ×2, metpy, pyet, pyquaternion, simpy, StateSpace, heartpy): compiling changes nothing. | StateSpace and heartpy, with corrected inputs, compiled with the final code and simulate with the same values as uncompiled: y = (0, −2) and bpm 58.9. heartpy imports `pkg_resources`, so it also needs `setuptools<81` installed. The other 7 still fail, as uncompiled. |
+| 2 | No FMU built: surfaces (`MemoryError` in `stamp_guid`, problem 2), PropsSI (no variables: a config problem, not a compile one). | surfaces builds and simulates; PropsSI needs a hand config. |
+
+The `examples/kalman` row's compile ✗ isn't a compile failure: the generic run never ticks the clock. Rebuilt with `--compile pyinstaller` on 2026-10-13, it builds (the earlier PyInstaller failure doesn't reproduce), and `examples/kalman/run.py` drives the compiled FMU correctly. With the final code, every model that simulates uncompiled also simulates compiled.
 
 Compiled with the final code: the 23 fixed models, plus 10 that already compiled (gsw, pvwatts_dc, Chronos, haversine, QuantLib, simple_pid, timezonefinder, pythermalcomfort, mesa, GHFilter), which still simulate. The FMUs grew by 0 to 25 MB (pvwatts_dc 133 → 157 MB, mesa 111 → 137 MB, gsw 103 → 104 MB, haversine unchanged at 24 MB). Granite TTM (3,170 outputs) and Chronos also ship their `.py` sources, see [packaging.md](packaging.md#what-the-compiler-is-told).
 
@@ -40,7 +50,7 @@ Compiled with the final code: the 23 fixed models, plus 10 that already compiled
 
 **Backends left running after a failure (2026-10-13).** Both nashpy simulations (FMPy `simulate_fmu`, FMI 2) left their UniFMU backend pair (`main.py`, 2 processes) running after the failed step; the first, read through a pipe, hung until stopped. This is round 2's [backend outlives a failed FMU](tested-models-round2.md#the-backend-outlives-a-failed-fmu), and its cause is now known: FMPy's `simulate_fmu` raises without calling `freeInstance`. Driving the same FMU by hand and freeing it after the failed `doStep` removed the backend within 3 s, in FMI 2 and FMI 3. Not fmugen's: [fmpy-limitations.md §1](fmpy-limitations.md#1-simulate_fmu-doesnt-free-the-instance-after-an-fmu-error); UniFMU's part (its backend can't tell the importer has gone) is in [unifmu-limitations.md §2](unifmu-limitations.md#2-the-backend-keeps-running-after-an-fmu-error).
 
-Not checked: Nuitka (not installed here), and the 33 models' compiled values against their uncompiled runs (only that they simulate).
+Not checked: Nuitka (not installed here), and the other 33 models' compiled values against their uncompiled runs (only that they simulate).
 
 ## Summary (first run)
 
