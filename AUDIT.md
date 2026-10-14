@@ -278,7 +278,7 @@ Ordered by value to an open-source user base.
 27. **JSON Schema for `fmugen.toml`** for editor completion.
 28. **A Python API** (`fmugen.build(model=..., config=dict(...))`) documented as public, so fmugen can be used from notebooks and other tools.
 29. **Watch mode** (`fmugen build --watch`) for a fast edit → build → simulate loop.
-30. **Remote and distributed FMUs**: UniFMU supports distributed backends (`logUnifmuMessages` is already declared). Expose `fmugen build --distributed` to produce an FMU whose Python side runs on another host or container. This fits the Docker/OPC UA demo well.
+30. ✅ **Remote and distributed FMUs**: done. `fmugen build --distributed [--endpoint IP] [--private-output PATH]` builds a proxy FMU and a private folder that runs on another host or container ([packaging.md](docs/packaging.md#distributed-fmus---distributed)). UniFMU 0.14 picks the proxy port at random on every run ([unifmu-limitations.md §14](docs/unifmu-limitations.md#14-the-distributed-proxys-port-cant-be-set)). Still to do: using it in the Docker/OPC UA demo.
 31. **Plugin hooks** (entry points) for custom type converters (`fmugen.converters`), so third parties can add support for their own result types without changing fmugen.
 
 ---

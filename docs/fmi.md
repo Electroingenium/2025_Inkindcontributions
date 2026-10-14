@@ -233,7 +233,6 @@ Everything marked **x** in the [support overview](#support-overview) is never de
 
 UniFMU can do more than fmugen currently targets:
 
-- **Distributed FMUs:** `unifmu generate-distributed`, where the FMU is a proxy and the model runs on another machine.
 - **Other backends:** C# and Java.
 
 See the [UniFMU repository](https://github.com/INTO-CPS-Association/unifmu) for these.

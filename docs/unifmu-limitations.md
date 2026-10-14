@@ -17,6 +17,7 @@ Problems that come from [UniFMU](https://github.com/INTO-CPS-Association/unifmu)
 | 11 | [Smaller limitations from the README](#11-smaller-limitations-from-the-readme) | Limitation | — |
 | 12 | [FMI 2 log messages are used as printf format strings](#12-fmi-2-log-messages-are-used-as-printf-format-strings) | Bug | None yet. Turn off debug logging, or avoid `%` in log messages |
 | 13 | [A backend that exits during a call can abort the importer](#13-a-backend-that-exits-during-a-call-can-abort-the-importer) | Bug | None. Find the backend's error by running it directly |
+| 14 | [The distributed proxy's port can't be set](#14-the-distributed-proxys-port-cant-be-set) | Limitation | None. Read the port from the importer's log |
 
 ---
 
@@ -102,7 +103,7 @@ UniFMU 0.14 writes `fmiVersion="3.0-beta.4"` into the FMI 3 template's `modelDes
 ## 11. Smaller limitations from the README
 
 - **`launch.toml` commands run without a shell**, so wildcards, per-session environment variables and aliases don't work. To use a shell, give it as the first element of the command.
-- **Distributed FMUs (`generate-distributed`) are FMI 2 only**, per the README. fmugen doesn't use them yet.
+- **Distributed FMUs (`generate-distributed`) are FMI 2 only**, per the README. In 0.14.0, `unifmu generate-distributed python X fmi3` does generate an FMI 3 pair, and fmugen's `build --distributed` simulates with both versions ([packaging.md](packaging.md#distributed-fmus---distributed)).
 - **Building UniFMU itself** pins Protocol Buffers v27.3 (the source of the pin in 7), and on Windows, git's CRLF line endings break the Docker build's bash scripts.
 
 ## 12. FMI 2 log messages are used as printf format strings
@@ -172,3 +173,22 @@ Every one of these is a file, module or extension that PyInstaller left out of t
 **Workaround in fmugen:** none. To find the backend's error, run it outside the importer: set `UNIFMU_DISPATCHER_ENDPOINT` to a ZeroMQ REP socket you bind, start `resources/dist/main/main.exe` (or `python main.py` for an uncompiled FMU), answer the handshake and send an `Fmi2Instantiate` command built with `resources/schemas/fmi2_messages_pb2.py` from an uncompiled build of the same config. The backend prints its traceback to its stdout.
 
 **Fix upstream:** handle the error arm in UniFMU's receive path (return an error status when the peer connection fails or the backend exits), and don't let a panic cross the `extern "C"` FMI functions. Not reported upstream yet.
+
+## 14. The distributed proxy's port can't be set
+
+In UniFMU 0.14 the proxy port isn't configurable. The proxy of a distributed FMU binds its socket with a hardcoded port 0, so the OS assigns a new port on every run. No environment variable or `launch.toml` field changes it (`UNIFMU_DISPATCHER_ENDPOINT` is only how a local backend is told the port).
+
+Source (v0.14.0), `fmiapi/src/common/dispatcher/mod.rs`, `RemoteDispatcher::create`:
+
+```rust
+BackendSocket::create("tcp://0.0.0.0:0")
+// ...
+let port = &format!("{}", &socket.endpoint)[14..];
+remote_connection_notifier(port);
+```
+
+The notifier logs `ACTION REQUIRED ~ Connect remote backend to dispatcher through port: PORT` under the `logUnifmuMessages` category. The private side must then be started with that port.
+
+**Who is affected:** FMUs built with `fmugen build --distributed`. The private side can't be started before the simulation, a firewall can't be opened for one known port, and the importer must have logging on, including `logUnifmuMessages`, or the port is never shown.
+
+**Workaround in fmugen:** none, so fmugen has no port flag. The private side takes the port at start-up (`python main.py PORT`); see [packaging.md](packaging.md#distributed-fmus---distributed) for starting it from the importer's logger.

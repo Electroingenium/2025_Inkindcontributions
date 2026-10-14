@@ -106,7 +106,8 @@ def main():
         say("the FMU may have no wheels for this platform or Python version; rebuild it with "
             "fmugen build --vendor --platform ... --python-version ...")
         return 1
-    return subprocess.call([env_python(env), os.path.join(HERE, "main.py")], cwd=HERE)
+    # arguments go on to main.py: a distributed FMU's private side takes the proxy's port
+    return subprocess.call([env_python(env), os.path.join(HERE, "main.py"), *sys.argv[1:]], cwd=HERE)
 
 
 if __name__ == "__main__":

@@ -7,10 +7,12 @@
     fmugen build path/to/fmugen.toml -o out/model.fmu --fmi 3        # FMI 3.0 instead of 2.0
     fmugen build path/to/fmugen.toml -o out/model.fmu --vendor       # runs on other machines with Python
     fmugen build path/to/fmugen.toml -o out/model.fmu --compile pyinstaller   # ... without Python, no sources
+    fmugen build path/to/fmugen.toml -o out/model.fmu --distributed  # proxy FMU + out/model_private/
 """
 import argparse
 import contextlib
 import importlib
+import importlib.util
 import json
 import os
 import shutil
@@ -50,6 +52,8 @@ DEFAULT_PYTHON = {"linux": "python3", "macos": "python3", "windows": "python"}
 CURRENT_OS = {"win32": "windows", "darwin": "macos"}.get(sys.platform, "linux")
 # What UniFMU 0.14's Python backend imports (its own requirements.txt lists more), plus fmugen's runtime
 BACKEND_REQUIREMENTS = ["protobuf==5.27.3", "pyzmq", "cloudpickle"]   # cloudpickle: FMU state fallback
+# What the private side of a distributed FMU also imports (UniFMU 0.14's main_remote.py)
+DISTRIBUTED_REQUIREMENTS = ["toml", "coloredlogs", "colorama"]
 
 # The FMU boilerplate (native binaries + Python backend) comes from `unifmu generate`.
 # The adapters are written against this exact UniFMU version's backend.
@@ -88,6 +92,47 @@ def generate_boilerplate(fmi_version, dest):
     if result.returncode != 0 or not (Path(dest) / "resources").is_dir():
         raise InterfaceError(f"`unifmu generate python {dest} fmi{fmi_version}` failed:\n"
                              f"{result.stdout}{result.stderr}")
+
+
+def generate_distributed_boilerplate(fmi_version, dest, endpoint):
+    """Write UniFMU's distributed Python template for `fmi_version` into `dest`, and return its two
+    halves: the proxy (the FMU the importer loads) and the private folder (the backend, which
+    connects to the proxy's host `endpoint`)."""
+    exe = find_unifmu()
+    dest = Path(dest)
+    dest.mkdir(parents=True, exist_ok=True)
+    result = subprocess.run([exe, "generate-distributed", "python", "x", f"fmi{fmi_version}", "--endpoint", endpoint],
+                            capture_output=True, text=True, cwd=dest)
+    proxy, private = dest / "x_proxy", dest / "x_private"
+    if (result.returncode != 0 or not (proxy / "resources" / "launch.toml").is_file()
+            or not (private / "main.py").is_file()):
+        raise InterfaceError(f"`unifmu generate-distributed python x fmi{fmi_version} --endpoint {endpoint}` "
+                             f"failed:\n{result.stdout}{result.stderr}")
+    return proxy, private
+
+
+def private_start_command(mode=None):
+    """How to start a distributed FMU's private side from its folder; PORT is what the proxy logs."""
+    if mode == "compile":
+        return r".\dist\main\main.exe PORT" if CURRENT_OS == "windows" else "./dist/main/main PORT"
+    return f"{DEFAULT_PYTHON[CURRENT_OS]} {'fmugen_launch.py' if mode == 'vendor' else 'main.py'} PORT"
+
+
+def _write_private_readme(private, model_name, endpoint, mode=None):
+    """Replace UniFMU's generic README in the private folder with how to run this one."""
+    packages = {None: "\nThe Python running it needs the packages in requirements.txt.\n",
+                "vendor": "\nfmugen_launch.py installs the packages from wheels/ on its first run.\n",
+                "compile": ""}[mode]
+    (private / "README.md").write_text(
+        f"# {model_name}: private side of a distributed FMU\n\n"
+        f"Built by fmugen with UniFMU {UNIFMU_VERSION}. The FMU the importer loads is only a proxy;\n"
+        "this folder runs the model and connects to it over TCP. See fmugen's docs/packaging.md.\n\n"
+        "1. Start the simulation with the proxy FMU, with logging on for the `logUnifmuMessages`\n"
+        f"   category. The proxy, on the host {endpoint} (see endpoint.toml), logs:\n\n"
+        "       ACTION REQUIRED ~ Connect remote backend to dispatcher through port: PORT\n\n"
+        "   UniFMU 0.14 picks a new port on every run, and it can't be set.\n"
+        f"2. In this folder, run:\n\n       {private_start_command(mode)}\n" + packages,
+        encoding="utf-8")
 
 
 def _write_launch_toml(resources_dir, mode=None):
@@ -223,10 +268,14 @@ def _write_zip(fmu_dir, output):
 
 def build(target, output, model_name=None, author=None, output_format="fmu", call=None, fmi_version=None,
           vendor=False, platforms=(), python_versions=(), compiler=None, capture_output=False, probe=False,
-          hf_weights=None):
+          hf_weights=None, distributed=False, endpoint=None, private_output=None):
     """Build an FMU. `vendor` (with `platforms`/`python_versions`) or `compiler` ("pyinstaller"
     or "nuitka") make it run on other machines; see distribute.py. `capture_output` sends what
-    the model prints to the importer's log instead of the console."""
+    the model prints to the importer's log instead of the console. `distributed` makes `output`
+    a proxy FMU and writes the model to `private_output` (default: <output stem>_private next to
+    it), which runs elsewhere and connects to the proxy's host `endpoint` (default: 127.0.0.1)."""
+    if (endpoint or private_output) and not distributed:
+        raise InterfaceError("--endpoint and --private-output only apply with --distributed")
     if vendor and compiler:
         raise InterfaceError("--vendor and --compile exclude each other: a compiled FMU already contains its packages")
     if (platforms or python_versions) and not vendor:
@@ -240,6 +289,13 @@ def build(target, output, model_name=None, author=None, output_format="fmu", cal
         raise FileExistsError(f"{output} is a directory; cannot write an .fmu archive there")
     if output_format == "folder" and output.is_file():
         raise FileExistsError(f"{output} is a file; cannot write a folder there")
+    if distributed:
+        endpoint = endpoint or "127.0.0.1"
+        private_output = Path(private_output) if private_output else output.with_name(output.stem + "_private")
+        if private_output.resolve() == output.resolve():
+            raise FileExistsError(f"{private_output} is the proxy FMU's path; give --private-output another one")
+        if private_output.is_file():
+            raise FileExistsError(f"{private_output} is a file; cannot write the private folder there")
 
     composite_path = is_composite(target)
     if composite_path:
@@ -255,15 +311,19 @@ def build(target, output, model_name=None, author=None, output_format="fmu", cal
     if version not in ADAPTERS:
         raise InterfaceError(f"unknown FMI version {version!r}, expected one of {sorted(ADAPTERS)}")
     requirements = list(dict.fromkeys(r for c in configs.values() for r in c.requirements))
+    backend_requirements = BACKEND_REQUIREMENTS + (DISTRIBUTED_REQUIREMENTS if distributed else [])
 
     with tempfile.TemporaryDirectory() as tmp:
-        fmu_dir = Path(tmp) / "fmu"
-        generate_boilerplate(version, fmu_dir)
-        resources = fmu_dir / "resources"
+        if distributed:   # the proxy is the FMU; the private folder takes the place of its resources/
+            fmu_dir, resources = generate_distributed_boilerplate(version, Path(tmp) / "unifmu", endpoint)
+        else:
+            fmu_dir = Path(tmp) / "fmu"
+            generate_boilerplate(version, fmu_dir)
+            resources = fmu_dir / "resources"
         shutil.copy2(ADAPTERS[version], resources / "model.py")
         shutil.copy2(RUNTIME, resources / "fmugen_runtime.py")
         (resources / "requirements.txt").write_text(
-            "# UniFMU backend\n" + "\n".join(BACKEND_REQUIREMENTS) + "\n"
+            "# UniFMU backend\n" + "\n".join(backend_requirements) + "\n"
             + ("# model requirements\n" + "\n".join(requirements) + "\n" if requirements else "")
         )
         if composite_path:
@@ -285,11 +345,19 @@ def build(target, output, model_name=None, author=None, output_format="fmu", cal
                 print(f"note: bundled the Hugging Face model {repo_id!r}; the FMU loads it offline")
         if vendor:
             shutil.copy2(LAUNCHER, resources / "fmugen_launch.py")
-            vendor_wheels([*BACKEND_REQUIREMENTS, *requirements], resources / "wheels",
+            vendor_wheels([*backend_requirements, *requirements], resources / "wheels",
                           platforms, python_versions)
         if compiler:
             compile_fmu(compiler, resources, interface, Path(tmp) / "compile", requirements)
-        _write_launch_toml(resources, "vendor" if vendor else "compile" if compiler else None)
+        mode = "vendor" if vendor else "compile" if compiler else None
+        if distributed:   # the proxy keeps UniFMU's launch.toml: location = "Remote"
+            _write_private_readme(resources, interface["model_name"], endpoint, mode)
+            missing = [r for r in DISTRIBUTED_REQUIREMENTS if not importlib.util.find_spec(r)]
+            if missing and not mode:
+                print(f"note: the private side's main.py imports {', '.join(missing)}, which this environment "
+                      "lacks: pip install fmugen[distributed] where it runs")
+        else:
+            _write_launch_toml(resources, mode)
 
         stamp_guid(fmu_dir)
 
@@ -301,6 +369,11 @@ def build(target, output, model_name=None, author=None, output_format="fmu", cal
             if output.exists():
                 shutil.rmtree(output)
             shutil.copytree(fmu_dir, output, ignore=IGNORE)
+        if distributed:
+            if private_output.exists():
+                shutil.rmtree(private_output)
+            shutil.copytree(resources, private_output, ignore=IGNORE)
+            interface = {**interface, "private_output": private_output, "private_start": private_start_command(mode)}
 
     return output, interface
 
@@ -456,6 +529,13 @@ def main(argv=None):
     b.add_argument("--capture-output", action="store_true",
                    help="send what the model prints (stdout/stderr) to the importer's log instead of the "
                         "console; use it when the model prints more than a few KB, which hangs UniFMU 0.14")
+    b.add_argument("--distributed", action="store_true",
+                   help="make the FMU a proxy and write the model to a separate folder (--private-output) "
+                        "that runs on another host or container and connects to the proxy over TCP")
+    b.add_argument("--endpoint", metavar="IP",
+                   help="with --distributed: IP address of the host running the proxy FMU (default: 127.0.0.1)")
+    b.add_argument("--private-output", metavar="PATH",
+                   help="with --distributed: the private folder (default: <output stem>_private next to -o)")
 
     args = parser.parse_args(argv)
     try:
@@ -469,7 +549,7 @@ def main(argv=None):
         output, interface = build(args.model, args.output, args.name, args.author,
                                   args.format, args.call, args.fmi, args.vendor, args.platform,
                                   args.python_version, args.compile, args.capture_output, args.probe,
-                                  args.hf_weights)
+                                  args.hf_weights, args.distributed, args.endpoint, args.private_output)
     except (FileExistsError, InterfaceError) as e:
         parser.exit(2, f"fmugen: error: {e}\n")
 
@@ -481,6 +561,9 @@ def main(argv=None):
     if interface.get("clocks"):
         summary += f", {len(interface['clocks'])} clocks"
     print(f"Built {output.resolve()} (FMI {interface['fmi_version']}.0; {summary})")
+    if interface.get("private_output"):
+        print(f"Wrote its private side to {interface['private_output'].resolve()}; when the simulation logs "
+              f"the proxy's port, run there: {interface['private_start']}")
 
 
 if __name__ == "__main__":

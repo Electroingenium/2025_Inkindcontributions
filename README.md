@@ -24,6 +24,7 @@ By default the FMU runs your model with the Python of that environment, so it wo
 
 - `--vendor` puts the packages inside the FMU as wheels. The target needs Python; the FMU installs them offline on its first run.
 - `--compile pyinstaller` or `--compile nuitka` freezes the model, its packages and Python into an executable. The target needs nothing, and the FMU contains no source code, but it only runs on the OS it was built on.
+- `--distributed` makes the FMU a proxy, and writes the model to a separate folder that runs on another host or container and connects to the proxy over TCP.
 
 See [docs/packaging.md](docs/packaging.md#fmus-for-other-machines).
 
@@ -139,7 +140,7 @@ See [docs/fmi.md](docs/fmi.md) for what each FMI call does, function by function
 
 ```
 fmugen init MODEL [-o fmugen.toml] [--call METHOD] [--fmi {2,3}] [--start NAME=VALUE ...] [--setup CALL ...] [--kind function] [--create CLASSMETHOD] [--probe] [--convert NAME=module:function ...] [--force]
-fmugen build MODEL -o OUTPUT [--fmi {2,3}] [--format fmu|folder] [--name NAME] [--author AUTHOR] [--call METHOD] [--probe] [--vendor [--platform TAG] [--python-version X.Y] | --compile {pyinstaller,nuitka}] [--hf-weights | --no-hf-weights] [--capture-output]
+fmugen build MODEL -o OUTPUT [--fmi {2,3}] [--format fmu|folder] [--name NAME] [--author AUTHOR] [--call METHOD] [--probe] [--vendor [--platform TAG] [--python-version X.Y] | --compile {pyinstaller,nuitka}] [--hf-weights | --no-hf-weights] [--capture-output] [--distributed [--endpoint IP] [--private-output PATH]]
 ```
 
 `MODEL` can be any of these:
