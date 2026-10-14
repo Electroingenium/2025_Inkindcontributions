@@ -242,4 +242,4 @@ fmugen build path/to/fmugen.toml -o out/friction.fmu
 
 Add `--fmi 3` to `init` or `build` for FMI 3.
 
-Run these from an environment with fmugen and `fluids` installed (`pip install fmugen fluids`). The FMU runs with that environment (see [packaging.md](packaging.md#the-fmus-python-environment)).
+Run these from an environment with fmugen and `fluids` installed (`pip install path/to/2025_Inkindcontributions fluids`; fmugen is not on PyPI yet). The FMU runs with that environment (see [packaging.md](packaging.md#the-fmus-python-environment)).
