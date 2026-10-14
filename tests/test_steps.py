@@ -84,6 +84,22 @@ def test_discard_on_must_name_exception_classes(tmp_path, make_fmu):
         make_fmu(tmp_path)
 
 
+def test_discard_on_needs_the_fmu_state(tmp_path, make_fmu):
+    write(tmp_path, "m.py", "class M:\n    def step(self, x=1.0):\n        return x\n", '''
+        [model]
+        entry = "m.py:M"
+        call = "step"
+        save_state = false
+        discard_on = ["builtins:ValueError"]
+        [inputs]
+        x = {}
+        [outputs]
+        y = { from = "return" }
+    ''')
+    with pytest.raises(InterfaceError, match="discard_on needs the FMU state"):
+        make_fmu(tmp_path)
+
+
 def test_time_sources_start_stop_and_tolerance(tmp_path, make_fmu, adapter):
     write(tmp_path, "m.py", '''
         def f(t0, t1, rtol=None):
@@ -326,7 +342,6 @@ def test_fmi2_takes_wider_types_and_checks_ranges(tmp_path, make_fmu, capsys):
             make_fmu(tmp_path)
 
 
-def test_description_is_the_first_sentence_of_the_docstring():
-    assert summary("Compute the balance. Uses SI units.\n\nMore text.") == "Compute the balance."
-    assert summary("A docstring that\nspans lines\n\nParameters") == "A docstring that spans lines"
-    assert len(summary("x" * 500)) == 200
+def test_description_is_the_first_line_of_the_docstring():
+    assert summary("Solve e.g. the heat equation. Uses SI units.\nMore.") == "Solve e.g. the heat equation. Uses SI units."
+    assert len(summary("x" * 500)) == 200 and summary("") == ""

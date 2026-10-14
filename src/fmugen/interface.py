@@ -99,7 +99,7 @@ def infer_config(target, call=None, config_dir=None, fmi_version=None, starts=No
     default; `setup` (list of "module:function(args)" / "method") is run before the probe.
     `create` names a classmethod that builds the object (e.g. "from_pretrained").
     `probe`: also call the model once (setup, construction, one step); otherwise it is never called.
-    A number is the probe's time limit in seconds (True: PROBE_TIMEOUT).
+    A number is the probe's time limit in seconds (fmugen exits when it passes); True: no limit.
     `converts` ({argument: "module:function" or "numpy"}) sets how arguments are passed in.
 
     The model is imported (and probed) in config_dir, as it will run inside the FMU with
@@ -115,14 +115,10 @@ def infer_config(target, call=None, config_dir=None, fmi_version=None, starts=No
     if path:
         target = f"{path.resolve()}" + (f":{name}" if name else "")
     with contextlib.chdir(config_dir):
-        if not probe:
+        if probe is True or not probe:
             return _infer_config(target, call, config_dir, fmi_version, starts, setup, kind, create, probe, converts)
-        timeout = PROBE_TIMEOUT if probe is True else float(probe)
-        return _with_timeout(timeout, _infer_config, target, call, config_dir, fmi_version, starts, setup, kind,
+        return _with_timeout(float(probe), _infer_config, target, call, config_dir, fmi_version, starts, setup, kind,
                              create, True, converts)
-
-
-PROBE_TIMEOUT = 600.0   # seconds; a model that downloads weights on first use needs a while
 
 
 def _with_timeout(timeout, fn, *args):

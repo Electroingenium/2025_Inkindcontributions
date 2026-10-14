@@ -113,8 +113,8 @@ class Engine:
             self.global_starts = copy.deepcopy(self._read_globals())
             # [model] discard_on: exceptions and warnings that make doStep return discard (the step is undone)
             self.discard_on = tuple(resolve_reference(ref) for ref in self.interface.get("discard_on", []))
-        if self.interface.get("integrate"):   # a failed solve rejects the step
-            self.discard_on += (StepRejected,)
+        if self.interface.get("integrate") and self.interface.get("save_state", True) is not False:
+            self.discard_on += (StepRejected,)   # a failed solve rejects the step (undone from the saved state)
         self._loop = None   # the event loop of an async model, kept for the whole run
         self.is_class = self.interface["entry"]["kind"] == "class"
         self.reset()
@@ -126,7 +126,7 @@ class Engine:
         method = self.interface["entry"].get("terminate")
         if method and getattr(self, "obj", None) is not None and self.mode != "terminated":
             # release what the model holds (serial ports, files) now, not when it is garbage collected
-            self.run("terminate (reset)", lambda: self._await(getattr(self.obj, method)()))
+            self.run("terminate (reset)", lambda: self._invoke(getattr(self.obj, method)))
         if getattr(self, "global_starts", None):
             self._write_globals(copy.deepcopy(self.global_starts))
         if getattr(self, "constants", None) is not None:   # constants the model may have changed in place
@@ -172,8 +172,8 @@ class Engine:
                 kwargs = keyword_constants(self.constants)
                 kwargs.update(self._bound("init"))
                 create = self.interface["entry"].get("create")
-                self.obj = self._await((getattr(self.entry, create) if create else self.entry)(
-                    *self._positional(kind="initpos"), **kwargs))
+                self.obj = self._invoke(getattr(self.entry, create) if create else self.entry,
+                                        *self._positional(kind="initpos"), **kwargs)
                 self._run_setup(after_construction=True)
                 self._apply_attributes(clock=None)
                 for name in self.clocks:
@@ -235,7 +235,7 @@ class Engine:
         method = self.interface["entry"].get("terminate")
         status = Status.ok
         if method and self.obj is not None:
-            status = self.run("terminate", lambda: self._await(getattr(self.obj, method)()))
+            status = self.run("terminate", lambda: self._invoke(getattr(self.obj, method)))
         self.mode = "terminated"
         return status
 
@@ -621,14 +621,15 @@ class Engine:
         self.log_categories = set(categories) or None
         return Status.ok
 
-    def _await(self, value):
-        """The result of an async model's coroutine (async def step), run on one event loop kept for
-        the whole run, so objects bound to that loop keep working; any other value as it is."""
-        if not inspect.isawaitable(value):
-            return value
+    def _invoke(self, fn, *args, **kwargs):
+        """fn(*args, **kwargs). An async def (a step method, classmethod factory or terminate) is run to
+        completion on one event loop kept for the whole run, so objects bound to that loop keep working;
+        what other functions return is never awaited, even when it could be (a Future)."""
+        if not inspect.iscoroutinefunction(fn):
+            return fn(*args, **kwargs)
         if self._loop is None:
             self._loop = asyncio.new_event_loop()
-        return self._loop.run_until_complete(_as_coroutine(value))
+        return self._loop.run_until_complete(fn(*args, **kwargs))
 
     @contextlib.contextmanager
     def _in_model_dir(self):
@@ -845,7 +846,7 @@ class Engine:
                 if arg in epochs:   # a date-time: the epoch plus the FMU time in seconds
                     kwargs[arg] = datetime.datetime.fromisoformat(epochs[arg]) + datetime.timedelta(seconds=kwargs[arg])
         self._apply_attributes(clock=clock)
-        return self._await(self._target(clock)(*self._positional(clock), **kwargs))
+        return self._invoke(self._target(clock), *self._positional(clock), **kwargs)
 
     def _integrate(self, time, step_size):
         """[model] integrate: advance the states from `time` over the step, with the model as the
@@ -1249,9 +1250,6 @@ class _ForwardingHandler(logging.Handler):
 
 
 # ================= helpers =================
-
-async def _as_coroutine(awaitable):
-    return await awaitable
 
 
 def _clock_of(var):

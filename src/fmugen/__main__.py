@@ -584,7 +584,7 @@ def main(argv=None):
 
     for p in (i, b):
         p.add_argument("--probe-timeout", type=float, metavar="SECONDS",
-                       help="with --probe: stop if the model's probe call takes longer (default: 600)")
+                       help="with --probe: exit if the model's probe call takes longer (default: no limit)")
         p.add_argument("--debug", action="store_true",
                        help="show the full traceback of an unexpected error (default: a one-line message)")
     args = parser.parse_args(argv)

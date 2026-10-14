@@ -316,6 +316,9 @@ def normalize(config, entry_obj, module_name, sys_path, model_name=None, author=
                              "a factory that returns an object with a step method works ([model] call)")
     integrate = _integrate(model, step_call)
     discard_on = _discard_on(model.get("discard_on", []))
+    if discard_on and _save_state(model) is False:
+        raise InterfaceError("[model] discard_on needs the FMU state (save_state not false): a rejected step is "
+                             "undone by restoring the state saved before it")
 
     def check_arg(sig, arg, what):
         if sig is not None and not _accepts(sig, arg):
@@ -503,12 +506,9 @@ def normalize(config, entry_obj, module_name, sys_path, model_name=None, author=
 
 
 def summary(doc, limit=200):
-    """The first sentence of a docstring's first paragraph, at most `limit` characters."""
-    paragraph = " ".join(doc.strip().split("\n\n")[0].split())
-    for end in (". ", "? ", "! "):
-        if end in paragraph:
-            paragraph = paragraph[:paragraph.index(end) + 1]
-    return paragraph if len(paragraph) <= limit else paragraph[:limit - 1].rstrip() + "…"
+    """The first line of a docstring, at most `limit` characters."""
+    line = doc.strip().splitlines()[0].strip() if doc.strip() else ""
+    return line if len(line) <= limit else line[:limit - 1].rstrip() + "…"
 
 
 def _integrate(model, step_call):

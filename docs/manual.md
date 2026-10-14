@@ -110,7 +110,7 @@ fmugen init MODEL [-o OUTPUT] [--call METHOD] [--fmi {2,3}]
 | `--probe` | off | Also **call the model once**: run the setup calls, build the object, call the step with the start values (retrying array inputs as numpy arrays, then tensors, and number inputs as one-element numpy arrays, `convert = "numpy:atleast_1d"`, for libraries that take only arrays), and try to pickle the object. Finds what the code doesn't show: array sizes, exact types, results built at runtime, unannotated properties, and `save_state`. Results the code shows but the probe didn't reach are added too. Without `--probe`, the model is never called. |
 | `--convert NAME=module:function` | none | How an argument is passed to the model, e.g. `x=torch:tensor`, `x=numpy` for a numpy array, or `x=pint` for a pint quantity (needs a `unit` on the variable); writes `convert` / `numpy`. Repeatable. Not needed when the argument is annotated (`torch.Tensor`, `np.ndarray`). |
 | `--force` | off | Overwrite an existing config. |
-| `--probe-timeout SECONDS` | `600` | With `--probe`: stop (exit code 2) if the probe hasn't finished by then, e.g. a model waiting for a device. The model's code can't be interrupted, so `fmugen` exits. |
+| `--probe-timeout SECONDS` | no limit | With `--probe`: stop (exit code 2) if the probe hasn't finished by then, e.g. a model waiting for a device. The model's code can't be interrupted, so `fmugen` exits. |
 | `--debug` | off | Show the full traceback of an unexpected error instead of a one-line message. |
 
 What `init` infers from the code, what only `--probe` finds, where `--start` values go, and what to check afterwards: [models.md](models.md#what-fmugen-init-infers). [init-tutorial.md](init-tutorial.md) walks through a generated config.

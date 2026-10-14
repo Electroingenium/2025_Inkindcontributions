@@ -57,6 +57,9 @@ def test_unit_parsing():
     assert base_unit("kg.m-3") == {"kg": "1", "m": "-3"}
     assert base_unit("degC") == {"K": "1", "offset": "273.15"}
     assert base_unit("degC/s") is None and base_unit("%") is None
+    for ambiguous in ("C", "F", "S", "T"):                   # Celsius or coulomb? Fahrenheit or farad?
+        assert base_unit(ambiguous) is None
+    assert base_unit("uF") == {"kg": "-1", "m": "-2", "s": "4", "A": "2", "factor": "1e-06"}
     assert display_unit("Pa", "bar") == (1e-05, 0.0)
     assert display_unit("m", "s") is None                       # different quantities
 

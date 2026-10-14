@@ -34,11 +34,18 @@ PREFIXES = {"G": 1e9, "M": 1e6, "k": 1e3, "c": 1e-2, "m": 1e-3, "u": 1e-6, "µ":
 # units that take no prefix (an offset, or a prefix that would read as another unit)
 NO_PREFIX = {"degC", "degF", "deg", "°C", "°", "min", "h", "d", "rpm", "K"}
 
+# written for other units as often as for these: "C" for Celsius (coulomb), "F" for Fahrenheit
+# (farad), "S" for seconds (siemens), "T" for temperature (tesla). On their own they get no
+# BaseUnit; with a prefix ("uF", "mS") they are unambiguous.
+AMBIGUOUS = {"C", "F", "S", "T"}
+
 _FACTOR = re.compile(r"^([^\d^+-]+)\^?([+-]?\d+)?$")
 
 
 def _symbol(text):
     """(exponents, factor, offset) of one symbol, possibly with a prefix: 'km', 'kW', 'mbar'."""
+    if text in AMBIGUOUS:
+        return None
     if text in UNITS:
         return UNITS[text]
     prefix, rest = text[:1], text[1:]
