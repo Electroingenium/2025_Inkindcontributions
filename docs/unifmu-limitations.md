@@ -1,6 +1,6 @@
 # UniFMU: bugs and limitations
 
-Problems that come from [UniFMU](https://github.com/INTO-CPS-Association/unifmu) **0.14.0** (the version fmugen requires), not from fmugen. Each entry says where it was found, its effect on fmugen FMUs, and the workaround, if any. Sources: fmugen's own testing ([tested-models.md](tested-models.md), [tested-models-round2.md](tested-models-round2.md), [tested-models-rerun.md](tested-models-rerun.md), [AUDIT.md](../AUDIT.md)) and the [UniFMU README](https://github.com/INTO-CPS-Association/unifmu/blob/master/README.md).
+Problems that come from [UniFMU](https://github.com/INTO-CPS-Association/unifmu) **0.14.0** (the version fmugen requires), not from fmugen. Each entry says where it was found, its effect on fmugen FMUs, and the workaround, if any. Sources: fmugen's own testing ([tested-models.md](tested-models.md), [tested-models-round2.md](tested-models-round2.md), [tested-models-rerun.md](tested-models-rerun.md), [FINDINGS.md](../FINDINGS.md)) and the [UniFMU README](https://github.com/INTO-CPS-Association/unifmu/blob/master/README.md).
 
 | # | Problem | Kind | Workaround in fmugen |
 |---|---|---|---|
@@ -35,7 +35,7 @@ When the FMU's Python process writes more than about 4 KB in total to stdout/std
 
 **The panic is a consequence, not the cause.** This entry first said UniFMU panics here (`zeromq-0.4.1/src/rep.rs:168:40: not yet implemented`). The recheck didn't show a panic while the backend was blocked. The panic appeared, followed by the importer aborting (exit code `0xC0000409`), when the blocked backend was then killed: that is [§13](#13-a-backend-that-exits-during-a-call-can-abort-the-importer). So a hang that ends with the backend being killed, or dying, can look like a panic.
 
-Found with Chronos-Bolt ([tested-models.md](tested-models.md), [AUDIT.md §5.7](../AUDIT.md)).
+Found with Chronos-Bolt ([tested-models.md](tested-models.md), [FINDINGS.md §2.3](../FINDINGS.md#23-unifmu-problems)).
 
 **Workaround:** `fmugen build --capture-output` redirects file descriptors 1 and 2 inside the backend to a temporary file, and sends the text to the importer's log as `[output]` messages after each call. Not reported upstream yet.
 
@@ -73,7 +73,7 @@ If an importer calls a function the Python backend doesn't implement (anything m
 
 The Python backend implements Co-Simulation only (UniFMU README, "Supported Features"):
 
-- **No Model Exchange** (FMI 2 or 3), so an ODE model can't be integrated by the importer's own solver. This is the capability users will ask for most ([AUDIT.md §5.6, §8](../AUDIT.md)).
+- **No Model Exchange** (FMI 2 or 3), so an ODE model can't be integrated by the importer's own solver. This is the capability users will ask for most ([FINDINGS.md §2.4](../FINDINGS.md#24-model-coverage)).
 - **No Scheduled Execution** (FMI 3).
 - **No directional or adjoint derivatives**, no input/output derivatives (`fmi2SetRealInputDerivatives`, `fmi2GetRealOutputDerivatives`, `fmi3GetOutputDerivatives`).
 - **No asynchronous steps or status queries**: `fmi2CancelStep`, `fmi2Get*Status`.
@@ -84,13 +84,13 @@ The Python backend implements Co-Simulation only (UniFMU README, "Supported Feat
 
 ## 7. Exact `protobuf==5.27.3` pin
 
-The backend's generated `*_pb2.py` files require exactly `protobuf==5.27.3` (plus `pyzmq`). Since the FMU runs with the model's own environment, this pin lands there and can conflict with packages that pin protobuf differently (TensorFlow, grpcio, …). Regenerating the schemas, or testing a range like `protobuf>=5.27,<6`, would loosen it ([AUDIT.md](../AUDIT.md)).
+The backend's generated `*_pb2.py` files require exactly `protobuf==5.27.3` (plus `pyzmq`). Since the FMU runs with the model's own environment, this pin lands there and can conflict with packages that pin protobuf differently (TensorFlow, grpcio, …). Regenerating the schemas, or testing a range like `protobuf>=5.27,<6`, would loosen it ([FINDINGS.md §2.2](../FINDINGS.md#22-portability)).
 
 ## 8. The FMU needs a Python interpreter
 
 UniFMU starts the backend with the command in `launch.toml`, so a Python FMU needs an interpreter and its packages on the target machine (`needsExecutionTool = true`). The README suggests bundling an interpreter yourself. fmugen offers `build --vendor` (wheels in the FMU, still needs Python) and `build --compile pyinstaller|nuitka` (no Python needed, but only runs on the OS it was built on). See [packaging.md](packaging.md).
 
-The backend also uses `match`, so it needs **Python 3.10 or newer** ([AUDIT.md](../AUDIT.md)).
+The backend also uses `match`, so it needs **Python 3.10 or newer** ([FINDINGS.md §2.2](../FINDINGS.md#22-portability)).
 
 ## 9. Reserved module names
 
