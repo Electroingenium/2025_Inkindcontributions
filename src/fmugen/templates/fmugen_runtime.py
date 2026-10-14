@@ -1314,12 +1314,16 @@ def plain_number(value, unit=None):
 
 
 def get_path(obj, path):
-    """Follow a dotted path through attributes, mapping keys and sequence indexes: "state.T", "rewards.speed", "4.x"."""
+    """Follow a dotted path through attributes, mapping keys and sequence indexes: "state.T", "rewards.speed", "4.x",
+    "X.value.-1" (the last element)."""
     for part in path.split("."):
         if isinstance(obj, Mapping) and (part in obj or not hasattr(obj, part)) or _labelled(obj) and part in obj:   # "options.update": the method
             obj = obj[part]
-        elif part.isdigit() and isinstance(obj, (tuple, list)):
-            obj = obj[int(part)]
+        elif part.lstrip("-").isdigit() and part.count("-") <= 1 and isinstance(obj, (tuple, list)):
+            try:
+                obj = obj[int(part)]
+            except TypeError as e:   # a list-like wrapping a single value (a GEKKO variable before its first solve)
+                raise IndexError(f"{part}: {e}") from e
         else:
             obj = getattr(obj, part)
     return obj

@@ -86,6 +86,21 @@ def test_ambiguous_module_needs_a_name(tmp_path):
     assert data["model"]["entry"] == "two.py:b"
 
 
+def test_model_that_fails_when_imported(tmp_path):
+    # a script that solves at module level: its error, and where, not a traceback through fmugen
+    (tmp_path / "helper.py").write_text("def solve():\n    raise FileNotFoundError('options.json')\n")
+    (tmp_path / "script.py").write_text("import helper\n\ndef f(x=1.0):\n    return x\n\nhelper.solve()\n")
+    message = (r"importing .*script\.py failed: FileNotFoundError: options\.json "
+               r"\(at script\.py:6, in helper\.py:2\); importing a module runs its top-level code")
+    with pytest.raises(InterfaceError, match=message):
+        infer(tmp_path / "script.py", probe=False)
+    (tmp_path / "fmugen.toml").write_text('[model]\nentry = "script.py:f"\nsources = ["helper.py"]\n\n'
+                                         '[outputs]\ny = { from = "return" }\n')
+    from fmugen.__main__ import build
+    with pytest.raises(InterfaceError, match=r"importing script\.py:f failed: FileNotFoundError: options\.json"):
+        build(tmp_path, tmp_path / "script.fmu")
+
+
 def test_unknown_config_keys_are_rejected(tmp_path):
     with pytest.raises(InterfaceError, match="unknown key"):
         Config({"model": {"entry": "m.py:f"}, "inputs": {"x": {"strat": 1.0}}}, tmp_path)
@@ -215,6 +230,34 @@ def test_pint_outputs_get_their_unit(tmp_path):
     data, _ = infer(tmp_path / "q.py")
     assert data["outputs"]["v"]["unit"] == "m/s"
     assert "unit" not in data["outputs"]["n"]
+
+
+def test_gekko_results_kept_on_the_object_are_outputs(tmp_path):
+    pytest.importorskip("gekko")
+    (tmp_path / "tank.py").write_text(textwrap.dedent("""
+        import numpy as np
+        from gekko import GEKKO
+
+        class Tank:
+            def __init__(self, k=0.5):
+                self.m = GEKKO(remote=False)
+                self.m.time = np.linspace(0, 1, 11)
+                self.k = self.m.Const(k)
+                self.inflow = self.m.Param(1.0)
+                self.h = self.m.Var(1.0)
+                self.out = self.m.Intermediate(self.k * self.h)
+                self.levels = {"main": self.h}
+                self.m.Equation(self.h.dt() == self.inflow - self.out)
+                self.m.options.IMODE = 4
+
+            def solve(self):
+                self.m.solve(disp=False)
+    """))
+    data, comments = infer(f"{tmp_path / 'tank.py'}:Tank", call="solve")
+    # Var and Intermediate are results; Const and Param are not; a dict of them is read by key
+    assert data["outputs"] == {"h": {"from": "attr:h.value.-1"}, "out": {"from": "attr:out.value.-1"},
+                               "levels.main": {"from": "attr:levels.main.value.-1"}}
+    assert "end of the time horizon" in comments[("outputs", "h")]
 
 
 NESTED = """
@@ -386,6 +429,11 @@ def test_names_build_would_reject_are_renamed(tmp_path):
     # the step method's units, beside the constructor's
     data, _ = infer(f"{tmp_path / 'names.py'}:Inventory", call="decay", starts={"decay_time": 1.0, "units": "y"})
     assert data["parameters"]["units"] == {"start": "Bq"}
+    assert data["inputs"]["decay_units"] == {"start": "y", "to": "arg:units"}
+    # both copies: the method's by its variable name, then the plain name is the constructor's
+    data, _ = infer(f"{tmp_path / 'names.py'}:Inventory", call="decay",
+                    starts={"decay_time": 1.0, "units": "Ci", "decay_units": "y"})
+    assert data["parameters"]["units"] == {"start": "Ci"}
     assert data["inputs"]["decay_units"] == {"start": "y", "to": "arg:units"}
     # a descriptor default stands for its `default`; it isn't split into fields
     data, _ = infer(f"{tmp_path / 'names.py'}:Cosmology", call="age", starts={"H0": 70.0, "z": 1.0})

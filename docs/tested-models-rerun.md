@@ -50,7 +50,24 @@ Compiled with the final code: the 23 fixed models, plus 10 that already compiled
 
 **Backends left running after a failure (2026-10-13).** Both nashpy simulations (FMPy `simulate_fmu`, FMI 2) left their UniFMU backend pair (`main.py`, 2 processes) running after the failed step; the first, read through a pipe, hung until stopped. This is round 2's [backend outlives a failed FMU](tested-models-round2.md#the-backend-outlives-a-failed-fmu), and its cause is now known: FMPy's `simulate_fmu` raises without calling `freeInstance`. Driving the same FMU by hand and freeing it after the failed `doStep` removed the backend within 3 s, in FMI 2 and FMI 3. Not fmugen's: [fmpy-limitations.md §1](fmpy-limitations.md#1-simulate_fmu-doesnt-free-the-instance-after-an-fmu-error); UniFMU's part (its backend can't tell the importer has gone) is in [unifmu-limitations.md §2](unifmu-limitations.md#2-the-backend-keeps-running-after-an-fmu-error).
 
-Not checked: Nuitka (not installed here), and the other 33 models' compiled values against their uncompiled runs (only that they simulate).
+Not checked: the other 33 models' compiled values against their uncompiled runs (only that they simulate). Nuitka wasn't installed for this rerun. It was first tried on the GEKKO models, [below](#gekko-models-2026-10-13).
+
+## GEKKO models (2026-10-13)
+
+10 published GEKKO models went through the same four steps, with `--compile nuitka` instead of PyInstaller, at `da28d4e`: [tested-models-gekko.md](tested-models-gekko.md). 8 of 10 got a config, 7 built, 1 simulated correctly (the distillation Gym environment), and **0 of 6 Nuitka compiles built**.
+
+New fmugen problems found there:
+
+| Problem | Effect | Now |
+|---|---|---|
+| `--compile nuitka` passes `--include-package-data` for single-file modules (`pylab`, `jupyter`, `ipython_pygments_lexers`, `six`) | Nuitka stops (`'pylab' is a module not a package, cannot have package data`): every model with matplotlib in its dependency tree fails to compile. The PyInstaller path isn't affected. | **Fixed**: package options only for packages. `examples/simple_pid` compiles with Nuitka and simulates (12 min); the GEKKO models weren't compiled with Nuitka (30+ min each). With PyInstaller, a GEKKO model (CFTOC) compiles in 2 min (43 MB) and gives the uncompiled values. |
+| Results kept in GEKKO variables on the object (`self.X.value`) | `init --probe` finds no outputs (bioreactor, CGE). | **Fixed**: outputs `from = "attr:X.value.-1"` (the end of the time horizon); dotted paths take negative indexes. |
+| A name both the constructor and the step method take | `--start` could only reach the step method's | **Fixed**: `--start <method>_NAME` for the method's, then `NAME` is the constructor's. |
+| An exception while importing a script model | shown as a raw traceback, not a `fmugen: error`. | **Fixed**: a `fmugen: error` naming the model's line, in `init` and `build`. |
+| A model file named `model.py` clashes with UniFMU's backend module | `build` refuses it and asks to rename the file; `init` doesn't warn. | Intended. |
+| FMI 2 step errors | not shown without debug logging; with it, Pyomo's log lines crash FMPy (UniFMU [§12](unifmu-limitations.md#12-fmi-2-log-messages-are-used-as-printf-format-strings)). | Open. |
+
+The other 7 failures were the models' own: two module-level scripts with nothing to call, a crash of GEKKO's local solver (ethanol bioreactor, also when run directly), a library that never imports GEKKO, inputs no FMU can give (an environment object, pandas DataFrames), a data file missing from the repository and a solver binary (COIN-OR couenne) that isn't installed.
 
 ## Summary (first run)
 

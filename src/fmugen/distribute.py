@@ -174,8 +174,7 @@ def compile_fmu(compiler, resources, interface, work, requirements=()):
                f"--output-dir={work}", f"--output-filename={EXE_NAME}"]
         cmd += [f"--include-module={m}" for m in modules]
         cmd += [f"--include-data-files={src}={Path(dest, src.name).as_posix()}" for src, dest in data]
-        cmd += [f"--include-package-data={p}" for p in packages]
-        cmd += [f"--include-package={p}" for p in direct]
+        cmd += _nuitka_package_args(packages, direct)
         cmd += [f"--include-module={p}" for p in imports]
         cmd += ["--include-module=numpy.core.multiarray"] if "numpy" in packages else []
         cmd += [f"--include-data-dir={src}={dest}" for src, dest in _plugin_dirs(direct)]
@@ -186,7 +185,12 @@ def compile_fmu(compiler, resources, interface, work, requirements=()):
 
     result = subprocess.run(cmd, capture_output=True, text=True, cwd=work, env=env)
     if result.returncode != 0 or not built.is_dir():
-        raise InterfaceError(f"--compile {compiler} failed:\n{result.stdout[-4000:]}{result.stderr[-4000:]}")
+        # warnings (Nuitka writes hundreds about duplicate data files) would push the error out of the tail
+        lines = [line for line in (result.stdout + result.stderr).splitlines()
+                 if line.strip() and ":WARNING:" not in line and not line.startswith(("WARNING:", "INFO:"))]
+        why = (f"exit status {result.returncode}" if result.returncode != 0
+               else f"it exited normally, but {built} wasn't made")
+        raise InterfaceError(f"--compile {compiler} failed ({why}):\n" + "\n".join(lines)[-4000:])
 
     for item in resources.iterdir():
         if item.name == MODEL_DIR and interface.get("cwd"):
@@ -194,6 +198,26 @@ def compile_fmu(compiler, resources, interface, work, requirements=()):
         elif item.name not in KEEP_AFTER_COMPILE:
             shutil.rmtree(item) if item.is_dir() else item.unlink()
     shutil.move(str(built), str(resources / EXE_DIR))
+
+
+def _is_package(name):
+    """Whether the top-level import `name` is a package (a folder), not a single module (matplotlib's
+    pylab.py, an extension .pyd). find_spec doesn't import a top-level name. A module that sets
+    __path__ = [] (six, for six.moves) has no folder either."""
+    try:
+        spec = importlib.util.find_spec(name)
+    except (ImportError, ValueError):
+        return False
+    return spec is not None and bool(spec.submodule_search_locations)
+
+
+def _nuitka_package_args(packages, direct):
+    """Nuitka's options for collecting `packages` (data files) and `direct` (all submodules). Nuitka
+    refuses package options for a single module ("'pylab' is a module not a package"): a module has
+    no data files of its own, and is included as a module."""
+    args = [f"--include-package-data={p}" for p in packages if _is_package(p)]
+    args += [f"--include-package={p}" if _is_package(p) else f"--include-module={p}" for p in direct]
+    return args
 
 
 def _remove_code(folder):
