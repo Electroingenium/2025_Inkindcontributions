@@ -214,6 +214,7 @@ def _copy_sources(config, model_dir):
 
 def _prepare(config, resources, version, model_name, author, capture_output):
     """Copy a model's code into `resources`, import it and write its interface.json."""
+    config.check_module_names()
     resources.mkdir(parents=True, exist_ok=True)
     _copy_sources(config, resources / MODEL_DIR)
     module, sys_path = config.entry_import()
@@ -225,7 +226,8 @@ def _prepare(config, resources, version, model_name, author, capture_output):
         try:
             entry_obj = getattr(importlib.import_module(module), config.entry_name)
         except (ImportError, AttributeError) as e:
-            hint = " (install the model's requirements in the environment fmugen runs in)"                 if config.requirements else ""
+            hint = (" (install the model's requirements in the environment fmugen runs in)"
+                    if config.requirements else "")
             raise InterfaceError(f"cannot import {config.model['entry']}: {e!r}{hint}") from e
         except (Exception, SystemExit) as e:
             raise import_failure(config.model["entry"], e) from e
@@ -264,6 +266,29 @@ def _write_zip(fmu_dir, output):
                 info.external_attr = (0o100755 if executable else 0o100644) << 16
                 with open(file, "rb") as src, zipf.open(info, "w", force_zip64=True) as dst:
                     shutil.copyfileobj(src, dst)   # streamed: frozen FMUs have files of hundreds of MB
+
+
+def _replace(output, write):
+    """Call write(path) on a new path next to `output`, then put it in place of `output`: if writing
+    fails (disk full, a file an importer holds open), the previous build is left as it was."""
+    new = output.with_name(f".{output.name}.new")
+    old = output.with_name(f".{output.name}.old")
+    for leftover in (new, old):   # from a build that was interrupted
+        if leftover.is_dir():
+            shutil.rmtree(leftover)
+        else:
+            leftover.unlink(missing_ok=True)
+    try:
+        write(new)
+    except BaseException:
+        shutil.rmtree(new, ignore_errors=True) if new.is_dir() else new.unlink(missing_ok=True)
+        raise
+    if output.is_dir():   # a folder can't be replaced in one step: move the old one aside first
+        output.rename(old)
+        new.rename(output)
+        shutil.rmtree(old)
+    else:
+        os.replace(new, output)
 
 
 def build(target, output, model_name=None, author=None, output_format="fmu", call=None, fmi_version=None,
@@ -363,16 +388,12 @@ def build(target, output, model_name=None, author=None, output_format="fmu", cal
 
         output.parent.mkdir(parents=True, exist_ok=True)
         if output_format == "fmu":
-            output.unlink(missing_ok=True)
-            _write_zip(fmu_dir, output)
+            _replace(output, lambda path: _write_zip(fmu_dir, path))
         else:
-            if output.exists():
-                shutil.rmtree(output)
-            shutil.copytree(fmu_dir, output, ignore=IGNORE)
+            _replace(output, lambda path: shutil.copytree(fmu_dir, path, ignore=IGNORE))
         if distributed:
-            if private_output.exists():
-                shutil.rmtree(private_output)
-            shutil.copytree(resources, private_output, ignore=IGNORE)
+            private_output.parent.mkdir(parents=True, exist_ok=True)
+            _replace(private_output, lambda path: shutil.copytree(resources, path, ignore=IGNORE))
             interface = {**interface, "private_output": private_output, "private_start": private_start_command(mode)}
 
     return output, interface

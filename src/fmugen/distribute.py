@@ -30,6 +30,10 @@ EXE_NAME = "main"
 KEEP_AFTER_COMPILE = {"dist", "launch.toml", "hf_cache"}
 HF_CACHE = "hf_cache"   # Hugging Face models inside the FMU, in resources/
 HF_REPO_ID = re.compile(r"^[A-Za-z0-9][\w.-]*/[\w.-]+$")
+# "data/input.csv" is a file the model reads, not a Hugging Face repo, even when it doesn't exist at build time
+DATA_SUFFIXES = {".csv", ".tsv", ".txt", ".json", ".yaml", ".yml", ".toml", ".xml", ".dat", ".xlsx", ".xls",
+                 ".parquet", ".feather", ".npy", ".npz", ".h5", ".hdf5", ".nc", ".mat", ".pkl", ".pickle",
+                 ".zip", ".gz", ".png", ".jpg", ".wav", ".mos", ".epw", ".fmu"}
 
 
 # ---------------- --vendor ----------------
@@ -57,7 +61,14 @@ def hf_models(interface, base_dir):
                 continue
         elif isinstance(value, str):
             texts.append(value)
-    return sorted({t for t in texts if isinstance(t, str) and HF_REPO_ID.match(t) and not (Path(base_dir) / t).exists()})
+    # a relative file path also looks like "owner/name": the model opens those from the config's folder
+    # or, with [model] cwd, from that folder
+    folders = [Path(base_dir)]
+    if interface.get("cwd"):
+        folders.append(Path(base_dir).joinpath(*Path(interface["cwd"]).parts[1:]))   # without fmugen_model/
+    return sorted({t for t in texts if isinstance(t, str) and HF_REPO_ID.match(t)
+                   and Path(t).suffix.lower() not in DATA_SUFFIXES
+                   and not any((folder / t).exists() for folder in folders)})
 
 
 def bundle_hf_models(interface, base_dir, resources):

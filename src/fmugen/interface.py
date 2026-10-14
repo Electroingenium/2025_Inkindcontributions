@@ -30,7 +30,7 @@ from collections.abc import Mapping
 from pathlib import Path
 
 from fmugen import static
-from fmugen.config import InterfaceError
+from fmugen.config import InterfaceError, stdlib_clash
 
 # Argument names (lowercase, without "_") that take the simulation time, and which one: the time at the
 # start of the step, the step size, or the time at its end (simpy's Environment.run(until))
@@ -49,6 +49,8 @@ SCALARS = (bool, int, float, str)
 
 def load_module(model_path):
     model_path = Path(model_path).resolve()
+    if model_path.stem in sys.stdlib_module_names:   # registering it would replace the real module here too
+        raise InterfaceError(stdlib_clash([model_path.stem]))
     if str(model_path.parent) not in sys.path:
         sys.path.insert(0, str(model_path.parent))
     spec = importlib.util.spec_from_file_location(model_path.stem, model_path)
@@ -177,7 +179,8 @@ def _infer_config(target, call, config_dir, fmi_version, starts, setup, kind, cr
     unused = set(starts) - variables - set(comments.get(POSITIONAL_STARTS, {})) \
         - {n for table in ("constants", "call_constants") for n in data["model"].get(table, {})} \
         - {str(info.get("to", "")).partition(":")[2].partition("[")[0]
-           for sec in ("parameters", "inputs", "states") for info in data.get(sec, {}).values()}         - {str(info["to"]).partition(":")[2] for sec in ("parameters", "inputs", "states")
+           for sec in ("parameters", "inputs", "states") for info in data.get(sec, {}).values()} \
+        - {str(info["to"]).partition(":")[2] for sec in ("parameters", "inputs", "states")
            for info in data.get(sec, {}).values() if "." in str(info.get("to", ""))}
     errors = comments.get(START_ERRORS, {})
     explained = sorted(n for n in unused if n in errors)
@@ -339,7 +342,8 @@ def _add_globals(data, comments, entry_module, local_dir=None):
     top = entry_module.__name__.split(".")[0]
     def local(m):   # a module of the user's project (next to the config), not an installed one
         file = getattr(m, "__dict__", {}).get("__file__")
-        return local_dir is not None and file and Path(file).resolve().is_relative_to(local_dir)             and "site-packages" not in Path(file).parts
+        return (local_dir is not None and file and Path(file).resolve().is_relative_to(local_dir)
+                and "site-packages" not in Path(file).parts)
 
     def ours(m):
         return m.__name__ == top or m.__name__.startswith(top + ".") or local(m)

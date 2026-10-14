@@ -31,6 +31,9 @@ from collections.abc import Mapping
 from fractions import Fraction
 from pathlib import Path
 
+# The interface.json format this runtime reads; fmugen build writes the same number
+SPEC_VERSION = 1
+
 DEFAULT_VALUES = {
     "Real": 0.0, "Float32": 0.0, "Float64": 0.0,
     "Integer": 0, "Int8": 0, "UInt8": 0, "Int16": 0, "UInt16": 0,
@@ -585,7 +588,11 @@ class Engine:
                 stream.flush()
         self._output.seek(self._position)
         text = self._output.read().decode("utf-8", errors="replace")
-        self._position = self._output.tell()
+        # empty the file once read, so a long run that prints a lot doesn't fill the temp disk.
+        # Descriptors 1 and 2 share its offset (dup2), so they write from the start again.
+        self._output.seek(0)
+        self._output.truncate()
+        self._position = 0
         if text.strip() and self.logging_on:
             self.log(f"[output] {text.rstrip()}", Status.ok, self.info_category)
 
@@ -827,9 +834,18 @@ class Engine:
 def make_engine(resources_dir, log, info_category="logAll"):
     """The engine for an FMU: one model, or several connected ones ([composite])."""
     interface = json.loads((Path(resources_dir) / "interface.json").read_text())
+    check_spec_version(interface)
     if interface.get("composite"):
         return CompositeEngine(resources_dir, log, info_category)
     return Engine(resources_dir, log, info_category)
+
+
+def check_spec_version(interface):
+    """Refuse an interface.json written for another runtime (a part or file from another fmugen version)."""
+    found = interface.get("spec_version")
+    if found != SPEC_VERSION:
+        raise RuntimeError(f"interface.json has spec_version {found!r}, but this fmugen runtime reads version "
+                           f"{SPEC_VERSION}: rebuild the FMU with one fmugen version")
 
 
 class CompositeEngine:
@@ -844,6 +860,8 @@ class CompositeEngine:
         hf_cache = self.resources_dir / "hf_cache"
         if hf_cache.is_dir():   # Hugging Face models bundled by fmugen build, shared by the parts
             os.environ.update(HF_HUB_CACHE=str(hf_cache), HF_HUB_OFFLINE="1", TRANSFORMERS_OFFLINE="1")
+        for p in self.interface["parts"]:
+            check_spec_version(json.loads((self.resources_dir / p["dir"] / "interface.json").read_text()))
         self.parts = {p["name"]: Engine(self.resources_dir / p["dir"], log, info_category)
                       for p in self.interface["parts"]}
         self.variables = self.interface["variables"]
@@ -1471,7 +1489,13 @@ def _capture_output(enabled):
     return sink
 
 
+UINT64_MAX = 2**64 - 1
+
+
 def fraction(value):
-    """float -> (counter, resolution) for FMI 3 *Fraction functions."""
+    """float -> (counter, resolution) for FMI 3 *Fraction functions; both are uint64, so a value
+    that needs a larger resolution (1e-20) is rounded to the nearest fraction that fits."""
     f = Fraction(str(value))
+    if f.denominator > UINT64_MAX:
+        f = f.limit_denominator(UINT64_MAX)
     return f.numerator, f.denominator

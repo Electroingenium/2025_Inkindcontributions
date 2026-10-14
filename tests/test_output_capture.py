@@ -17,8 +17,12 @@ SIMULATE = textwrap.dedent("""
     logs = []
     result = simulate_fmu(sys.argv[1], stop_time=2, output=["y"],
                           logger=lambda *args: logs.append(args[-1]), debug_logging=True)
-    printed = [m for m in logs if (m.decode() if isinstance(m, bytes) else m).startswith("[output]")]
-    print("OK", result["y"][-1], len(printed))
+    printed = [m.decode() if isinstance(m, bytes) else m for m in logs]
+    printed = [m for m in printed if m.startswith("[output]")]
+    # each call's output once: the capture file is emptied after each read, and nothing is left from before
+    longest = max(len(m) for m in printed)
+    clean = all(set(m.removeprefix("[output] ")) <= set("pe\\r\\n") for m in printed)
+    print("OK", result["y"][-1], len(printed), longest, clean)
 """)
 
 
@@ -42,8 +46,9 @@ def test_large_console_output_reaches_the_log_instead_of_crashing(tmp_path):
     text = log.read_text(errors="replace")
     ok = [line for line in text.splitlines() if line.startswith("OK")]
     assert ok, "the FMU hung or failed:\n" + text[-2000:]
-    _, y, printed = ok[0].split()
-    assert float(y) == 2.0 and int(printed) > 0
+    _, y, printed, longest, clean = ok[0].split()
+    assert float(y) == 2.0 and int(printed) > 1
+    assert int(longest) < 2 * 20000 + 100 and clean == "True"   # one call's output, not a growing file
 
 
 def test_output_goes_to_the_console_by_default(tmp_path):

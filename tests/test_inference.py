@@ -609,3 +609,17 @@ def test_outputs_are_read_from_the_object_the_step_returns(tmp_path):
     data, _ = infer(f"{tmp_path / 'fluid.py'}:Fluid", call="with_state", starts={"temperature": 20.0})
     assert data["inputs"] == {"temperature": {"start": 20.0}}   # echoed back: not an output too
     assert data["outputs"] == {"density": {"from": "return:density"}}   # not the original object's raising ones
+
+
+def test_model_files_named_like_standard_library_modules_are_refused(tmp_path):
+    from fmugen.__main__ import build, init
+    from fmugen.config import InterfaceError
+    (tmp_path / "queue.py").write_text("def step(x: float = 1.0):\n    return {'y': x}\n")
+    with pytest.raises(InterfaceError, match="queue.*standard library"):
+        init(tmp_path / "queue.py")
+    # a helper next to the entry file, copied with sources
+    (tmp_path / "plant.py").write_text("from queue import step\n\ndef plant(x: float = 1.0):\n    return step(x)\n")
+    (tmp_path / "fmugen.toml").write_text('[model]\nentry = "plant.py:plant"\nsources = ["queue.py"]\n'
+                                          '[inputs]\nx = { start = 1.0 }\n[outputs]\ny = {}\n')
+    with pytest.raises(InterfaceError, match="queue.*standard library"):
+        build(tmp_path / "fmugen.toml", tmp_path / "out", output_format="folder")

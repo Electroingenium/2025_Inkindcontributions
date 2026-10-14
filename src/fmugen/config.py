@@ -14,8 +14,11 @@ FMI 3-only parts (arrays, structural parameters, clocks, events).
 import datetime
 import inspect
 import keyword
+import sys
 import tomllib
 from pathlib import Path, PurePosixPath
+
+from fmugen.templates.fmugen_runtime import SPEC_VERSION
 
 FMI_VERSIONS = (2, 3)
 FLOAT_TYPES = ("Real", "Float32", "Float64")
@@ -184,6 +187,36 @@ class Config:
                 f"({', '.join(sorted(RESERVED_MODULES))}); rename the file"
             )
         return module, sys_path
+
+    def local_modules(self):
+        """Top-level module names the model's own files are imported as: its entry file and the .py
+        files and packages of its sources, under each folder put on sys.path. Installed packages
+        aren't included."""
+        module, sys_path = self.entry_import()
+        names = {module.split(".")[0]} if self.entry_is_file else set()
+        files = []
+        for src, _ in self.source_files():
+            files += sorted(src.rglob("*.py")) if src.is_dir() else [src] if src.suffix == ".py" else []
+        for path in sys_path:
+            root = self.base_dir.joinpath(*PurePosixPath(path).relative_to(MODEL_DIR).parts)
+            for file in files:
+                if file.is_relative_to(root):
+                    rel = file.relative_to(root)
+                    names.add(rel.stem if len(rel.parts) == 1 else rel.parts[0])
+        return names
+
+    def check_module_names(self):
+        """Refuse model files named like a standard library module (json.py, logging.py, queue.py):
+        the FMU's backend has already imported the real one, so importing the model's name gives the
+        standard library's module, or the model's module replaces it for the backend."""
+        clashes = sorted(self.local_modules() & set(sys.stdlib_module_names))
+        if clashes:
+            raise InterfaceError(stdlib_clash(clashes))
+
+
+def stdlib_clash(names):
+    return (f"the model's module(s) {', '.join(names)} have the name of a Python standard library module, "
+            "which the FMU's backend also imports: rename the file(s)")
 
 
 def load_config(path):
@@ -405,7 +438,7 @@ def normalize(config, entry_obj, module_name, sys_path, model_name=None, author=
 
     doc = inspect.getdoc(entry_obj) or inspect.getdoc(inspect.getmodule(entry_obj)) or ""
     return {
-        "spec_version": 1,
+        "spec_version": SPEC_VERSION,
         "fmi_version": version,
         "model_name": model_name or model.get("name") or config.entry_name,
         "description": model.get("description", doc.strip().splitlines()[0] if doc.strip() else ""),

@@ -13,9 +13,10 @@ combines the parts' interfaces into the FMU's interface.
 """
 import keyword
 import tomllib
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 
-from fmugen.config import FMI_VERSIONS, INT_TYPES, MODEL_DIR, InterfaceError, element_count, load_config
+from fmugen.config import FMI_VERSIONS, INT_TYPES, InterfaceError, element_count, load_config
+from fmugen.templates.fmugen_runtime import SPEC_VERSION
 
 COMPOSITE_KEYS = {"name", "description", "author", "parts", "connections", "fmi_version"}
 TOP_KEYS = {"composite", "experiment"}
@@ -59,7 +60,7 @@ class Composite:
         self.connections = [_connection(text) for text in table.get("connections", [])]
         owners = {}
         for name, config in self.parts.items():
-            for module in _local_modules(config):
+            for module in config.local_modules():
                 owners.setdefault(module, []).append(name)
         clashes = {module: names for module, names in sorted(owners.items()) if len(names) > 1}
         if clashes:
@@ -67,24 +68,6 @@ class Composite:
             raise InterfaceError(f"[composite] parts have modules with the same name: {shown}. All parts run in "
                                  "one Python process, which imports a module name once, so one part would run "
                                  "the other's code: rename one of them")
-
-
-def _local_modules(config):
-    """Top-level module names a part's own files are imported as: its entry file and the .py files
-    and packages of its sources, under each folder the part puts on sys.path. Installed packages
-    aren't included: parts may share those."""
-    module, sys_path = config.entry_import()
-    names = {module.split(".")[0]} if config.entry_is_file else set()
-    files = []
-    for src, _ in config.source_files():
-        files += sorted(src.rglob("*.py")) if src.is_dir() else [src] if src.suffix == ".py" else []
-    for path in sys_path:
-        root = config.base_dir.joinpath(*PurePosixPath(path).relative_to(MODEL_DIR).parts)
-        for file in files:
-            if file.is_relative_to(root):
-                rel = file.relative_to(root)
-                names.add(rel.stem if len(rel.parts) == 1 else rel.parts[0])
-    return names
 
 
 def is_composite(target):
@@ -184,7 +167,7 @@ def combine(composite, interfaces, version, model_name=None, author=None):
     if fixed and "step_size" not in experiment:
         experiment.update(step_size=fixed.pop(), fixed_step=True)
     return {
-        "spec_version": 1,
+        "spec_version": SPEC_VERSION,
         "composite": True,
         "fmi_version": version,
         "model_name": model_name or composite.data.get("name") or composite.path.parent.name,

@@ -97,3 +97,35 @@ def test_an_unchanged_model_rebuilds_to_the_same_guid(tmp_path, monkeypatch):
     guid = read_model_description(str(first)).guid
     assert guid == read_model_description(str(second)).guid
     assert guid != "{00000000-0000-0000-0000-000000000000}"
+
+
+@pytest.mark.parametrize("output_format", ["fmu", "folder"])
+def test_a_failed_build_keeps_the_previous_output(tmp_path, monkeypatch, output_format):
+    import fmugen.__main__ as main
+    out = tmp_path / ("pid.fmu" if output_format == "fmu" else "pid")
+    build(EXAMPLES / "simple_pid", out, output_format=output_format)
+    before = sorted(p.name for p in tmp_path.iterdir())
+
+    def fail(*args, **kwargs):
+        raise OSError("disk full")
+    monkeypatch.setattr(main, "_write_zip" if output_format == "fmu" else "_copy_fmu", fail, raising=False)
+    if output_format == "folder":
+        monkeypatch.setattr(main.shutil, "copytree", fail)
+    with pytest.raises(OSError, match="disk full"):
+        build(EXAMPLES / "simple_pid", out, output_format=output_format)
+    assert sorted(p.name for p in tmp_path.iterdir()) == before   # no leftovers either
+    if output_format == "fmu":
+        assert validate_fmu(str(out)) == []
+    else:
+        assert (out / "modelDescription.xml").is_file()
+
+
+def test_an_interface_from_another_spec_version_is_refused(tmp_path, make_fmu):
+    import json
+
+    from fmugen.templates.fmugen_runtime import make_engine
+    resources = make_fmu(EXAMPLES / "simple_pid") / "resources"
+    interface = json.loads((resources / "interface.json").read_text())
+    (resources / "interface.json").write_text(json.dumps({**interface, "spec_version": 99}))
+    with pytest.raises(RuntimeError, match="spec_version 99"):
+        make_engine(resources, lambda *a: None)

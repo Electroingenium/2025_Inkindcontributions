@@ -51,14 +51,14 @@ For function entries, `init_call` defaults to true. `exit_initialization_mode` t
 ### 1.7 ✅ Fixed: Constants aren't reset with `fmi*Reset` or saved with the FMU state [code]
 `_resolve_constants` caches `{ python = … }` and `{ call = … }` constants once per process. If the model mutates one in place (a list, a numpy array, a loaded object passed as a keyword), the change survives `reset()` and isn't restored by `deserialize`. So a rollback or reset doesn't give the same results. Either deep-copy the constants per call, or re-resolve `python` constants on reset and document that `call` constants are shared.
 
-### 1.8 🟢 Smaller ones [code]
-- **`fmi3GetIntervalFraction` / `GetShiftFraction`**: `fraction()` uses `Fraction(str(value))`, so an interval like `1e-20` gives a resolution above the uint64 maximum. Use `Fraction(value).limit_denominator(2**63)`.
-- **`fmi3DoStep` returns `lastSuccessfulTime = t + h` even on error.** It should return `t` when the step failed.
-- **The FMI 3 `Model.__init__` ignores `logging_on`** (and FMI 2 has no equivalent). The engine starts with `logging_on = True`. Starting from the importer's value would also cut the `[output]` and forwarding work when logging is off.
-- **The `--capture-output` temp file grows forever** (`_capture_output`). It is read incrementally but never truncated. A long simulation that prints a lot fills the temp disk. Truncate it after each `_forward_output`.
-- **The build deletes the previous output before zipping** (`output.unlink` and then `_write_zip`). If zipping fails (disk full, a file locked by an importer on Windows), the old FMU is lost. Write to `output.with_suffix(".tmp")` and `os.replace` it.
-- **`hf_models` treats any `a/b` string start value as a Hugging Face repo id** when the path doesn't exist relative to `base_dir`. With `--vendor`, a string parameter like `"data/input.csv"` (relative to `cwd`, not the config) or `"W/m2"` makes a network call to the Hub (caught, so only a misleading note).
-- **Three lines lost their line break** in an earlier edit and now have long runs of spaces inside an expression: `__main__.py:228`, `interface.py:180` and `interface.py:342`. They are valid Python but hard to read. Reformat them.
+### 1.8 ✅ Fixed: Smaller ones
+- **`fmi3GetIntervalFraction` / `GetShiftFraction`** could give a resolution above the uint64 maximum (for an interval like `1e-20`). `fraction()` now limits the denominator to fit.
+- **`fmi3DoStep` returned `lastSuccessfulTime = t + h` even on error.** It now returns `t` when the step failed.
+- **The FMI 3 `Model.__init__` ignored `logging_on`.** The engine now starts with the importer's value, so the model's log records and printed output aren't forwarded when logging is off. Errors are always sent. UniFMU's FMI 2 adapter doesn't receive `loggingOn`, so FMI 2 still starts with logging on.
+- **The `--capture-output` temp file grew forever.** It is now emptied after each read. Descriptors 1 and 2 share its offset, and the UniFMU test checks that each call's output arrives once and intact.
+- **A failed build deleted the previous output.** The FMU, folder or private folder is now written next to the output and put in place only when complete, so a failed build leaves the old one, with no leftovers.
+- **`hf_models` treated relative file paths as Hugging Face repo ids.** It now also looks for the path relative to `[model] cwd`, and skips strings ending in a data-file suffix (`.csv`, `.npz`, …). (The `"W/m2"` example in the first version of this file was wrong: units aren't start values, so they never reach this check.)
+- **The three lines with lost line breaks** (`__main__.py`, `interface.py` ×2) are reformatted.
 
 ---
 
@@ -76,14 +76,16 @@ On Windows, killing the outer process leaves the inner one running. Use `os.exec
 ### 2.2 🟡 `--vendor` on Windows runs `python`, which may be the Microsoft Store stub
 `launch.toml` for vendored FMUs uses `python` on Windows and `python3` elsewhere. On a clean Windows machine, `python` is often the App Execution Alias that opens the Store. Prefer the `py -3` launcher when it exists (or let `fmugen_launch` be started through `py`), and let users override the interpreter at runtime, e.g. with `FMUGEN_PYTHON`.
 
-### 2.3 🟡 Model files that shadow the standard library are still accepted (AUDIT §3.2, open)
+### 2.3 ✅ Fixed: Model files that shadow the standard library are still accepted (AUDIT §3.2)
 `RESERVED_MODULES` (`config.py:38`) still doesn't check `sys.stdlib_module_names`. A model file called `logging.py`, `json.py`, `random.py` or `queue.py` breaks the backend itself. This is a one-line check in `entry_import()` (and in `_local_sources` for the other files).
 
-### 2.4 🟡 `interface.json` `spec_version` is never checked (AUDIT §5.2, open)
+### 2.4 ✅ Fixed: `interface.json` `spec_version` is never checked (AUDIT §5.2)
 `Engine` doesn't read it. Since `fmugen_runtime.py` is copied into each FMU, this only matters for composite parts or tools that read `interface.json`. Still, a one-line check costs nothing.
 
-### 2.5 🟡 Python floor (AUDIT §2.4, open)
+### 2.5 🟡 Python floor (AUDIT §2.4): kept at 3.13
 `requires-python = ">=3.13"`. The build side really needs **3.11** (`tomllib`, `datetime.UTC`, `contextlib.chdir`, `hashlib.file_digest`), and the runtime inside the FMU needs **3.10** (`types.UnionType`, `match` in UniFMU's backend). Lowering to 3.11 is now a metadata change plus CI.
+
+**Decision (2026-10-14):** stays at 3.13.
 
 ### 2.6 🟢 Model behaviours with no support yet
 - **Discard (variable-step masters).** A model can't reject a step (`Status.discard` is unused). Proposal: map a specific exception (e.g. `fmugen.Discard`, or a configurable exception class like `[model] discard_on = ["scipy.integrate:IntegrationWarning"]`) to `discard`, with the step rolled back. Rollback is cheap because the engine already serialises its state.
@@ -138,10 +140,10 @@ Ordered by value for users, with the main files each one touches.
 | Audit item | Status today |
 |---|---|
 | §2.5 LICENSE / third-party notices | open |
-| §2.4 `requires-python >= 3.13` | open (see 2.5) |
-| §3.2 stdlib shadowing | open (see 2.3) |
+| §2.4 `requires-python >= 3.13` | kept at 3.13 (see 2.5) |
+| §3.2 stdlib shadowing | fixed (see 2.3) |
 | §5.1 `--debug` flag | open |
-| §5.2 `spec_version`, FMI 2 `Int64` widening, docstring truncation, JSON Schema | open |
+| §5.2 FMI 2 `Int64` widening, docstring truncation, JSON Schema | open |
 | §5.3 `_local_sources` picking up `.venv`/`build`/`dist`; `_pick_entry` ignoring re-exports; more state-name conventions | open |
 | §5.4 `start/stop_time` + `tolerance` as time sources; honouring debug-logging categories; `Status.discard`; `reset()` not calling `terminate` | open |
 | §5.5 `BaseUnit`, `displayUnit`, `<Annotations>` | open |
