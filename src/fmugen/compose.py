@@ -13,9 +13,9 @@ combines the parts' interfaces into the FMU's interface.
 """
 import keyword
 import tomllib
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
-from fmugen.config import FMI_VERSIONS, InterfaceError, element_count, load_config
+from fmugen.config import FMI_VERSIONS, INT_TYPES, MODEL_DIR, InterfaceError, element_count, load_config
 
 COMPOSITE_KEYS = {"name", "description", "author", "parts", "connections", "fmi_version"}
 TOP_KEYS = {"composite", "experiment"}
@@ -57,12 +57,34 @@ class Composite:
                     raise InterfaceError(f"[composite] parts.{name}: [{key}] is not supported inside a composite FMU")
             self.parts[name] = config
         self.connections = [_connection(text) for text in table.get("connections", [])]
-        entries = [c.entry_target for c in self.parts.values() if c.entry_is_file]
-        stems = [Path(e).stem for e in entries]
-        clashes = sorted({s for s in stems if stems.count(s) > 1})
+        owners = {}
+        for name, config in self.parts.items():
+            for module in _local_modules(config):
+                owners.setdefault(module, []).append(name)
+        clashes = {module: names for module, names in sorted(owners.items()) if len(names) > 1}
         if clashes:
-            raise InterfaceError(f"[composite] parts share the module name(s) {clashes}: all parts run in one "
-                                 "Python process, so rename one of the files")
+            shown = "; ".join(f"{m} (in {', '.join(names)})" for m, names in clashes.items())
+            raise InterfaceError(f"[composite] parts have modules with the same name: {shown}. All parts run in "
+                                 "one Python process, which imports a module name once, so one part would run "
+                                 "the other's code: rename one of them")
+
+
+def _local_modules(config):
+    """Top-level module names a part's own files are imported as: its entry file and the .py files
+    and packages of its sources, under each folder the part puts on sys.path. Installed packages
+    aren't included: parts may share those."""
+    module, sys_path = config.entry_import()
+    names = {module.split(".")[0]} if config.entry_is_file else set()
+    files = []
+    for src, _ in config.source_files():
+        files += sorted(src.rglob("*.py")) if src.is_dir() else [src] if src.suffix == ".py" else []
+    for path in sys_path:
+        root = config.base_dir.joinpath(*PurePosixPath(path).relative_to(MODEL_DIR).parts)
+        for file in files:
+            if file.is_relative_to(root):
+                rel = file.relative_to(root)
+                names.add(rel.stem if len(rel.parts) == 1 else rel.parts[0])
+    return names
 
 
 def is_composite(target):
@@ -89,6 +111,25 @@ def _connection(text):
     return tuple(ends)
 
 
+FLOAT_TYPES = ("Real", "Float32", "Float64")
+
+
+def _type_mismatch(source, target, source_interface, target_interface):
+    """Why a value of `source` can't be passed to `target`, or None. Same types, integers and
+    Booleans into floats, and integers into integers (the range is checked when it is set) work."""
+    a, b = source["type"], target["type"]
+    if a == "Enumeration" or b == "Enumeration":
+        if a != b:
+            return f"{a} to {b}"
+        items = [i.get("type_definitions", {}).get(v.get("declared_type"), {}).get("items")
+                 for i, v in ((source_interface, source), (target_interface, target))]
+        return None if items[0] == items[1] else f"the enumerations have different items {items[0]} and {items[1]}"
+    if a == b or b in FLOAT_TYPES and (a in INT_TYPES or a in FLOAT_TYPES or a == "Boolean") \
+            or a in INT_TYPES and b in INT_TYPES:
+        return None
+    return f"a {a} can't be passed to a {b}"
+
+
 def combine(composite, interfaces, version, model_name=None, author=None):
     """The FMU's interface: the parts' variables not fed by a connection, named <part>.<name>."""
     by_name = {name: {v["name"]: v for v in interface["variables"]} for name, interface in interfaces.items()}
@@ -108,6 +149,9 @@ def combine(composite, interfaces, version, model_name=None, author=None):
             raise InterfaceError(f"[composite] connection: {dst}.{dst_var} is fed twice")
         if element_count(source) != element_count(target):
             raise InterfaceError(f"[composite] connection: {src}.{src_var} and {dst}.{dst_var} have different sizes")
+        why = _type_mismatch(source, target, interfaces[src], interfaces[dst])
+        if why:
+            raise InterfaceError(f"[composite] connection: {src}.{src_var} -> {dst}.{dst_var}: {why}")
         fed.add((dst, dst_var))
         connections.append({"from": [src, source["valueReference"]], "to": [dst, target["valueReference"]]})
 

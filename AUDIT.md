@@ -174,7 +174,7 @@ These are the gaps found:
 - ✅ `stdout` / `print()` in user code can now be forwarded to the importer's log with `build --capture-output` (off by default; see §5.7).
 
 ### 5.5 modelDescription (`description.py`)
-- ✅ Builds are reproducible. The GUID / instantiation token is a UUID5 of a hash of every file in the FMU, so it stays the same for an unchanged model (which some importers cache on) and changes with any edit. `generationDateAndTime` uses `SOURCE_DATE_EPOCH` when set. Zip entries are sorted, with one fixed date and fixed modes. With `SOURCE_DATE_EPOCH` set, two builds are byte-identical [verified]. `--vendor` / `--compile` builds are only as reproducible as pip and PyInstaller/Nuitka.
+- ✅ Builds are reproducible. The GUID / instantiation token is a UUID5 of a hash of every file in the FMU (`generationDateAndTime` left out, fixed 2026-10-14: before that it changed on every build), so it stays the same for an unchanged model (which some importers cache on) and changes with any edit. `generationDateAndTime` uses `SOURCE_DATE_EPOCH` when set. Zip entries are sorted, with one fixed date and fixed modes. With `SOURCE_DATE_EPOCH` set, two builds are byte-identical [verified]. `--vendor` / `--compile` builds are only as reproducible as pip and PyInstaller/Nuitka.
 - FMI 2 `UnitDefinitions` only declare names. Adding `BaseUnit` (SI exponents) would let importers check and convert units. A small table for common units (K, Pa, W, m, s, kg, …) goes a long way.
 - `displayUnit`, `relativeQuantity`, `unbounded`, `reinit` and `<Annotations>` are not exposed. Allow arbitrary extra attributes per variable as an escape hatch.
 - FMI 3 terminals and icons (`terminalsAndIcons/`) and FMI 3 `<Annotations>` are not supported. Low priority.

@@ -181,7 +181,7 @@ Examples: [examples/sampled_pid](../examples/sampled_pid) (periodic input clock)
 
 `canGetAndSetFMUstate` / `canGetAndSetFMUState` and `canSerializeFMUstate` / `canSerializeFMUState` follow `[model] save_state`: `true` unless it is `false`. The state is pickled, with `cloudpickle` as a fallback (lambdas, local functions). With a list of attributes, only those are saved and restored; the rest of the object (an ONNX session, a device handle) stays as it is. `fmugen build` does not run the model: `fmugen init` decides `save_state` when it makes its probe call, by trying to pickle the object, then each attribute.
 
-Restoring a state restores the whole Python object, so classes that keep internal state (integrators, filters, controllers) roll back correctly too.
+Restoring a state restores the whole Python object, so classes that keep internal state (integrators, filters, controllers) roll back correctly too. `[model] constants` and `call_constants` written as values (numbers, lists, `{ python = ... }`) are saved with the state and put back by reset, so a model that changes one in place (appends to a list) repeats its results. Constants computed by `{ call = ... }` (a loaded model, a downloaded file) are made once per FMU instance and shared by reset and rollback.
 
 ### Logging
 

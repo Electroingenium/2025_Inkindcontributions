@@ -110,6 +110,11 @@ class Engine:
     def reset(self):
         if getattr(self, "global_starts", None):
             self._write_globals(copy.deepcopy(self.global_starts))
+        if getattr(self, "constants", None) is not None:   # constants the model may have changed in place
+            self._write_literal_constants({
+                table: {name: resolve_constant(copy.deepcopy(value))
+                        for name, value in self.interface.get(table, {}).items() if is_literal_constant(value)}
+                for table in ("constants", "call_constants")})
         self.values = {}
         for v in self.variables:
             if v["causality"] != "independent" and not v.get("dimensions"):
@@ -315,12 +320,19 @@ class Engine:
             except (TypeError, ValueError) as e:
                 return self.error(f"{var['name']}: {e}")
             name = var["name"]
-            self.values[name] = value
+            previous, self.values[name] = self.values.get(name), value
 
             if var["causality"] == "structuralParameter":
                 self._resize_arrays(name)
             if (self.mode in ("step", "event", "reconfiguration") and self.obj is not None and var.get("attr")
                     and var["causality"] in ("parameter", "structuralParameter")):
+                try:
+                    get_path(self.obj, var["attr"])
+                except (AttributeError, KeyError, IndexError):
+                    # setattr would add an attribute the model never reads: the new value would be lost
+                    self.values[name] = previous
+                    return self.error(f"{name}: the model object has no attribute {var['attr']!r} to tune; "
+                                      f"set attr = \"...\" in the config to the attribute that holds {name}")
                 status = self.run(f"setting {name}",
                                   lambda: setattr(self.obj, var["attr"], self._to_python(var, self.values[name])))
                 if status != Status.ok:
@@ -493,6 +505,7 @@ class Engine:
             "clock_active": self.clock_active, "clock_interval": self.clock_interval,
             "clock_shift": self.clock_shift, "terminate_requested": self.terminate_requested,
             "clock_last_tick": self.clock_last_tick, "globals": self._read_globals(), "rng": rng_states(),
+            "constants": self._literal_constants(),
         }
         try:
             return Status.ok, dump_state(state)
@@ -519,6 +532,8 @@ class Engine:
         self.terminate_requested = state.get("terminate_requested", False)
         self.clock_last_tick = dict(state.get("clock_last_tick", {}))
         self._write_globals(copy.deepcopy(state.get("globals", {})))
+        # the state's own copies (each load is new), so restoring the same state twice works too
+        self._write_literal_constants(state.get("constants", {}))
         set_rng_states(state.get("rng", {}))
         return Status.ok
 
@@ -662,11 +677,30 @@ class Engine:
             resolved[table] = {}
             for name, value in self.interface.get(table, {}).items():
                 try:
-                    resolved[table][name] = resolve_constant(value)
+                    # a copy: the model may change a list or dict constant in place
+                    resolved[table][name] = resolve_constant(copy.deepcopy(value))
                 except Exception as e:
                     shown = value["call"] if isinstance(value, dict) and "call" in value else value
                     raise RuntimeError(f"[model] {table}.{name} = {shown!r} failed: {e!r}") from e
         self.constants, self.call_constants = resolved["constants"], resolved["call_constants"]
+
+    def _literal_constants(self):
+        """{table: {name: value}} of the resolved constants written as values ({ python = ... }, numbers,
+        lists), not { call = ... } / references, which are objects shared by the whole run (a loaded
+        model) and stay as they are on reset and rollback."""
+        if self.constants is None:
+            return {}
+        resolved = {"constants": self.constants, "call_constants": self.call_constants}
+        return {table: {name: resolved[table][name] for name, value in self.interface.get(table, {}).items()
+                        if is_literal_constant(value)}
+                for table in resolved}
+
+    def _write_literal_constants(self, values):
+        if self.constants is None:
+            return
+        resolved = {"constants": self.constants, "call_constants": self.call_constants}
+        for table, constants in values.items():
+            resolved[table].update(constants)
 
     def _run_setup(self, after_construction):
         """[model] setup: "module:function" calls run before construction, method names after it."""
@@ -1219,6 +1253,11 @@ def build_object(fn, name, fields):
 def keyword_constants(constants):
     """The constants passed by keyword: all but those named "0", "1", ... (positions of *args)."""
     return {k: v for k, v in constants.items() if not k.isdigit()}
+
+
+def is_literal_constant(value):
+    """Whether a constant is a value (resolved again on reset), not a { call = ... } or a reference."""
+    return not (isinstance(value, dict) and len(value) == 1 and ("call" in value or "ref" in value))
 
 
 def resolve_constant(value):

@@ -88,3 +88,12 @@ def test_builds_are_reproducible(tmp_path, monkeypatch):
     assert md.guid != "{00000000-0000-0000-0000-000000000000}"
     other = build(EXAMPLES / "psychrometry", tmp_path / "c.fmu")[0]
     assert read_model_description(str(other)).guid != md.guid
+
+
+def test_an_unchanged_model_rebuilds_to_the_same_guid(tmp_path, monkeypatch):
+    monkeypatch.delenv("SOURCE_DATE_EPOCH", raising=False)   # the build time differs between the builds
+    first = build(EXAMPLES / "psychrometry", tmp_path / "a", output_format="folder")[0]
+    second = build(EXAMPLES / "psychrometry", tmp_path / "b", output_format="folder")[0]
+    guid = read_model_description(str(first)).guid
+    assert guid == read_model_description(str(second)).guid
+    assert guid != "{00000000-0000-0000-0000-000000000000}"

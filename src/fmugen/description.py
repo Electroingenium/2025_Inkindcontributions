@@ -3,6 +3,7 @@ import hashlib
 import itertools
 import math
 import os
+import re
 import uuid
 import xml.etree.ElementTree as ET
 from datetime import UTC, datetime
@@ -335,6 +336,9 @@ def stamp_guid(fmu_dir):
     digest = hashlib.sha256()
     for file in sorted(f for f in fmu_dir.rglob("*") if f.is_file() and "__pycache__" not in f.parts):
         digest.update(file.relative_to(fmu_dir).as_posix().encode() + b"/")
+        if file == fmu_dir / "modelDescription.xml":   # without the build time, which changes on every build
+            digest.update(re.sub(rb'generationDateAndTime="[^"]*"', b"", file.read_bytes()))
+            continue
         with open(file, "rb") as f:   # in chunks: a frozen FMU can hold files of hundreds of MB
             digest.update(hashlib.file_digest(f, "sha256").digest())
     description = fmu_dir / "modelDescription.xml"

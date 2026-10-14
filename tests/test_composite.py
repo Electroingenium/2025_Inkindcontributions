@@ -113,3 +113,25 @@ def test_composite_connection_errors(tmp_path, connections, message):
 def test_composite_cannot_be_compiled_yet(tmp_path):
     with pytest.raises(InterfaceError, match="--compile"):
         build(write_composite(tmp_path), tmp_path / "out.fmu", compiler="pyinstaller")
+
+
+def test_composite_parts_with_modules_of_the_same_name_are_refused(tmp_path):
+    # both parts import their own utils.py: in one process, the second would get the first's
+    for name, value in (("a", 1.0), ("b", 2.0)):
+        (tmp_path / name).mkdir()
+        (tmp_path / name / "utils.py").write_text(f"GAIN = {value}\n")
+        (tmp_path / name / f"{name}.py").write_text(f"from utils import GAIN\n\ndef {name}(x: float = 1.0):\n"
+                                                    f"    return {{'y': GAIN * x}}\n")
+        init(tmp_path / name / f"{name}.py", force=True)
+    (tmp_path / "fmugen.toml").write_text('[composite]\nparts = { a = "a", b = "b" }\nconnections = ["a.y -> b.x"]\n')
+    with pytest.raises(InterfaceError, match=r"utils \(in a, b\)"):
+        build(tmp_path / "fmugen.toml", tmp_path / "out", output_format="folder")
+
+
+@pytest.mark.parametrize("fmi", [2, 3])
+def test_composite_connection_types_are_checked(tmp_path, fmi):
+    path = write_composite(tmp_path, ["valve.state -> tank.inflow"])
+    (tmp_path / "valve" / "valve.py").write_text(VALVE.replace('return {"flow"', 'return {"state": "open", "flow"'))
+    init(tmp_path / "valve" / "valve.py", force=True)
+    with pytest.raises(InterfaceError, match="valve.state -> tank.inflow: a String can't be passed to a"):
+        build(path, tmp_path / "out", output_format="folder", fmi_version=fmi)

@@ -189,7 +189,8 @@ t  = "time"        # t: time at the start of the step
 # t_end = "end_time"   (t + h)
 ```
 
-- **Initialization:** the function (if `init_call` is on) gets `time = start time` and `step_size = [experiment] step_size`, or 0 when that isn't set.
+- **Initialization:** the function (if `init_call` is on) gets `time = start time` and `step_size = [experiment] step_size`. When the function takes the step size and `[experiment]` has no `step_size`, `init_call` is off by default, so the model is never called with a step size of 0. Its outputs then keep their start values until the first step. Set `init_call = true` to call it anyway (with 0).
+- **The init call is an extra call:** with `init_call` on, the function runs once at initialization and again in the first `doStep`, both at the start time. A model with side effects (a counter, a file it appends to, `[model] globals`) sees one more call than there are steps. Set `init_call = false` to avoid it.
 - **Fixed step size:** if the model only works with one step size (for example, it hard-codes an hour), set `[experiment] fixed_step = true` and `step_size`. The FMU then reports `canHandleVariableCommunicationStepSize="false"` and rejects any other step size with an error.
 
 ---
@@ -581,9 +582,9 @@ connections = [
 
 - **Variables:** the FMU's variables are the parts' variables, named `<part>.<name>` (`sky.dni`, `dc.y`), except the inputs fed by a connection.
 - **Each step:** the parts run in the order of `parts`. Before a part runs, each connected input gets the current value of its source: the value from this step if the source part ran before it, else from the previous step (for a feedback loop, list the parts in the order the values flow).
-- **Sources:** any output or local (`"tank.level -> valve.level"`). Targets are inputs. Sizes must match.
+- **Sources:** any output or local (`"tank.level -> valve.level"`). Targets are inputs. Sizes must match, and so must types: an integer or Boolean may feed a floating-point input and integers may feed integers, but nothing else changes type (a `String` can't feed a `Real`), and enumerations need the same items.
 - **State:** saving and restoring the FMU state covers every part; reset resets them all.
-- **Limits:** parts can't have clocks, structural parameters or `[events]`. All parts run in one Python process, so two local model files can't have the same module name. `--compile` doesn't support composites yet; `--vendor` does.
+- **Limits:** parts can't have clocks, structural parameters or `[events]`. All parts run in one Python process, so a module name is imported once: no two parts may have local files (entry files or `sources`) with the same module name, e.g. a `utils.py` in each. Installed packages can be shared. `--compile` doesn't support composites yet; `--vendor` does.
 
 ---
 

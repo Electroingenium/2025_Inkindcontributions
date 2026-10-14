@@ -395,6 +395,14 @@ def normalize(config, entry_obj, module_name, sys_path, model_name=None, author=
     if experiment.get("fixed_step") and "step_size" not in experiment:
         raise InterfaceError("[experiment] fixed_step = true requires step_size")
 
+    init_call = model.get("init_call", not is_class and step_call)
+    if ("init_call" not in model and init_call and "step_size" in time_args.values()
+            and "step_size" not in experiment):
+        # without a step size the init call would pass 0 as the step size (a model dividing by it fails)
+        init_call = False
+        notes.append("the function is not called at initialization: it takes the step size, and [experiment] "
+                     "has no step_size to pass; its outputs keep their start values until the first step")
+
     doc = inspect.getdoc(entry_obj) or inspect.getdoc(inspect.getmodule(entry_obj)) or ""
     return {
         "spec_version": 1,
@@ -410,7 +418,7 @@ def normalize(config, entry_obj, module_name, sys_path, model_name=None, author=
             "factory": factory,
             "call": call if is_class and step_call else None,
             "step": step_call,
-            "init_call": model.get("init_call", not is_class and step_call),
+            "init_call": init_call,
             "terminate": model.get("terminate"),
         },
         "sys_path": sys_path,
@@ -733,6 +741,9 @@ def _variable(section, causality, name, info, is_class, type_definitions, versio
         if variability == "tunable" and is_class:
             if var["to"]["kind"] == "attr" or var["to"]["kind"] == "init" and attr is None:
                 attr = var["to"]["name"]
+            if var["to"]["kind"] == "initpos" and attr is None:
+                raise InterfaceError(f"{where}: a tunable parameter passed by position needs attr = \"...\", the "
+                                     "attribute of the model object that holds it (else a new value can't reach it)")
             if attr:
                 var["attr"] = attr
 
