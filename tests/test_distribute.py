@@ -78,6 +78,19 @@ def test_compile_collects_the_dependencies_of_the_model_packages():
     assert _packages(["os", "not_installed_anywhere"]) == ([], [], [], [])
 
 
+def test_nuitka_gets_package_options_only_for_packages():
+    # matplotlib's pylab.py and six.py are single modules: Nuitka stops on package options for them
+    from fmugen.distribute import _nuitka_package_args
+    if not (importlib.util.find_spec("matplotlib") and importlib.util.find_spec("six")):
+        pytest.skip("matplotlib and six are needed")
+    expected = ["--include-package-data=matplotlib", "--include-package=matplotlib", "--include-module=six"]
+    packages, direct = ["matplotlib", "pylab", "six", "not_installed_anywhere"], ["matplotlib", "six"]
+    assert _nuitka_package_args(packages, direct) == expected
+    import six   # once imported, six's spec has __path__ = [] (for six.moves), as during a build
+    assert six.__spec__.submodule_search_locations == []
+    assert _nuitka_package_args(packages, direct) == expected
+
+
 def test_hugging_face_model_ids_are_found(tmp_path):
     from fmugen.distribute import hf_models
     (tmp_path / "data").mkdir()

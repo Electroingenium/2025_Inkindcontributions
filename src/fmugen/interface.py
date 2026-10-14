@@ -23,6 +23,7 @@ import math
 import pickle
 import re
 import sys
+import traceback
 import types
 import typing
 from collections.abc import Mapping
@@ -55,6 +56,21 @@ def load_module(model_path):
     sys.modules[model_path.stem] = module
     spec.loader.exec_module(module)
     return module
+
+
+def import_failure(target, error):
+    """InterfaceError for a model whose top-level code raised while it was imported (a script that
+    solves or plots when imported, a missing data file), naming where it raised."""
+    frames = traceback.extract_tb(error.__traceback__)
+    # the innermost line of the model's own code, and where the error was raised if that's elsewhere
+    ours = [f for f in frames if "importlib" not in f.filename and "fmugen" not in Path(f.filename).parts]
+    where = [ours[0]] if ours else []
+    if frames and (not where or frames[-1] is not where[0]):
+        where.append(frames[-1])
+    at = ", in ".join(f"{Path(f.filename).name}:{f.lineno}" for f in where)
+    return InterfaceError(f"importing {target} failed: {type(error).__name__}: {error}"
+                          + (f" (at {at})" if at else "")
+                          + "; importing a module runs its top-level code")
 
 
 def parse_target(target):
@@ -109,6 +125,8 @@ def _infer_config(target, call, config_dir, fmi_version, starts, setup, kind, cr
         module = load_module(path) if path else importlib.import_module(module_name)
     except ImportError as e:
         raise InterfaceError(f"cannot import {target}: {e} (is it installed in this environment?)") from e
+    except (Exception, SystemExit) as e:
+        raise import_failure(target, e) from e
     entry = _pick_entry(module, name)
 
     # the name it was given: an alias (PyCO2SYS:sys) or a lambda (rdkit's Descriptors.MolWt) has
@@ -604,6 +622,7 @@ def _probe_class(cls, method_name, data, comments, arrays, call_starts, create, 
             comments[("outputs", attr)] = "a property of the object"
     unfit = _unfit_properties(obj, data, comments, arrays, taken)
     taken |= set(data.get("outputs", {})) | unfit
+    taken |= _gekko_outputs(obj, data, comments, taken)
     for attr, value in getattr(obj, "__dict__", {}).items():   # complex attributes (None ones are too common)
         if not attr.startswith("_") and attr not in taken and value is not None and _misfit(value):
             _unfit_value(comments, "outputs", attr, value, f"attr:{attr}", arrays)
@@ -619,6 +638,46 @@ def _probe_class(cls, method_name, data, comments, arrays, call_starts, create, 
             comments[("locals", attr)] = f"changed by {method_name}()"
     _check_sizes(obj, method_name, data, comments)
     return obj, returned, set(getattr(obj, "__dict__", {})) | set(_property_values(obj, arrays)) | unfit
+
+
+GEKKO_RESULTS = ("GKVariable", "GK_Intermediate", "GK_FV")   # Var/SV/CV, Intermediate, FV/MV (not Param, Const)
+
+
+def _gekko_result(value):
+    """The value of a solved GEKKO variable, intermediate, FV or MV at the end of its time horizon
+    (m.time), or None: GEKKO keeps results in these objects, as `x.value` after `m.solve()`."""
+    if not type(value).__module__.startswith("gekko.") \
+            or not any(k.__name__ in GEKKO_RESULTS for k in type(value).__mro__):
+        return None
+    try:
+        last = value.value[-1]
+    except Exception:   # not solved yet: a single value
+        return None
+    return last if _fmi_value(last) else None
+
+
+def _gekko_outputs(obj, data, comments, taken):
+    """Outputs for the object's attributes that hold GEKKO results (`self.X = m.Var(...)`), and for
+    dicts of them (`self.W = {"HOU1": m.Var(...)}`), read as their last value. Returns their names."""
+    found = {}
+    for attr, value in getattr(obj, "__dict__", {}).items():
+        if attr.startswith("_"):
+            continue
+        if _gekko_result(value) is not None:
+            found[attr] = (f"{attr}.value.-1", value)
+        elif isinstance(value, Mapping):
+            for key, item in value.items():
+                if isinstance(key, str) and "." not in key and key and _gekko_result(item) is not None:
+                    found[_valid_name(f"{attr}.{key}")] = (f"{attr}.{key}.value.-1", item)
+    names = set()
+    for name, (path, value) in found.items():
+        if name in taken:
+            continue
+        data.setdefault("outputs", {})[name] = _typed({"from": f"attr:{path}"}, _gekko_result(value))
+        comments[("outputs", name)] = (f"a GEKKO {type(value).__name__}: its value at the end of the time "
+                                       f"horizon (m.time); the whole trajectory is {path[:-3]}")
+        names.add(name)
+    return names
 
 
 def _unfit_properties(obj, data, comments, arrays, taken):
@@ -1112,6 +1171,8 @@ def _assign_starts(init, method, starts):
 
     A name goes to the argument that has no default (it needs a value); on a tie, to the
     step method. Names neither declares go to whichever accepts **kwargs (method first).
+    For a name both declare, <method>_NAME (the variable name init gives the method's one)
+    goes to the method, and then NAME to the constructor: x0 and calculate_optimal_actuation_x0.
     """
     def params(fn):
         try:
@@ -1121,10 +1182,20 @@ def _assign_starts(init, method, starts):
 
     init_p, call_p = params(init), params(method)
     init_starts, call_starts = {}, {}
+    # the method's copy of a shared name, given by the name _rename_duplicates gives its variable
+    prefix = f"{getattr(method, '__name__', 'call').strip('_')}_"
+    for name, value in list(starts.items()):
+        shared = name[len(prefix):] if name.startswith(prefix) and name not in init_p and name not in call_p else None
+        if shared and shared.partition(".")[0] in init_p and shared.partition(".")[0] in call_p:
+            call_starts[shared] = value
     for name, value in starts.items():
         base = name.partition(".")[0]   # ARG.FIELD goes where ARG goes
         in_init, in_call = init_p.get(base), call_p.get(base)
-        if in_init and in_call:
+        if name.startswith(prefix) and name[len(prefix):] in call_starts and name not in init_p and name not in call_p:
+            continue   # placed above
+        if in_init and in_call and name in call_starts:
+            target = init_starts   # the method's copy was given by its own name
+        elif in_init and in_call:
             target = init_starts if (in_init.default is in_init.empty and in_call.default is not in_call.empty) \
                 else call_starts
         elif in_init or in_call:

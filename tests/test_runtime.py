@@ -537,6 +537,22 @@ def test_dotted_path_reaches_methods_of_a_dict():
     assert get_path({"keys": 5}, "keys") == 5   # a key wins over a method of the same name
 
 
+def test_dotted_path_reads_the_last_element():
+    from fmugen.templates.fmugen_runtime import get_path
+
+    class Wrapper(list):   # like GEKKO's GK_Value: a list-like around a list, or a single value before a solve
+        def __init__(self, value):
+            self.inner = value
+
+        def __getitem__(self, i):
+            return self.inner[i]
+
+    assert get_path({"x": [1.0, 2.0, 3.0]}, "x.-1") == 3.0 and get_path({"x": (1, 2)}, "x.-2") == 1
+    assert get_path({"x": Wrapper([4.0, 5.0])}, "x.-1") == 5.0
+    with pytest.raises(IndexError):   # read as missing, as for an attribute not set yet
+        get_path({"x": Wrapper(4.0)}, "x.-1")
+
+
 COUNTER = """
 CALLS = 0
 SCALE = 2.0

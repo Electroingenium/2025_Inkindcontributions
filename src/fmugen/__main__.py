@@ -30,7 +30,8 @@ from fmugen.distribute import (
     compiled_launch_command,
 )
 from fmugen.distribute import vendor as vendor_wheels
-from fmugen.interface import assumptions, guessed_outputs, infer_config, parse_target, render_toml, unfit_outputs
+from fmugen.interface import (assumptions, guessed_outputs, import_failure, infer_config, parse_target,
+                              render_toml, unfit_outputs)
 from fmugen.templates.fmugen_runtime import setup_sys_path
 
 PACKAGE_DIR = Path(__file__).resolve().parent
@@ -181,6 +182,8 @@ def _prepare(config, resources, version, model_name, author, capture_output):
         except (ImportError, AttributeError) as e:
             hint = " (install the model's requirements in the environment fmugen runs in)"                 if config.requirements else ""
             raise InterfaceError(f"cannot import {config.model['entry']}: {e!r}{hint}") from e
+        except (Exception, SystemExit) as e:
+            raise import_failure(config.model["entry"], e) from e
         interface = normalize(config, entry_obj, module, sys_path, model_name, author, version)
         interface["capture_output"] = bool(capture_output)
         for note in interface.pop("notes"):
