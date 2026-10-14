@@ -331,15 +331,56 @@ def _resolve(node, namespace):
     return obj
 
 
+def _installed_packages():
+    """Top-level import names of the installed distributions."""
+    import importlib.metadata
+    global _INSTALLED
+    if _INSTALLED is None:
+        _INSTALLED = set(importlib.metadata.packages_distributions())
+    return _INSTALLED
+
+
+_INSTALLED = None
+
+
+def foreign_class(klass, cls):
+    """Whether klass, a base of the model class cls, comes from an installed library other than the
+    model's own package (GEKKO for `class Plant(GEKKO)`): what its code sets on self is the
+    library's state, not the model's results. A base in the user's own files is not foreign, and
+    for a model class from an installed library (a library built on another), no base is."""
+    package, own = klass.__module__.split(".")[0], cls.__module__.split(".")[0]
+    installed = _installed_packages()
+    return package != own and package in installed and own not in installed
+
+
+def foreign_attributes(cls):
+    """Attributes that the code of cls's foreign bases (see foreign_class) sets on self."""
+    names = set()
+    for klass in cls.__mro__[1:]:
+        if klass is object or not foreign_class(klass, cls):
+            continue
+        for name, member in vars(klass).items():
+            if inspect.isfunction(member):
+                names |= set(assigned_attributes(klass, name, depth=0, raw=True))
+    return names
+
+
 def assigned_attributes(cls, method_name, depth=MAX_DEPTH, raw=False):
     """{attribute: kind} that method_name sets on self, following self.other() calls. The kind is
-    "Boolean", "String", "Real", "array", "other" (not an FMI value) or None (not obvious)."""
+    "Boolean", "String", "Real", "array", "other" (not an FMI value) or None (not obvious).
+    Methods of a foreign base (see foreign_class) aren't followed: what they set is the library's."""
     kinds, seen = {}, set()
+
+    def defined_in(name):
+        return next((klass for klass in cls.__mro__ if name in vars(klass)), None)
 
     def visit(name, level):
         if name in seen or level > depth:
             return
         seen.add(name)
+        owner = defined_in(name)
+        if owner is not None and owner is not cls and foreign_class(owner, cls):
+            return
         method = inspect.getattr_static(cls, name, None)
         node = function_node(method) if method is not None else None
         if node is None or not node.args.args:

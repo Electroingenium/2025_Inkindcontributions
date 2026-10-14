@@ -623,6 +623,7 @@ def _probe_class(cls, method_name, data, comments, arrays, call_starts, create, 
     unfit = _unfit_properties(obj, data, comments, arrays, taken)
     taken |= set(data.get("outputs", {})) | unfit
     taken |= _gekko_outputs(obj, data, comments, taken)
+    taken |= static.foreign_attributes(type(obj))   # a library base's own state (GEKKO's csv_status)
     for attr, value in getattr(obj, "__dict__", {}).items():   # complex attributes (None ones are too common)
         if not attr.startswith("_") and attr not in taken and value is not None and _misfit(value):
             _unfit_value(comments, "outputs", attr, value, f"attr:{attr}", arrays)
