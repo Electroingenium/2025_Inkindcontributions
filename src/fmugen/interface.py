@@ -323,28 +323,11 @@ def _local_sources(entry_file, config_dir):
         if not file.is_relative_to(config_dir) or "site-packages" in file.parts or file == entry_file:
             continue
         rel = file.relative_to(config_dir)
-        if _not_model_code(config_dir, rel):
-            continue
         sources.add(rel.parts[0] if len(rel.parts) > 1 else rel.as_posix())
     entry_rel = entry_file.relative_to(config_dir)
     if len(entry_rel.parts) > 1:
         sources.add(entry_rel.parts[0])
     return sorted(sources)
-
-
-# folders inside a project that hold installed packages or build output, not the model's code
-NOT_SOURCES = {".venv", "venv", "env", ".env", "build", "dist", "__pycache__", ".git", ".tox", ".nox",
-               "node_modules", "site-packages"}
-
-
-def _not_model_code(config_dir, rel):
-    """Whether a file (relative to config_dir) is in a virtual environment or build folder."""
-    folder = config_dir
-    for part in rel.parts[:-1]:
-        folder = folder / part
-        if part in NOT_SOURCES or part.endswith(".egg-info") or (folder / "pyvenv.cfg").exists():
-            return True
-    return False
 
 
 def _add_data_files(data, comments, config_dir, entry_file):

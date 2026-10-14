@@ -629,27 +629,6 @@ def test_a_file_that_only_re_exports_its_model(tmp_path):
     assert data["model"]["sources"] == ["plant_core.py"]
 
 
-def test_sources_skip_virtual_environments_and_build_folders(tmp_path):
-    from fmugen.interface import _local_sources
-    for folder in (".venv/lib", "build/lib", "helpers"):
-        (tmp_path / folder).mkdir(parents=True)
-    (tmp_path / ".venv" / "pyvenv.cfg").write_text("")
-    (tmp_path / "m.py").write_text("")
-    modules = {}
-    for name, rel in (("venv_mod", ".venv/lib/venv_mod.py"), ("built_mod", "build/lib/built_mod.py"),
-                      ("helper_mod", "helpers/helper_mod.py")):
-        (tmp_path / rel).write_text("")
-        modules[name] = type(sys)(name)
-        modules[name].__file__ = str(tmp_path / rel)
-    original = dict(sys.modules)
-    sys.modules.update(modules)
-    try:
-        assert _local_sources((tmp_path / "m.py").resolve(), tmp_path.resolve()) == ["helpers"]
-    finally:
-        sys.modules.clear()
-        sys.modules.update(original)
-
-
 def test_probe_timeout_stops_the_process(tmp_path):
     import subprocess
     (tmp_path / "slow.py").write_text("import time\n\ndef slow(x: float = 1.0):\n    time.sleep(60)\n"
