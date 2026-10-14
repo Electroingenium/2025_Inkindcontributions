@@ -1,6 +1,10 @@
 # `fmugen.toml` reference
 
-`fmugen.toml` describes how an unmodified Python model becomes an FMU. For worked examples of each key, see [models.md](models.md) and the configs in [tested-models.md](tested-models.md). It sits in the model's folder, and every path in it is relative to that folder. `fmugen init` writes a first version (see [models.md](models.md#what-fmugen-init-infers)). This page lists every key; for a guided walk through a generated config, see [init-tutorial.md](init-tutorial.md).
+`fmugen.toml` describes how an unmodified Python model becomes an FMU. It sits in the model's folder, and every path in it is relative to that folder. This page is the reference for every key; it is the only one, and the other pages link here.
+
+- `fmugen init` writes a first version: what it infers is in [models.md](models.md#what-fmugen-init-infers), and [init-tutorial.md](init-tutorial.md) walks through a generated config.
+- [models.md](models.md) has a worked example for each kind of model; the [complete example](#complete-example) below uses most keys at once.
+- The `fmugen` command's options are in [manual.md](manual.md#4-commands).
 
 Unknown keys are rejected with an error, so typos don't go unnoticed. Keys marked **FMI 3** are only accepted when building FMI 3 (`[model] fmi_version = 3` or `fmugen build --fmi 3`). Building such a config as FMI 2 fails with an error that says so. Otherwise the same config builds either version.
 
@@ -33,14 +37,14 @@ Unknown keys are rejected with an error, so typos don't go unnoticed. Keys marke
 | `name` | string | the entry's name | `modelName` in `modelDescription.xml`. `fmugen build --name` overrides it. |
 | `description` | string | first line of the entry's docstring, else the module's | `description` in `modelDescription.xml`. |
 | `author` | string | `""` | `author` in `modelDescription.xml`. `fmugen build --author` overrides it. |
-| `sources` | list of strings | `[]` | Extra files and directories to copy into the FMU, keeping their paths. A file entry is always copied. Data files (CSV, EPW, JSON, …) too. |
+| `sources` | list of strings | `[]` | Extra files and directories to copy into the FMU, keeping their paths. A file entry is always copied. Data files (CSV, EPW, JSON, …) too. Their folders go on `sys.path`, so flat and package imports both work. |
 | `globals` | list of `"module:NAME"` | `[]` | Module-level variables the model changes while it runs (`global CALLS; CALLS += 1`), e.g. pythermalcomfort's `"pythermalcomfort.jos3_functions.thermoregulation:PRE_SHIV"`. On reset they go back to their value when the model was imported, and they are saved and restored with the FMU state. `fmugen init` lists the ones holding numbers, strings or arrays that the model's modules rebind. Module globals are shared by every instance of the FMU in one process. |
 | `cwd` | string | none | A folder, relative to `fmugen.toml`, that the model's code runs in (its working directory), inside the FMU's copy of `sources`. For models that open files by a relative path, such as `open("data/weather.csv")`: use `"."` and list the files in `sources`. It applies to the import, setup, construction and every call, and the importer's working directory is put back afterwards. `fmugen init` sets both when a string in the model or a `--start` value names a file next to the config. |
-| `requirements` | list of strings | `[]` | pip requirement specifiers the model needs at runtime. See [packaging.md](packaging.md#the-fmus-python-environment). |
+| `requirements` | list of strings | `[]` | pip requirement specifiers the model needs at runtime, e.g. `"simple-pid==2.0.1"`. They must be installed in the environment fmugen runs in. `fmugen init` writes them: the installed distributions that provide the entry's package, the modules the model's own files import, and the modules named in `setup`, computed constants, `convert` and `enum`, pinned to the installed versions. See [packaging.md](packaging.md#the-fmus-python-environment). |
 | `kind` | `"function"` | none | Treat a class as a function: construct it with the inputs on every step and read outputs from the new object (`return:<attr>`). For classes whose constructor does all the work. |
 | `create` | classmethod name | none | Classes only: build the object with this classmethod instead of calling the class, e.g. `"from_pretrained"`. Parameters bound to `init:` (the default) become its arguments. For models loaded from saved weights or files. |
 | `save_state` | `true`, `false` or list of attribute names | `true` | How the FMU saves and restores its state (rollback). `true`: the whole model object is pickled (with `cloudpickle` when `pickle` can't, e.g. lambdas). `false`: not supported (`canGetAndSetFMUState="false"`), e.g. for hardware. A list such as `["_state", "_context"]`: only those attributes are saved and put back on restore; the rest of the object (an ONNX session, a device handle) is kept as it is. `fmugen init` sets it by trying to pickle the object. |
-| `setup` | list | `[]` | Calls run when the FMU initializes, before the model is used. `"module:function"` or `"module:function(args)"` runs before the class is constructed (e.g. `"psychrolib:SetUnitSystem(psychrolib.SI)"`). A bare `"method"` or `"method(args)"` runs on the object right after construction (e.g. `"reset"`). Arguments are Python literals or dotted names of importable objects. The table form `{ call = "...", args = [...], kwargs = {...} }` takes the same values as `[model.constants]`. |
+| `setup` | list | `[]` | Calls run each time the FMU initializes (also after a reset), before the model is used. `"module:function"` or `"module:function(args)"` runs before the class is constructed (e.g. `"psychrolib:SetUnitSystem(psychrolib.SI)"`). A bare `"method"` or `"method(args)"` runs on the object right after construction (e.g. `"reset"`). Arguments are Python literals or dotted names of importable objects. The table form `{ call = "...", args = [...], kwargs = {...} }` takes the same values as `[model.constants]`. |
 | `init_call` | bool | `true` for functions with a step, `false` otherwise | Call the function or step method when leaving initialization mode, to compute the initial outputs. States are not advanced by this call. Without it, a class's outputs read from the return value are 0 at the start time. `init --probe` sets it for a class whose step method changed nothing on the object in the probe (e.g. blackscholes' `price()`). |
 | `terminate` | string | none | Classes only: a method called on `fmi2Terminate`/`fmi3Terminate` (for example `"close"`). |
 
@@ -221,6 +225,91 @@ One table per clock; `<name>` is the FMU clock name. See [fmi.md](fmi.md#clocks-
 | `next_event_time` | `"attr:..."` / `"return..."` | Reported by `fmi3UpdateDiscreteStates` as the time of the next event. |
 
 `[events]` is ignored, with a note, when building FMI 2.
+
+---
+
+## Validation rules
+
+`fmugen build` rejects a config with a message naming the section and key (e.g. `[inputs] x: unknown key(s) ['strat']`) when:
+
+- it has an unknown section or key, or is missing `[model] entry`;
+- a binding names an argument the target doesn't have;
+- two variables, or a variable and a clock, share a name;
+- a type, `variability` or `initial` doesn't fit the section or FMI version;
+- a start value is invalid for its type (wrong kind, out of range, bad hex);
+- `pos:` indices have gaps, a state has no `next`, or a clocked input's clock has no `call`;
+- `fixed_step` is set without `step_size`, or `call = false` is set without clocks;
+- it defines no variables at all;
+- an FMI 3-only feature is used in an FMI 2 build.
+
+The model itself is not run: errors in the model show up when the FMU runs, or earlier in `fmugen init --probe`.
+
+---
+
+## Complete example
+
+An FMI 3 config that uses most sections. It is illustrative: `plant.py` is not part of the repository. For real configs, see the [examples](../examples).
+
+```toml
+[model]
+entry = "plant.py:Plant"            # your file and class
+fmi_version = 3
+call = "step"
+setup = ["reset"]                   # plant.reset() after construction
+sources = ["lib"]                   # local helper package
+requirements = ["numpy>=2"]
+name = "plant"
+description = "Example plant"
+author = "Me"
+
+[model.constants]
+solver = "rk4"                      # a constructor argument that isn't an FMU variable
+
+[experiment]
+step_size = 0.1
+stop_time = 60.0
+
+[time]
+dt = "step_size"
+
+[structural_parameters]
+n = { start = 3, description = "number of zones" }
+
+[parameters]
+area = { start = 2.0, unit = "m2" }                              # Plant(area=...)
+gain = { start = 1.0, variability = "tunable" }                  # also plant.gain = ... later
+temps0 = { dimensions = ["n"], start = 20.0, unit = "degC", to = "attr:temps", numpy = true }
+
+[calculated_parameters]
+volume = { unit = "m3" }                                         # plant.volume after construction
+
+[inputs]
+heat = { start = 0.0, unit = "W" }                               # step(heat=...)
+valve = { start = 1, type = "UInt8", to = "call:set_valve" }     # plant.set_valve(value)
+sensor = { start = 0.0, clocks = ["sample"] }                    # passed to plant.sample(sensor=...)
+
+[states]
+level_prev = { start = 0.5, unit = "m", next = "return:level" }
+
+[outputs]
+level = { from = "return:level", unit = "m" }
+temps = { dimensions = ["n"], unit = "degC" }                    # plant.temps
+alarm = { start = false }
+
+[locals]
+energy = { unit = "J" }
+
+[clocks.sample]
+interval = 1.0
+call = "sample"
+
+[clocks.overheat]
+causality = "output"
+from = "attr:overheated"
+
+[events]
+terminate = "attr:done"
+```
 
 ---
 

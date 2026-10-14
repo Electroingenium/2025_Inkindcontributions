@@ -92,9 +92,9 @@ What each part means:
 
 On every `doStep`, the FMU calls `Colebrook(Re=..., eD=...)` and stores the result in `y`.
 
-`init` doesn't write `requirements`: it can't tell which pip package, at which version, provides an installed module. Add it yourself, pinned to the version you tested with, so the FMU's `requirements.txt` (and `fmugen build --vendor`) include it.
+`init` also writes `[model] requirements`: the installed packages the model needs, pinned to their installed versions (left out of the listing above). They go into the FMU's `requirements.txt` and `fmugen build --vendor`; check them.
 
-To finish it, add the requirement, rename the output and add units:
+To finish it, rename the output and add units:
 
 ```toml
 [model]
@@ -223,7 +223,7 @@ Not every config has every section; `init` writes only those that apply. The ord
 | `entry` | The function or class. | Rarely. |
 | `call` | The step method, if it's not `__call__`: `step`, `do_step`, `update`, the only public method, or `--call`. | If `init` picked the wrong method. `pykalman`'s `KalmanFilter` needs `--call filter_update`. |
 | `fmi_version` | `3` with `--fmi 3`. | To switch versions. `fmugen build --fmi` also overrides it. |
-| `requirements` | Nothing: `init` doesn't know which pip package provides a module. | Always, for an installed module: add it pinned (`"simple-pid==2.0.1"`) so the FMU stays reproducible. |
+| `requirements` | The installed packages the model needs, pinned to the installed versions. | When a version should be looser, or a package is missing (`init` says so in a comment). |
 | `sources` | Local modules the model imports, under the config's folder. | Add data files (CSV, JSON, weights) the model reads. |
 | `cwd` | `"."` if the code opens a file by a relative path next to the config. | When the model opens `data/x.csv` and fails to find it. |
 | `setup` | `--setup` calls. | Libraries that need a call before use (`psychrolib:SetUnitSystem(psychrolib.SI)`). |
@@ -262,7 +262,7 @@ fixed_step = true      # the model only works at step_size; any other doStep is 
 
 ### `[time]`: passing time and step size
 
-Arguments that receive the simulation time instead of being inputs. `init` recognizes them by name: `dt`, `h`, `step_size`, `stepSize`, `time_step` (step size); `t`, `time`, `currentTime`, `t_now` (time at the start of the step); `until`, `end_time`, `t_end`, `t_next` (time at its end, e.g. simpy's `Environment.run(until)`). Case and underscores don't matter. A `--start` for one of them makes it a fixed input instead, with a hint.
+Arguments that receive the simulation time instead of being inputs. `init` recognizes them by name (`dt`, `t`, `end_time`, …; the full list is in [models.md](models.md#what-fmugen-init-infers)).
 
 ```toml
 [time]
@@ -278,7 +278,7 @@ For a model that takes a date (`pvlib`, weather lookups), `init` writes an `epoc
 when = { source = "end_time", epoch = "2026-10-08T00:00:00" }
 ```
 
-`init` uses today's date at midnight. **Set the epoch you need**, with its time zone (`+00:00`) if the model cares.
+`init` uses today's date at midnight. **Set the epoch you need**, with its time zone (`+00:00`) if the model cares. Details: [config.md](config.md#time).
 
 ### Variables: `[parameters]`, `[inputs]`, `[states]`, `[outputs]`, `[locals]`, `[calculated_parameters]`
 
@@ -368,7 +368,7 @@ Before `fmugen build`:
 - [ ] **Units and descriptions.** Add them; `init` never does.
 - [ ] **Tunable parameters.** Add `variability = "tunable"` where it makes sense.
 - [ ] **Constants.** Uncomment only those you want to change.
-- [ ] **Requirements.** Pin versions.
+- [ ] **Requirements.** Check the pinned versions `init` wrote.
 - [ ] **Data files.** Listed in `sources`, with `cwd = "."` if the model opens them by a relative path.
 - [ ] **`[experiment]`.** Add `step_size` (and `fixed_step = true` if the model only works at one step).
 - [ ] **FMI 3 clock example.** Deleted if unused.
@@ -523,14 +523,10 @@ fixed_step = true
 
 `init --force` rewrites the file. Use `-o -` to print a new draft and copy the parts you need.
 
-### The build says `unknown key(s)`.
+### The build fails, or the FMU fails at run time.
 
-A typo. The message lists the allowed keys for that section.
-
-### The build says `requires FMI 3`.
-
-The config uses an FMI 3-only feature (clocks, `Float32`, structural parameters, `Binary`). Set `fmi_version = 3`, or remove the feature.
+Error messages and their fixes (`unknown key(s)`, `requires FMI 3`, import errors, hangs) are in [manual.md](manual.md#7-troubleshooting).
 
 ### Where's the full list of keys?
 
-[config.md](config.md). For problems at build or run time, see [manual.md](manual.md#8-troubleshooting).
+[config.md](config.md).
