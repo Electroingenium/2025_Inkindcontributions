@@ -22,8 +22,7 @@ What still stands between fmugen and an open-source release is **distribution**,
 
 | Severity | Item | Section |
 |---|---|---|
-| 🔴 | No `LICENSE` file, and no statement of the licence of generated FMUs | [2.1](#21-before-a-public-release) |
-| 🟠 | No CI, and no test that installs the built wheel | [2.1](#21-before-a-public-release), [2.5](#25-tests-and-quality) |
+| 🟠 | No test that installs the built wheel | [2.5](#25-tests-and-quality) |
 | 🟡 | `--vendor` FMUs start `python` on Windows, which may be the Microsoft Store stub | [2.2](#22-portability) |
 | 🟢 | Model coverage gaps: discard, more time sources, generators/async, composites with `--compile` or clocks | [2.3](#23-model-coverage) |
 
@@ -32,12 +31,7 @@ What still stands between fmugen and an open-source release is **distribution**,
 ## 2. Open items
 
 ### 2.1 Before a public release
-- **🔴 No `LICENSE`.** Without one the code is "all rights reserved" and can't legally be reused.
-  - Every generated FMU contains UniFMU's binaries and backend (MIT, INTO-CPS Association). The docs should say so, so that people who ship FMUs include UniFMU's licence.
-  - Generated FMUs also contain fmugen's runtime. State the licence that applies to them (a permissive licence, or an explicit exception), so FMUs can be shipped commercially.
-  - Example code (simple-pid, RC_BuildingSimulator, FilterPy) is credited in the README and `rc_simulator/LICENSE` is present; check that each vendored example carries its licence file.
-- **Package metadata:** no `license` field (no licence yet), no project URLs (no public repository yet), and a static version (consider `hatch-vcs` and a `CHANGELOG.md`). Check that the name `fmugen` is free on PyPI before the first upload; until then fmugen is installed from a checkout or a built wheel. Once on PyPI, the README can add `pipx install fmugen` / `uv tool install fmugen`.
-- **CI:** see [2.5](#25-tests-and-quality).
+- **Package metadata:** no project URLs (no public repository yet), and a static version (consider `hatch-vcs` and a `CHANGELOG.md`). Check that the name `fmugen` is free on PyPI before the first upload; until then fmugen is installed from a checkout or a built wheel. Once on PyPI, the README can add `pipx install fmugen` / `uv tool install fmugen`.
 
 ### 2.2 Portability
 - **🟡 `--vendor` on Windows runs `python`** (`python3` elsewhere). On a clean Windows machine `python` is often the App Execution Alias that opens the Microsoft Store. Prefer the `py -3` launcher when it exists, and let users choose the interpreter at runtime (e.g. `FMUGEN_PYTHON`). [code]
@@ -64,7 +58,6 @@ Still missing:
 - **modelDescription:** `UnitDefinitions` only declare unit names; `BaseUnit` (SI exponents) for common units would let importers check and convert units. `displayUnit`, `relativeQuantity`, `unbounded`, `reinit` and `<Annotations>` aren't exposed (an escape hatch for extra attributes per variable would cover them). FMI 3 terminals and icons aren't supported (low priority).
 
 ### 2.5 Tests and quality
-- **No CI** (`.github/` doesn't exist). Start with Windows and Linux (macOS later): `uv sync`, install UniFMU 0.14.0 from its release, then `pytest -m "not slow"`. Run the `slow` `--compile` tests nightly.
 - **No test from an installed wheel.** That is how the first review found a wheel that couldn't build anything (§4).
 - **FMPy is the only importer used.** Add [fmusim from the Reference FMUs](https://github.com/modelica/Reference-FMUs) and, optionally, OMSimulator: importers call functions in different orders.
 - **The published-model tests are manual.** An opt-in `pytest -m pypi` suite built from the 46 configs in `docker/models/r3/*/fmugen.toml` would keep the promise that fmugen works on real published models checked.
@@ -73,7 +66,7 @@ Still missing:
 
 ### 2.6 Repository and docs
 - **`.git` is about 75 MB.** Most of it is early commits shared with `main`: seven generated `.fmu`/`.zip` files (~26 MB) and a 71 MB `FMUs/ORIGINAL.fmu/binaries/linux64/unifmu.so`. Removing them means rewriting `main` too, or publishing from a fresh history.
-- **Community files** for open source: `LICENSE`, `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `SECURITY.md`, issue and PR templates, `CHANGELOG.md`, `CITATION.cff` (the README already cites a paper).
+- **Community files** for open source: `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `SECURITY.md`, issue and PR templates, `CHANGELOG.md`, `CITATION.cff` (the README already cites a paper).
 - **`.gitignore`:** add `dist/`, `build/` and `*.egg-info`.
 - **`image.png`** at the root is used by `docs/packaging.md`; it would sit better in `docs/img/`.
 - **Docs site:** the docs are spread over many pages plus a long manual; MkDocs Material on GitHub Pages would add navigation and search.
@@ -94,7 +87,7 @@ Ordered by value for users.
 | 5 | **Discard support** ([2.3](#23-model-coverage)) | Variable-step and error-controlled masters | runtime, config |
 | 6 | **Units from annotations and docstrings** (`Annotated[float, "K"]`, pint annotations, numpydoc `Parameters`), and `BaseUnit` for SI units | Fewer edits after `init`; importers can check units | `static.py`, `description.py` |
 | 7 | **JSON Schema for `fmugen.toml`** | Completion and validation in editors (Taplo / Even Better TOML) | new file, from `VAR_KEYS` / `MODEL_KEYS` |
-| 8 | **A documented Python API** (`fmugen.build(...)`, `fmugen.init(...)`); `build` already returns `(path, interface)` | Notebooks, CI scripts, other tools | `__init__.py` |
+| 8 | **A documented Python API** (`fmugen.build(...)`, `fmugen.init(...)`); `build` already returns `(path, interface)` | Notebooks, scripts, other tools | `__init__.py` |
 | 9 | **`init --interactive`**: ask about the ambiguous choices (which method, units, which attributes are outputs) instead of making the user edit TOML | Easier first config | `__main__.py` |
 | 10 | **Merge compiled FMUs from several OSes** (`fmugen merge a.fmu b.fmu -o all.fmu`) ([2.2](#22-portability)) | `--compile` is single-OS | new subcommand |
 | 11 | **Watch mode** (`fmugen build --watch`) | A fast edit → build → simulate loop | `__main__.py` |
