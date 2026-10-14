@@ -32,6 +32,12 @@ pyinstaller = [
 nuitka = [
     "nuitka>=2.5",
 ]
+# fmugen build --distributed: what the private side's main.py (UniFMU's main_remote.py) imports
+distributed = [
+    "toml",
+    "coloredlogs",
+    "colorama",
+]
 
 [project.scripts]
 fmugen = "fmugen.__main__:main"

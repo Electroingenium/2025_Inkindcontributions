@@ -149,6 +149,8 @@ def compile_fmu(compiler, resources, interface, work, requirements=()):
     paths = [resources, *(resources / p for p in interface["sys_path"])]
     modules = _modules(interface)
     data = [(resources / "interface.json", ".")] + _model_data(resources, interface)
+    if (resources / "endpoint.toml").exists():   # a distributed FMU's private side reads it next to main
+        data.append((resources / "endpoint.toml", "."))
     local = {"model", "fmugen_runtime"}
     direct, packages, distributions, imports = _packages([m for m in modules if m not in local], requirements)
 

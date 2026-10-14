@@ -156,6 +156,47 @@ A freezer only follows `import` statements. Libraries also read files next to th
 
 A model that unpickles objects, e.g. `joblib.load` of a scikit-learn model, needs the packages of those objects listed in `[model] requirements` (`init` can't see them): then their submodules are collected too. The FMU grows by the collected files: in the tests, 0 to 25 MB more than before this change (pvlib, mesa) for models that already worked. The model's non-Python files are bundled next to its modules. If something is still missed, the build's error or the FMU's log names it. When the importer shows nothing, see [unifmu-limitations.md §13](unifmu-limitations.md#13-a-backend-that-exits-during-a-call-can-abort-the-importer) for running the frozen backend directly to read its error.
 
+### Distributed FMUs (`--distributed`)
+
+```bash
+fmugen build fmugen.toml -o out/model.fmu --distributed --endpoint 10.0.0.5
+```
+
+This builds the FMU in two halves with UniFMU's `generate-distributed` (FMI 2 and FMI 3):
+
+- **The proxy**, `out/model.fmu` (or a folder with `--format folder`): UniFMU's native binaries, the `modelDescription.xml`, and a `resources/launch.toml` that only says `location = "Remote"`. It contains no Python and none of the model. The importer loads it like any other FMU.
+- **The private folder**, `out/model_private/` (`--private-output PATH` to choose it): what is normally the FMU's `resources/`, i.e. the model, `interface.json`, fmugen's adapter and runtime, and UniFMU's backend. Its `main.py` is UniFMU's `main_remote.py`, which connects to the proxy instead of being started by it. `endpoint.toml` holds the proxy host's IP address, from `--endpoint` (default `127.0.0.1`). Copy this folder to the host or container that runs the model. Its `README.md` gives the exact start command.
+
+`fmugen init` and `fmugen.toml` are the same as for any other FMU. `--distributed` works with composite FMUs, `--vendor` and `--compile`:
+
+| Build | Start the private side, in its folder | Needs there |
+|---|---|---|
+| default | `python main.py PORT` | Python with the model's packages, and `pip install fmugen[distributed]` (`toml`, `coloredlogs`, `colorama`, which `main_remote.py` imports) |
+| `--vendor` | `python fmugen_launch.py PORT` | Python; the packages are installed from `wheels/` on the first run |
+| `--compile` | `dist/main/main PORT` (`.\dist\main\main.exe PORT` on Windows) | nothing; same OS as the build |
+
+**The port can't be set.** In UniFMU 0.14 the proxy port isn't configurable: `fmiapi/src/common/dispatcher/mod.rs` hardcodes `BackendSocket::create("tcp://0.0.0.0:0")`, so the OS assigns a new port on every run, and no environment variable or `launch.toml` field changes it. fmugen therefore has no port flag. The private side takes the port as its argument at start-up (or asks for it). When the importer instantiates the proxy, the proxy listens on all interfaces, logs
+
+```
+ACTION REQUIRED ~ Connect remote backend to dispatcher through port: PORT
+```
+
+under the `logUnifmuMessages` log category, and waits for the private side to connect. **The importer must have logging on, including that category**, or the port is never shown. A firewall between the two hosts must allow the port. See [unifmu-limitations.md §14](unifmu-limitations.md#14-the-distributed-proxys-port-cant-be-set).
+
+With FMPy, start the private side from the logger callback:
+
+```python
+import re, subprocess
+from fmpy import simulate_fmu
+
+def logger(env, instance, status, category, message):   # FMI 2; FMI 3 has no `instance`
+    found = re.search(rb"dispatcher through port:\s*(\d+)", message)
+    if found:   # here on the same host; on another host, pass the port there
+        subprocess.Popen(["python", "main.py", found.group(1).decode()], cwd="out/model_private")
+
+simulate_fmu("out/model.fmu", stop_time=10, debug_logging=True, logger=logger)
+```
+
 ---
 
 ## Simulating
