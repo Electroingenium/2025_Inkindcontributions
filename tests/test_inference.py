@@ -260,6 +260,37 @@ def test_gekko_results_kept_on_the_object_are_outputs(tmp_path):
     assert "end of the time horizon" in comments[("outputs", "h")]
 
 
+def test_a_library_base_class_state_is_not_an_output(tmp_path):
+    # like `class Plant(GEKKO)`: what the library's own code sets on self (GHFilter.update's x, dx, y)
+    # is its state; only what the model's code sets is a result. A base in the user's files still counts.
+    pytest.importorskip("filterpy")
+    (tmp_path / "base.py").write_text(textwrap.dedent("""
+        class Smoother:
+            def smooth(self, z):
+                self.smoothed = 0.5 * z
+    """))
+    (tmp_path / "tracker.py").write_text(textwrap.dedent("""
+        from filterpy.gh import GHFilter
+        from base import Smoother
+
+        class Tracker(GHFilter):
+            def track(self, z=1.0):
+                self.update(z)
+                self.estimate = float(self.x)
+
+        class Local(Smoother):
+            def step(self, z=1.0):
+                self.smooth(z)
+    """))
+    starts = {"x": 0.0, "dx": 0.0, "dt": 1.0, "g": 0.5, "h": 0.1}
+    for probe in (False, True):
+        data, _ = infer(f"{tmp_path / 'tracker.py'}:Tracker", call="track", starts=starts, probe=probe)
+        assert list(data["outputs"]) == ["estimate"], probe
+        assert not set(data.get("locals", {})) & {"x", "dx", "y", "x_prediction", "dx_prediction"}
+        data, _ = infer(f"{tmp_path / 'tracker.py'}:Local", probe=probe)
+        assert list(data["outputs"]) == ["smoothed"], probe
+
+
 NESTED = """
 from dataclasses import dataclass
 from types import SimpleNamespace
