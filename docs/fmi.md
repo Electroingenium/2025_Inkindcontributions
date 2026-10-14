@@ -23,7 +23,7 @@ These tables follow UniFMU's published support matrix for its Python backend. "U
 | Function | UniFMU | fmugen |
 |---|---|---|
 | `fmi2GetTypesPlatform`, `fmi2GetVersion` | ✓ | answered by the native library |
-| `fmi2SetDebugLogging` | ✓ | turns forwarding of the model's log records on/off |
+| `fmi2SetDebugLogging` | ✓ | turns forwarding of the model's log records on/off; the categories given limit the messages sent (errors always go) |
 | `fmi2Instantiate`, `fmi2FreeInstance` | ✓ | imports the model / ends the Python process |
 | `fmi2SetupExperiment` | ✓ | stores start, stop and tolerance |
 | `fmi2EnterInitializationMode`, `fmi2ExitInitializationMode` | ✓ | exit builds the model object and computes initial outputs |
@@ -76,11 +76,11 @@ fmi2Instantiate ─► [set parameters, inputs, state starts] ─► fmi2SetupEx
 | `fmi2SetupExperiment(start, stop, tol)` | Stores them; the FMU's time becomes `start`. |
 | `fmi2EnterInitializationMode` | Nothing to do. |
 | `fmi2ExitInitializationMode` | **Class:** constructs the object with the parameters and `[model.constants]`, then writes `attr:`-bound variables onto it. **Function** (or `init_call = true`): calls the model once at the start time to compute initial outputs. States are not advanced. Then reads outputs, locals and calculated parameters; attributes that don't exist yet keep their start values. |
-| `fmi2DoStep(t, h, …)` | Rejects `h` if `fixed_step` is set and `h` differs. Writes `attr:` inputs, then calls the function or step method with the inputs, parameters bound to `arg:`, states, time arguments and `call_constants`. Reads outputs, locals and calculated parameters, then replaces each state with its `next` value. The FMU's time becomes `t + h`. |
+| `fmi2DoStep(t, h, …)` | Rejects `h` if `fixed_step` is set and `h` differs. Writes `attr:` inputs, then calls the function or step method with the inputs, parameters bound to `arg:`, states, time arguments and `call_constants`. Reads outputs, locals and calculated parameters, then replaces each state with its `next` value (with `[model] integrate`: integrates the states over the step, then calls the model once more at `t + h` for the outputs). The FMU's time becomes `t + h`. An exception listed in `[model] discard_on` (or a failed solve) returns `discard` and puts the FMU back to `t`. A `t` that isn't the FMU's time (the importer skipped or repeated time without restoring a state) logs a warning. |
 | `fmi2Get*` / `fmi2Set*` | Current values / see [Setting variables](#setting-variables). An Enumeration uses `fmi2GetInteger`. |
 | `fmi2Terminate` | Calls `[model] terminate` on the object, if set. |
-| `fmi2Reset` | Discards the object, and restores start values and the start time. |
-| `fmi2SetDebugLogging` | Turns forwarding of the model's log records on or off. |
+| `fmi2Reset` | Calls `[model] terminate` on the object if the FMU wasn't terminated, discards the object, and restores start values and the start time. |
+| `fmi2SetDebugLogging` | Turns forwarding of the model's log records on or off. With categories, only messages in them are sent; error messages always are. |
 
 **Step semantics:** `doStep(t, h)` takes the inputs at `t` and produces outputs at `t + h`.
 
@@ -181,7 +181,9 @@ Examples: [examples/sampled_pid](../examples/sampled_pid) (periodic input clock)
 
 `canGetAndSetFMUstate` / `canGetAndSetFMUState` and `canSerializeFMUstate` / `canSerializeFMUState` follow `[model] save_state`: `true` unless it is `false`. The state is pickled, with `cloudpickle` as a fallback (lambdas, local functions). With a list of attributes, only those are saved and restored; the rest of the object (an ONNX session, a device handle) stays as it is. `fmugen build` does not run the model: `fmugen init` decides `save_state` when it makes its probe call, by trying to pickle the object, then each attribute.
 
-Restoring a state restores the whole Python object, so classes that keep internal state (integrators, filters, controllers) roll back correctly too.
+Restoring a state restores the whole Python object, so classes that keep internal state (integrators, filters, controllers) roll back correctly too. `[model] constants` and `call_constants` written as values (numbers, lists, `{ python = ... }`) are saved with the state and put back by reset, so a model that changes one in place (appends to a list) repeats its results. Constants computed by `{ call = ... }` (a loaded model, a downloaded file) are made once per FMU instance and shared by reset and rollback.
+
+**Only restore states from a trusted source.** A serialized FMU state is a pickle, and unpickling runs code: `fmi2DeSerializeFMUstate` / `fmi3DeserializeFMUState` with bytes from someone else can run anything on the machine. Restore states this FMU saved, as importers do for rollback; don't load states received from others.
 
 ### Logging
 
@@ -194,7 +196,7 @@ Your code uses the standard `logging` module. While the adapter runs your code, 
 | below | OK | `logAll` (FMI 2) / `logEvents` (FMI 3) |
 
 - **When forwarding happens:** only during an FMI call. UniFMU can only carry a log message while it is processing a command, so records from background threads aren't forwarded.
-- **Filtering:** UniFMU filters categories according to the importer's settings. `modelDescription.xml` declares the standard categories plus `logUnifmuMessages`.
+- **Filtering:** `fmi2SetDebugLogging` / `fmi3SetDebugLogging` with a list of categories limits the messages to those categories (errors are always sent); with none, every category is sent. `modelDescription.xml` declares the standard categories plus `logUnifmuMessages`.
 
 ### Errors
 

@@ -7,6 +7,7 @@ import pytest
 from conftest import EXAMPLES
 
 from fmugen.__main__ import init, isolated_imports
+from fmugen.config import InterfaceError
 from fmugen.templates.model_fmi2 import Fmi2Status
 
 OK, ERROR = Fmi2Status.ok, Fmi2Status.error
@@ -987,3 +988,156 @@ def test_debug_logging_of_the_backend_is_raised_to_info(tmp_path, make_fmu, adap
     fmu.initialize()
     messages = [entry[2] for entry in fmu.logs]
     assert any("[chatty] step" in m for m in messages) and not any("numba" in m for m in messages)
+
+
+PID_TUNABLE = """
+[model]
+entry = "simple_pid:PID"
+[model.constants]
+sample_time = {{ python = "None" }}
+setpoint = 1.0
+[time]
+dt = "step_size"
+[parameters]
+Kp = {{ start = 2.0, variability = "tunable", {binding} }}
+[inputs]
+measurement = {{ start = 0.0, to = "arg:input_" }}
+[outputs]
+output = {{ from = "return" }}
+"""
+
+
+def test_a_tunable_parameter_passed_by_position_needs_attr(tmp_path, make_fmu):
+    (tmp_path / "fmugen.toml").write_text(PID_TUNABLE.format(binding='to = "pos:0"'))
+    with pytest.raises(InterfaceError, match="needs attr"):
+        make_fmu(tmp_path)
+
+
+def test_tuning_an_attribute_the_model_does_not_have_is_an_error(tmp_path, make_fmu, adapter):
+    # PID keeps Kp in self.Kp: attr = "gain" would only add an attribute that PID never reads
+    (tmp_path / "fmugen.toml").write_text(PID_TUNABLE.format(binding='attr = "gain"'))
+    fmu = adapter(make_fmu(tmp_path))
+    fmu.initialize()
+    assert fmu.set("Kp", 100.0) == ERROR
+    assert "no attribute 'gain'" in fmu.logs[-1][2]
+    assert fmu.get("Kp") == 2.0 and not hasattr(fmu.engine.obj, "gain")
+
+
+def test_a_function_taking_the_step_size_is_not_called_with_zero_at_initialization(tmp_path, make_fmu, adapter):
+    write(tmp_path, "rate.py", """
+        def rate(x: float = 1.0, dt: float = 1.0):
+            return {"y": x / dt}
+        """, """
+        [model]
+        entry = "rate.py:rate"
+        [time]
+        dt = "step_size"
+        [inputs]
+        x = { start = 1.0 }
+        [outputs]
+        y = {}
+        """)
+    fmu = adapter(make_fmu(tmp_path))
+    fmu.initialize()                                       # no ZeroDivisionError
+    assert fmu.get("y") == 0.0                             # not computed until the first step
+    assert fmu.fmi2DoStep(0.0, 0.5, False) == OK
+    assert fmu.get("y") == 2.0
+
+
+def test_constants_the_model_changes_are_restored_by_reset_and_rollback(tmp_path, make_fmu, adapter):
+    write(tmp_path, "history.py", """
+        def record(x: float = 0.0, history=None):
+            history.append(x)
+            return {"n": len(history)}
+        """, """
+        [model]
+        entry = "history.py:record"
+        init_call = false
+        [model.constants]
+        history = []
+        [inputs]
+        x = { start = 0.0 }
+        [outputs]
+        n = {}
+        """)
+    fmu = adapter(make_fmu(tmp_path))
+    fmu.initialize()
+    assert fmu.fmi2DoStep(0.0, 1.0, False) == OK and fmu.get("n") == 1
+    status, saved = fmu.fmi2SerializeFmuState()
+    assert status == OK
+    assert fmu.fmi2DoStep(1.0, 1.0, False) == OK and fmu.get("n") == 2
+    for _ in range(2):                                     # the same state, restored twice
+        assert fmu.fmi2DeserializeFmuState(saved) == OK
+        assert fmu.fmi2DoStep(1.0, 1.0, False) == OK and fmu.get("n") == 2
+    assert fmu.fmi2Reset() == OK
+    fmu.initialize()
+    assert fmu.fmi2DoStep(0.0, 1.0, False) == OK and fmu.get("n") == 1
+
+
+PID_BINDING = """
+[model]
+entry = "simple_pid:PID"
+[model.constants]
+sample_time = {{ python = "None" }}
+setpoint = 1.0
+{constants}
+[parameters]
+{parameter}
+[inputs]
+measurement = {{ start = 0.0, to = "arg:input_" }}
+[outputs]
+output = {{ from = "return" }}
+"""
+
+# (binding kind, extra constants, the tunable parameter, its new value, output of the second step)
+# PID(Kp, Ki, Kd, setpoint=1) with measurement 0: error 1, output = Kp + Ki * sum of the dt's
+TUNABLE_BINDINGS = [
+    ("init", "Ki = 0.0", 'Kp = { start = 2.0, variability = "tunable" }', 4.0, 4.0),
+    ("initpos", "Ki = 0.0", 'Kp = { start = 2.0, variability = "tunable", to = "pos:0", attr = "Kp" }', 4.0, 4.0),
+    ("attr", "Ki = 0.0", 'Kp = { start = 2.0, variability = "tunable", to = "attr:Kp" }', 4.0, 4.0),
+    # set_auto_mode(False): the PID holds its last output (2.0) instead of computing 5.0
+    ("call", "Kp = 5.0\nKi = 0.0",
+     'auto = { start = true, variability = "tunable", to = "call:set_auto_mode" }', False, None),
+    # __call__(input_, dt): Kp = 0, Ki = 1, so the output is the sum of the dt's: 1 + 0.5
+    ("arg", "Kp = 0.0\nKi = 1.0", 'step = { start = 1.0, variability = "tunable", to = "arg:dt" }', 0.5, 1.5),
+]
+
+
+@pytest.mark.parametrize("kind, constants, parameter, value, expected", TUNABLE_BINDINGS,
+                         ids=[case[0] for case in TUNABLE_BINDINGS])
+def test_a_tunable_parameter_changed_between_steps_reaches_the_model(tmp_path, make_fmu, adapter, kind, constants,
+                                                                       parameter, value, expected):
+    (tmp_path / "fmugen.toml").write_text(PID_BINDING.format(constants=constants, parameter=parameter))
+    fmu = adapter(make_fmu(tmp_path))
+    name = parameter.split()[0]
+    assert fmu.engine.by_name[name]["to"]["kind"] == kind
+    fmu.initialize()
+    assert fmu.fmi2DoStep(0.0, 1.0, False) == OK, fmu.logs
+    first = fmu.get("output")
+    assert fmu.set(name, value) == OK, fmu.logs
+    assert fmu.fmi2DoStep(1.0, 1.0, False) == OK, fmu.logs
+    if kind == "call":   # the method ran: the PID is in manual mode and repeats its output
+        assert fmu.engine.obj.auto_mode is False and fmu.get("output") == first
+    else:
+        assert fmu.get("output") == pytest.approx(expected)
+
+
+def test_fmi2_log_messages_escape_percent_signs(tmp_path, make_fmu, adapter):
+    # UniFMU 0.14 passes FMI 2 log messages to the importer as printf format strings
+    write(tmp_path, "progress.py", """
+        import logging
+
+        def progress(x: float = 1.0):
+            logging.getLogger("progress").warning("done 50%s of %d")
+            return {"y": x}
+        """, """
+        [model]
+        entry = "progress.py:progress"
+        [inputs]
+        x = { start = 1.0 }
+        [outputs]
+        y = {}
+        """)
+    fmu = adapter(make_fmu(tmp_path))
+    fmu.initialize()
+    assert any("done 50%%s of %%d" in message for _, _, message in fmu.logs), fmu.logs

@@ -3,10 +3,13 @@ import hashlib
 import itertools
 import math
 import os
+import re
 import uuid
 import xml.etree.ElementTree as ET
 from datetime import UTC, datetime
 from pathlib import Path
+
+from fmugen.units import base_unit, display_unit
 
 LOG_CATEGORIES = [
     ("logStatusWarning", None),
@@ -77,11 +80,7 @@ def build_model_description(interface, model_name=None, author=None):
         "canSerializeFMUstate": can_state,
     })
 
-    units = sorted({v["unit"] for v in variables if v.get("unit") and v["type"] == "Real"})
-    if units:
-        unit_defs = ET.SubElement(root, "UnitDefinitions")
-        for unit in units:
-            ET.SubElement(unit_defs, "Unit", {"name": unit})
+    _unit_definitions(root, [v for v in variables if v["type"] == "Real"])
 
     type_definitions = interface.get("type_definitions", {})
     if type_definitions:
@@ -105,6 +104,7 @@ def build_model_description(interface, model_name=None, author=None):
     }
     if experiment_attrs:
         ET.SubElement(root, "DefaultExperiment", experiment_attrs)
+    _annotations(root, "VendorAnnotations", interface)
 
     model_variables = ET.SubElement(root, "ModelVariables")
     index_of = {}   # name -> indexes of its ScalarVariables (several for an array)
@@ -122,6 +122,8 @@ def build_model_description(interface, model_name=None, author=None):
             attrs["description"] = var["description"]
         if var.get("initial") and var["causality"] != "parameter":
             attrs["initial"] = var["initial"]
+        extra = var.get("extra", {})
+        attrs.update((k, v) for k, v in extra.items() if k not in FMI2_TYPE_ATTRIBUTES)
         model_variables.append(ET.Comment(f'Index of variable = "{index}"'))
         scalar = ET.SubElement(model_variables, "ScalarVariable", attrs)
 
@@ -138,6 +140,7 @@ def build_model_description(interface, model_name=None, author=None):
         if "start" in var:
             start = var["start"][element] if isinstance(var["start"], list) else var["start"]
             type_attrs["start"] = _format_value(var["type"], start)
+        type_attrs.update((k, v) for k, v in extra.items() if k in FMI2_TYPE_ATTRIBUTES)
         ET.SubElement(scalar, var["type"], type_attrs)
 
     # Omitting "dependencies" means an output may depend on all inputs.
@@ -161,6 +164,52 @@ def build_model_description(interface, model_name=None, author=None):
     tree = ET.ElementTree(root)
     ET.indent(tree, space="  ")
     return tree
+
+
+# FMI 2 attributes of the <Real>/<Integer>/... element; the others go on <ScalarVariable>
+FMI2_TYPE_ATTRIBUTES = {"displayUnit", "relativeQuantity", "unbounded", "reinit", "derivative"}
+
+
+def _unit_definitions(root, variables):
+    """<UnitDefinitions>: each unit by name, with its SI <BaseUnit> when the unit is recognised, and
+    the <DisplayUnit>s variables ask for (extra = { displayUnit = ... })."""
+    displays = {}
+    for v in variables:
+        if v.get("unit"):
+            displays.setdefault(v["unit"], set())
+            if v.get("extra", {}).get("displayUnit"):
+                displays[v["unit"]].add(v["extra"]["displayUnit"])
+    if not displays:
+        return
+    unit_defs = ET.SubElement(root, "UnitDefinitions")
+    for unit in sorted(displays):
+        element = ET.SubElement(unit_defs, "Unit", {"name": unit})
+        base = base_unit(unit)
+        if base is not None:
+            ET.SubElement(element, "BaseUnit", base)
+        for name in sorted(displays[unit] - {unit}):
+            conversion = display_unit(unit, name)
+            attrs = {"name": name}
+            if conversion is not None:
+                factor, offset = conversion
+                if not math.isclose(factor, 1.0, rel_tol=1e-12):
+                    attrs["factor"] = repr(factor)
+                if offset:
+                    attrs["offset"] = repr(offset)
+            ET.SubElement(element, "DisplayUnit", attrs)
+
+
+def _annotations(root, tag, interface):
+    """[model] annotations: <Tool name="..."> elements, inside <VendorAnnotations> (FMI 2), or as
+    <Annotation type="..."> inside <Annotations> (FMI 3)."""
+    text = interface.get("annotations")
+    if text:
+        element = ET.fromstring(f"<{tag}>{text}</{tag}>")
+        if tag == "Annotations":
+            for tool in element:
+                tool.tag = "Annotation"
+                tool.attrib["type"] = tool.attrib.pop("name")
+        root.append(element)
 
 
 def _unknown(var, index, index_of):
@@ -225,11 +274,7 @@ def build_model_description_fmi3(interface, model_name=None, author=None):
         "providesIntermediateUpdate": "false",
     })
 
-    units = sorted({v["unit"] for v in variables if v.get("unit") and v["type"] in FLOAT_TYPES})
-    if units:
-        unit_defs = ET.SubElement(root, "UnitDefinitions")
-        for unit in units:
-            ET.SubElement(unit_defs, "Unit", {"name": unit})
+    _unit_definitions(root, [v for v in variables if v["type"] in FLOAT_TYPES])
 
     type_definitions = interface.get("type_definitions", {})
     if type_definitions:
@@ -274,6 +319,7 @@ def build_model_description_fmi3(interface, model_name=None, author=None):
                 attrs[key] = _format_value(var["type"], var[key])
         if var.get("clocks"):
             attrs["clocks"] = " ".join(str(vr_of[c]) for c in var["clocks"])
+        attrs.update(var.get("extra", {}))
         start = var.get("start")
         start_children = []
         if start is not None:
@@ -317,6 +363,7 @@ def build_model_description_fmi3(interface, model_name=None, author=None):
             continue  # clocked variables only get values when their clock ticks
         if (var["causality"] == "output" and var.get("initial") != "exact") or var["causality"] == "calculatedParameter":
             ET.SubElement(structure, "InitialUnknown", {"valueReference": str(var["valueReference"])})
+    _annotations(root, "Annotations", interface)
 
     tree = ET.ElementTree(root)
     ET.indent(tree, space="  ")
@@ -335,6 +382,9 @@ def stamp_guid(fmu_dir):
     digest = hashlib.sha256()
     for file in sorted(f for f in fmu_dir.rglob("*") if f.is_file() and "__pycache__" not in f.parts):
         digest.update(file.relative_to(fmu_dir).as_posix().encode() + b"/")
+        if file == fmu_dir / "modelDescription.xml":   # without the build time, which changes on every build
+            digest.update(re.sub(rb'generationDateAndTime="[^"]*"', b"", file.read_bytes()))
+            continue
         with open(file, "rb") as f:   # in chunks: a frozen FMU can hold files of hundreds of MB
             digest.update(hashlib.file_digest(f, "sha256").digest())
     description = fmu_dir / "modelDescription.xml"

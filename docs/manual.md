@@ -45,7 +45,7 @@ You also need [UniFMU](https://github.com/INTO-CPS-Association/unifmu/releases) 
 
 To simulate and validate FMUs as in the examples below, install [FMPy](https://github.com/CATIA-Systems/FMPy) (`pip install fmpy`).
 
-To work on fmugen itself, clone the repository and run `uv sync`; then use `uv run fmugen …` and `uv run pytest`.
+To work on fmugen itself, clone the repository and run `uv sync`; then use `uv run fmugen …` and `uv run pytest` (`-m "not slow and not fmu"` for the in-process tests only, about a minute).
 
 ## 3. Workflow
 
@@ -110,6 +110,8 @@ fmugen init MODEL [-o OUTPUT] [--call METHOD] [--fmi {2,3}]
 | `--probe` | off | Also **call the model once**: run the setup calls, build the object, call the step with the start values (retrying array inputs as numpy arrays, then tensors, and number inputs as one-element numpy arrays, `convert = "numpy:atleast_1d"`, for libraries that take only arrays), and try to pickle the object. Finds what the code doesn't show: array sizes, exact types, results built at runtime, unannotated properties, and `save_state`. Results the code shows but the probe didn't reach are added too. Without `--probe`, the model is never called. |
 | `--convert NAME=module:function` | none | How an argument is passed to the model, e.g. `x=torch:tensor`, `x=numpy` for a numpy array, or `x=pint` for a pint quantity (needs a `unit` on the variable); writes `convert` / `numpy`. Repeatable. Not needed when the argument is annotated (`torch.Tensor`, `np.ndarray`). |
 | `--force` | off | Overwrite an existing config. |
+| `--probe-timeout SECONDS` | no limit | With `--probe`: stop (exit code 2) if the probe hasn't finished by then, e.g. a model waiting for a device. The model's code can't be interrupted, so `fmugen` exits. |
+| `--debug` | off | Show the full traceback of an unexpected error instead of a one-line message. |
 
 What `init` infers from the code, what only `--probe` finds, where `--start` values go, and what to check afterwards: [models.md](models.md#what-fmugen-init-infers). [init-tutorial.md](init-tutorial.md) walks through a generated config.
 
@@ -156,7 +158,8 @@ fmugen build MODEL -o OUTPUT [--fmi {2,3}] [--format {fmu,folder}]
 | `--name NAME` | `[model] name`, else the entry's name | `modelName` in `modelDescription.xml`. |
 | `--author AUTHOR` | `[model] author`, else empty | `author` in `modelDescription.xml`. |
 | `--call METHOD` | as `init` | Only when `MODEL` is a model target with a class. |
-| `--probe` | off | Only when `MODEL` is a model target: infer the config as `init --probe` would, calling the model once. |
+| `--probe` | off | Only when `MODEL` is a model target: infer the config as `init --probe` would, calling the model once. `--probe-timeout` as in `init`. |
+| `--debug` | off | Show the full traceback of an unexpected error instead of a one-line message. |
 | `--vendor` | off | Put wheels of every requirement (`[model] requirements` and the backend's) into `resources/wheels/`. On its first run on a machine, the FMU installs them into a cached virtual environment, offline. The target needs Python. See [packaging.md](packaging.md#fmus-for-other-machines). |
 | `--platform TAG` | this machine | With `--vendor`: also vendor wheels for this platform, e.g. `win_amd64`, `manylinux2014_x86_64`, `macosx_11_0_arm64`. Repeatable. |
 | `--python-version X.Y` | this Python | With `--vendor`: vendor wheels for this Python version. Repeatable. |
@@ -222,7 +225,8 @@ In `fmugen.toml` the same forms appear as `[model] entry`, with file paths relat
 | Exit code | Meaning |
 |---|---|
 | `0` | Success. |
-| `2` | A usage or config error, printed as `fmugen: error: …`: an unknown key, a bad value, an import failure, an `init` probe failure, or an existing config without `--force`. |
+| `1` | An unexpected error, e.g. the model's own code raising while it is imported: printed as `fmugen: error: <type>: <message>`. Add `--debug` for the traceback. |
+| `2` | A usage or config error, printed as `fmugen: error: …`: an unknown key, a bad value, an import failure, an `init` probe failure or timeout, or an existing config without `--force`. |
 
 Each error names the section and key, e.g. `[inputs] x: unknown key(s) ['strat']`. See [Troubleshooting](#7-troubleshooting) and the [validation rules](config.md#validation-rules).
 

@@ -9,6 +9,7 @@ The user's code is never modified. The FMI-version-specific adapters translate
 FMI calls into the methods of `Engine`.
 """
 import ast
+import asyncio
 import builtins
 import contextlib
 import copy
@@ -27,9 +28,13 @@ import tempfile
 import traceback
 import types
 import typing
+import warnings
 from collections.abc import Mapping
 from fractions import Fraction
 from pathlib import Path
+
+# The interface.json format this runtime reads; fmugen build writes the same number
+SPEC_VERSION = 1
 
 DEFAULT_VALUES = {
     "Real": 0.0, "Float32": 0.0, "Float64": 0.0,
@@ -61,11 +66,16 @@ class Status:
     fatal = 4
 
 
+class StepRejected(Exception):
+    """A step the FMU can't complete ([model] integrate: the solver failed); doStep returns discard."""
+
+
 class Engine:
     def __init__(self, resources_dir, log, info_category="logAll"):
         """`log(message, status, category)` forwards a message to the importer."""
         self.resources_dir = Path(resources_dir)
-        self.log = log
+        self._send_log = log
+        self.log_categories = None   # fmi2/3SetDebugLogging: None = every category
         self.info_category = info_category
         self.interface = json.loads((self.resources_dir / "interface.json").read_text())
         self._output, self._position = _capture_output(self.interface.get("capture_output", False)), 0
@@ -101,6 +111,11 @@ class Engine:
             # [model] globals: module-level state, put back to its import-time value on reset
             self.globals = [split_global(ref) for ref in self.interface.get("globals", [])]
             self.global_starts = copy.deepcopy(self._read_globals())
+            # [model] discard_on: exceptions and warnings that make doStep return discard (the step is undone)
+            self.discard_on = tuple(resolve_reference(ref) for ref in self.interface.get("discard_on", []))
+        if self.interface.get("integrate") and self.interface.get("save_state", True) is not False:
+            self.discard_on += (StepRejected,)   # a failed solve rejects the step (undone from the saved state)
+        self._loop = None   # the event loop of an async model, kept for the whole run
         self.is_class = self.interface["entry"]["kind"] == "class"
         self.reset()
         self._forward_output()   # e.g. warnings printed while the model was imported
@@ -108,8 +123,17 @@ class Engine:
     # ================= life cycle =================
 
     def reset(self):
+        method = self.interface["entry"].get("terminate")
+        if method and getattr(self, "obj", None) is not None and self.mode != "terminated":
+            # release what the model holds (serial ports, files) now, not when it is garbage collected
+            self.run("terminate (reset)", lambda: self._invoke(getattr(self.obj, method)))
         if getattr(self, "global_starts", None):
             self._write_globals(copy.deepcopy(self.global_starts))
+        if getattr(self, "constants", None) is not None:   # constants the model may have changed in place
+            self._write_literal_constants({
+                table: {name: resolve_constant(copy.deepcopy(value))
+                        for name, value in self.interface.get(table, {}).items() if is_literal_constant(value)}
+                for table in ("constants", "call_constants")})
         self.values = {}
         for v in self.variables:
             if v["causality"] != "independent" and not v.get("dimensions"):
@@ -148,8 +172,8 @@ class Engine:
                 kwargs = keyword_constants(self.constants)
                 kwargs.update(self._bound("init"))
                 create = self.interface["entry"].get("create")
-                self.obj = (getattr(self.entry, create) if create else self.entry)(
-                    *self._positional(kind="initpos"), **kwargs)
+                self.obj = self._invoke(getattr(self.entry, create) if create else self.entry,
+                                        *self._positional(kind="initpos"), **kwargs)
                 self._run_setup(after_construction=True)
                 self._apply_attributes(clock=None)
                 for name in self.clocks:
@@ -175,11 +199,21 @@ class Engine:
         fixed = self.experiment.get("step_size") if self.experiment.get("fixed_step") else None
         if fixed is not None and not math.isclose(step_size, fixed, rel_tol=1e-9, abs_tol=1e-12):
             return self.error(f"this FMU only supports a communication step size of {fixed}, got {step_size}"), False
+        if not math.isclose(current_time, self.time, rel_tol=1e-9, abs_tol=1e-9):
+            # the importer skipped or repeated time without restoring a saved FMU state
+            self.log(f"doStep at time {current_time}, but the FMU is at time {self.time} (no FMU state was "
+                     "restored): the model continues from its current state", Status.warning, "logStatusWarning")
+        # [model] discard_on: the state before the step, to undo a step the model rejects
+        saved = self.serialize()[1] if self.discard_on and self.interface.get("save_state", True) else None
 
         ticked = []
 
         def advance():
-            if self.interface["entry"].get("step", True):
+            if self.interface.get("integrate"):   # the model returns derivatives: integrate, then read outputs
+                self._integrate(current_time, step_size)
+                result, have_result = self._call(current_time + step_size, step_size), True
+                self._read_results(result, have_result=True, update_states=False, missing_ok=False)
+            elif self.interface["entry"].get("step", True):
                 result, have_result = self._call(current_time, step_size), True
                 self._read_results(result, have_result=True, update_states=True, missing_ok=False)
             else:  # [model] call = false: only clocks run code
@@ -188,7 +222,11 @@ class Engine:
             ticked.extend(self._check_output_clocks(result, have_result=have_result))
             self._check_events(result, have_result=have_result)
 
-        status = self.run("doStep", advance)
+        status = self.run("doStep", advance, discard=self.discard_on)
+        if status == Status.discard:
+            if saved:
+                self.deserialize(saved)
+            return status, False
         if status == Status.ok:
             self.time = current_time + step_size
         return status, bool(ticked)
@@ -197,7 +235,7 @@ class Engine:
         method = self.interface["entry"].get("terminate")
         status = Status.ok
         if method and self.obj is not None:
-            status = self.run("terminate", lambda: getattr(self.obj, method)())
+            status = self.run("terminate", lambda: self._invoke(getattr(self.obj, method)))
         self.mode = "terminated"
         return status
 
@@ -315,12 +353,19 @@ class Engine:
             except (TypeError, ValueError) as e:
                 return self.error(f"{var['name']}: {e}")
             name = var["name"]
-            self.values[name] = value
+            previous, self.values[name] = self.values.get(name), value
 
             if var["causality"] == "structuralParameter":
                 self._resize_arrays(name)
             if (self.mode in ("step", "event", "reconfiguration") and self.obj is not None and var.get("attr")
                     and var["causality"] in ("parameter", "structuralParameter")):
+                try:
+                    get_path(self.obj, var["attr"])
+                except (AttributeError, KeyError, IndexError):
+                    # setattr would add an attribute the model never reads: the new value would be lost
+                    self.values[name] = previous
+                    return self.error(f"{name}: the model object has no attribute {var['attr']!r} to tune; "
+                                      f"set attr = \"...\" in the config to the attribute that holds {name}")
                 status = self.run(f"setting {name}",
                                   lambda: setattr(self.obj, var["attr"], self._to_python(var, self.values[name])))
                 if status != Status.ok:
@@ -374,6 +419,13 @@ class Engine:
                              "set it before initialization", Status.warning, "logStatusWarning")
 
     # ================= clocks =================
+
+    def drop_output_ticks(self):
+        """Forget output clock ticks the importer won't read (it doesn't use event mode)."""
+        for name, clock in self.clocks.items():
+            if clock["causality"] == "output":
+                self.clock_active[name] = False
+        return Status.ok
 
     def set_clocks(self, references, values):
         for r, value in zip(references, values):
@@ -493,6 +545,7 @@ class Engine:
             "clock_active": self.clock_active, "clock_interval": self.clock_interval,
             "clock_shift": self.clock_shift, "terminate_requested": self.terminate_requested,
             "clock_last_tick": self.clock_last_tick, "globals": self._read_globals(), "rng": rng_states(),
+            "constants": self._literal_constants(),
         }
         try:
             return Status.ok, dump_state(state)
@@ -519,6 +572,8 @@ class Engine:
         self.terminate_requested = state.get("terminate_requested", False)
         self.clock_last_tick = dict(state.get("clock_last_tick", {}))
         self._write_globals(copy.deepcopy(state.get("globals", {})))
+        # the state's own copies (each load is new), so restoring the same state twice works too
+        self._write_literal_constants(state.get("constants", {}))
         set_rng_states(state.get("rng", {}))
         return Status.ok
 
@@ -537,15 +592,44 @@ class Engine:
         self.log(message, Status.error, "logStatusError")
         return Status.error
 
-    def run(self, what, fn):
+    def run(self, what, fn, discard=()):
+        """Run model code. An exception is an error, or a discard when it (or a warning raised as
+        one) is an instance of a class in `discard`."""
         try:
-            with self._forward_logs(), self._in_model_dir():
+            with self._forward_logs(), self._in_model_dir(), warnings.catch_warnings():
+                for cls in discard:
+                    if issubclass(cls, Warning):
+                        warnings.simplefilter("error", cls)
                 fn()
         except Exception as e:
             self._forward_output()
+            if discard and isinstance(e, discard):
+                self.log(f"{what} discarded: {e!r}", Status.discard, "logStatusDiscard")
+                return Status.discard
             return self.error(f"{what} failed: {e!r}\n{traceback.format_exc()}")
         self._forward_output()
         return Status.ok
+
+    def log(self, message, status, category):
+        """Send a message to the importer. Errors always go; other messages only in the categories
+        the importer chose with fmi2/3SetDebugLogging (all when it named none)."""
+        if status >= Status.error or self.log_categories is None or category in self.log_categories:
+            self._send_log(message, status, category)
+
+    def set_debug_logging(self, logging_on, categories=()):
+        self.logging_on = bool(logging_on)
+        self.log_categories = set(categories) or None
+        return Status.ok
+
+    def _invoke(self, fn, *args, **kwargs):
+        """fn(*args, **kwargs). An async def (a step method, classmethod factory or terminate) is run to
+        completion on one event loop kept for the whole run, so objects bound to that loop keep working;
+        what other functions return is never awaited, even when it could be (a Future)."""
+        if not inspect.iscoroutinefunction(fn):
+            return fn(*args, **kwargs)
+        if self._loop is None:
+            self._loop = asyncio.new_event_loop()
+        return self._loop.run_until_complete(fn(*args, **kwargs))
 
     @contextlib.contextmanager
     def _in_model_dir(self):
@@ -570,7 +654,11 @@ class Engine:
                 stream.flush()
         self._output.seek(self._position)
         text = self._output.read().decode("utf-8", errors="replace")
-        self._position = self._output.tell()
+        # empty the file once read, so a long run that prints a lot doesn't fill the temp disk.
+        # Descriptors 1 and 2 share its offset (dup2), so they write from the start again.
+        self._output.seek(0)
+        self._output.truncate()
+        self._position = 0
         if text.strip() and self.logging_on:
             self.log(f"[output] {text.rstrip()}", Status.ok, self.info_category)
 
@@ -662,11 +750,30 @@ class Engine:
             resolved[table] = {}
             for name, value in self.interface.get(table, {}).items():
                 try:
-                    resolved[table][name] = resolve_constant(value)
+                    # a copy: the model may change a list or dict constant in place
+                    resolved[table][name] = resolve_constant(copy.deepcopy(value))
                 except Exception as e:
                     shown = value["call"] if isinstance(value, dict) and "call" in value else value
                     raise RuntimeError(f"[model] {table}.{name} = {shown!r} failed: {e!r}") from e
         self.constants, self.call_constants = resolved["constants"], resolved["call_constants"]
+
+    def _literal_constants(self):
+        """{table: {name: value}} of the resolved constants written as values ({ python = ... }, numbers,
+        lists), not { call = ... } / references, which are objects shared by the whole run (a loaded
+        model) and stay as they are on reset and rollback."""
+        if self.constants is None:
+            return {}
+        resolved = {"constants": self.constants, "call_constants": self.call_constants}
+        return {table: {name: resolved[table][name] for name, value in self.interface.get(table, {}).items()
+                        if is_literal_constant(value)}
+                for table in resolved}
+
+    def _write_literal_constants(self, values):
+        if self.constants is None:
+            return
+        resolved = {"constants": self.constants, "call_constants": self.call_constants}
+        for table, constants in values.items():
+            resolved[table].update(constants)
 
     def _run_setup(self, after_construction):
         """[model] setup: "module:function" calls run before construction, method names after it."""
@@ -730,7 +837,8 @@ class Engine:
             kwargs.update(self._bound("arg"))
         else:
             kwargs = self._bound("arg", clock=clock)
-        sources = {"time": time, "step_size": step_size, "end_time": time + step_size}
+        sources = {"time": time, "step_size": step_size, "end_time": time + step_size,
+                   "start_time": self.start_time, "stop_time": self.stop_time, "tolerance": self.tolerance}
         epochs = self.interface.get("time_epochs", {})
         for arg, source in self.interface.get("time_args", {}).items():
             if clock is None or arg in self.clocks[clock].get("time_args", ()):
@@ -738,7 +846,60 @@ class Engine:
                 if arg in epochs:   # a date-time: the epoch plus the FMU time in seconds
                     kwargs[arg] = datetime.datetime.fromisoformat(epochs[arg]) + datetime.timedelta(seconds=kwargs[arg])
         self._apply_attributes(clock=clock)
-        return self._target(clock)(*self._positional(clock), **kwargs)
+        return self._invoke(self._target(clock), *self._positional(clock), **kwargs)
+
+    def _integrate(self, time, step_size):
+        """[model] integrate: advance the states from `time` over the step, with the model as the
+        right-hand side: called with the states (and inputs) at each stage, it returns their derivatives."""
+        states = [v for v in self.variables if "der" in v]
+        sizes = [self.size(v) or 1 for v in states]
+
+        def load(y):
+            i = 0
+            for v, n in zip(states, sizes):
+                self.values[v["name"]] = [float(x) for x in y[i:i + n]] if v.get("dimensions") else float(y[i])
+                i += n
+
+        def rhs(t, y):
+            load(y)
+            result = self._call(t, step_size)
+            derivatives = []
+            for v, n in zip(states, sizes):
+                found, value = self._source_value(v["der"], result, True)
+                value = plain_number(value)
+                flat = flatten(value.tolist() if hasattr(value, "tolist") else value)
+                if len(flat) != n:
+                    raise ValueError(f"the derivative of {v['name']} has {len(flat)} values, expected {n}")
+                derivatives += [float(x) for x in flat]
+            return derivatives
+
+        y = [float(x) for v in states for x in (self.values[v["name"]] if v.get("dimensions")
+                                                 else [self.values[v["name"]]])]
+        method, substeps = self.interface["integrate"]["method"], self.interface["integrate"]["substeps"]
+        if method.startswith("scipy:"):
+            from scipy.integrate import solve_ivp
+            options = {"rtol": self.tolerance} if self.tolerance else {}
+            solution = solve_ivp(lambda t, x: rhs(t, list(x)), (time, time + step_size), y,
+                                 method=method.partition(":")[2], **options)
+            if not solution.success:
+                raise StepRejected(f"solve_ivp ({method}) failed: {solution.message}")
+            y = [float(x) for x in solution.y[:, -1]]
+        else:
+            h, t = step_size / substeps, time
+            for _ in range(substeps):
+                if method == "euler":
+                    y = [a + h * d for a, d in zip(y, rhs(t, y))]
+                else:   # classic Runge-Kutta, 4th order
+                    k1 = rhs(t, y)
+                    k2 = rhs(t + h / 2, [a + h / 2 * k for a, k in zip(y, k1)])
+                    k3 = rhs(t + h / 2, [a + h / 2 * k for a, k in zip(y, k2)])
+                    k4 = rhs(t + h, [a + h * k for a, k in zip(y, k3)])
+                    y = [a + h / 6 * (p + 2 * q + 2 * r + s) for a, p, q, r, s in zip(y, k1, k2, k3, k4)]
+                t += h
+            if not all(math.isfinite(x) for x in y):
+                raise StepRejected(f"the states are not finite after the step ({method}): try a smaller step "
+                                   "or more substeps")
+        load(y)
 
     def _target(self, clock):
         if clock is None:
@@ -793,9 +954,18 @@ class Engine:
 def make_engine(resources_dir, log, info_category="logAll"):
     """The engine for an FMU: one model, or several connected ones ([composite])."""
     interface = json.loads((Path(resources_dir) / "interface.json").read_text())
+    check_spec_version(interface)
     if interface.get("composite"):
         return CompositeEngine(resources_dir, log, info_category)
     return Engine(resources_dir, log, info_category)
+
+
+def check_spec_version(interface):
+    """Refuse an interface.json written for another runtime (a part or file from another fmugen version)."""
+    found = interface.get("spec_version")
+    if found != SPEC_VERSION:
+        raise RuntimeError(f"interface.json has spec_version {found!r}, but this fmugen runtime reads version "
+                           f"{SPEC_VERSION}: rebuild the FMU with one fmugen version")
 
 
 class CompositeEngine:
@@ -810,6 +980,8 @@ class CompositeEngine:
         hf_cache = self.resources_dir / "hf_cache"
         if hf_cache.is_dir():   # Hugging Face models bundled by fmugen build, shared by the parts
             os.environ.update(HF_HUB_CACHE=str(hf_cache), HF_HUB_OFFLINE="1", TRANSFORMERS_OFFLINE="1")
+        for p in self.interface["parts"]:
+            check_spec_version(json.loads((self.resources_dir / p["dir"] / "interface.json").read_text()))
         self.parts = {p["name"]: Engine(self.resources_dir / p["dir"], log, info_category)
                       for p in self.interface["parts"]}
         self.variables = self.interface["variables"]
@@ -818,7 +990,9 @@ class CompositeEngine:
             v["valueReference"] + k: (v, k) for v in self.variables if v.get("dimensions")
             for k in range(math.prod(v["dimensions"]))}
         self.connections = [(tuple(c["from"]), tuple(c["to"])) for c in self.interface["connections"]]
-        self.clocks, self.clock_active = {}, {}
+        # the parts' clocks, <part>.<clock>: each reference is passed on to its part
+        self.clocks = {c["name"]: c for c in self.interface.get("clocks", [])}
+        self.clock_by_reference = {c["valueReference"]: c for c in self.clocks.values()}
         self.time = self.interface.get("experiment", {}).get("start_time", 0.0)
 
     # ---- helpers ----
@@ -831,6 +1005,9 @@ class CompositeEngine:
     def logging_on(self, on):
         for engine in self.parts.values():
             engine.logging_on = on
+
+    def set_debug_logging(self, logging_on, categories=()):
+        return self._all("set_debug_logging", logging_on, categories)
 
     @property
     def terminate_requested(self):
@@ -889,12 +1066,20 @@ class CompositeEngine:
         return status
 
     def do_step(self, current_time, step_size):
+        # a part that discards its step undoes the whole step: the parts before it are put back too
+        saved = None
+        if any(e.discard_on for e in self.parts.values()) and self.interface.get("can_get_and_set_state", True):
+            saved = self.serialize()[1]
         status, ticked = Status.ok, False
         for name, engine in self.parts.items():
             status = max(status, self._feed(name))
             if status < Status.error:
                 part_status, part_ticked = engine.do_step(current_time, step_size)
                 status, ticked = max(status, part_status), ticked or part_ticked
+            if status == Status.discard:
+                if saved:
+                    self.deserialize(saved)
+                return status, False
             if status >= Status.error:
                 return status, ticked
         self.time = current_time + step_size
@@ -903,11 +1088,21 @@ class CompositeEngine:
     def terminate(self):
         return self._all("terminate")
 
+    def _configurable(self):
+        """The parts with structural parameters (only they have a configuration mode)."""
+        return [e for e in self.parts.values() if any(v["causality"] == "structuralParameter" for v in e.variables)]
+
     def enter_configuration_mode(self):
-        return self.error("a composite FMU has no structural parameters")
+        parts = self._configurable()
+        if not parts:
+            return self.error("this FMU has no structural parameters")
+        return max(e.enter_configuration_mode() for e in parts)
 
     def exit_configuration_mode(self):
-        return self.error("a composite FMU has no structural parameters")
+        parts = self._configurable()
+        if not parts:
+            return self.error("this FMU has no structural parameters")
+        return max(e.exit_configuration_mode() for e in parts)
 
     def enter_event_mode(self):
         return self._all("enter_event_mode")
@@ -923,7 +1118,10 @@ class CompositeEngine:
     # ---- values ----
 
     def size(self, var):
-        return math.prod(var["dimensions"]) if var.get("dimensions") else None
+        if not var.get("dimensions"):
+            return None
+        engine, local, _ = self._target(var["valueReference"])
+        return engine.size(engine.by_reference[local])   # its part knows the structural parameters
 
     def get_values(self, references):
         values = []
@@ -954,28 +1152,62 @@ class CompositeEngine:
                 return status
         return Status.ok
 
-    # ---- clocks: a composite FMU has none, so every reference is unknown ----
+    # ---- clocks: each one belongs to a part ----
 
-    def _first(self):
-        return next(iter(self.parts.values()))
+    def _clock(self, r):
+        """(part engine, the clock's reference in that part) for one of the FMU's clock references."""
+        clock = self.clock_by_reference.get(r)
+        return (self.parts[clock["part"]], clock["local"]) if clock else (None, None)
+
+    def _clock_values(self, method, references, columns=1):
+        """Call a part's get method (returning status and `columns` lists) for each clock reference."""
+        lists = [[] for _ in range(columns)]
+        for r in references:
+            engine, local = self._clock(r)
+            if engine is None:
+                return (self.error(f"value reference {r} is not a clock"), *([] for _ in lists))
+            status, *values = getattr(engine, method)([local])
+            if status != Status.ok:
+                return (status, *([] for _ in lists))
+            for target, part_values in zip(lists, values):
+                target.extend(part_values)
+        return (Status.ok, *lists)
+
+    def _clock_set(self, method, references, values):
+        for r, value in zip(references, values):
+            engine, local = self._clock(r)
+            if engine is None:
+                return self.error(f"value reference {r} is not a clock")
+            status = getattr(engine, method)([local], [value])
+            if status != Status.ok:
+                return status
+        return Status.ok
+
+    @property
+    def clock_active(self):
+        return {name: self.parts[c["part"]].clock_active[c["name"].partition(".")[2]]
+                for name, c in self.clocks.items()}
+
+    def drop_output_ticks(self):
+        return self._all("drop_output_ticks")
 
     def set_clocks(self, references, values):
-        return self._first().set_clocks(references, values)
+        return self._clock_set("set_clocks", references, values)
 
     def get_clocks(self, references):
-        return self._first().get_clocks(references)
+        return self._clock_values("get_clocks", references)
 
     def get_intervals(self, references):
-        return self._first().get_intervals(references)
+        return self._clock_values("get_intervals", references, columns=2)
 
     def set_intervals(self, references, intervals):
-        return self._first().set_intervals(references, intervals)
+        return self._clock_set("set_intervals", references, intervals)
 
     def get_shifts(self, references):
-        return self._first().get_shifts(references)
+        return self._clock_values("get_shifts", references)
 
     def set_shifts(self, references, shifts):
-        return self._first().set_shifts(references, shifts)
+        return self._clock_set("set_shifts", references, shifts)
 
     # ---- state ----
 
@@ -1018,6 +1250,7 @@ class _ForwardingHandler(logging.Handler):
 
 
 # ================= helpers =================
+
 
 def _clock_of(var):
     clocks = var.get("clocks")
@@ -1219,6 +1452,11 @@ def build_object(fn, name, fields):
 def keyword_constants(constants):
     """The constants passed by keyword: all but those named "0", "1", ... (positions of *args)."""
     return {k: v for k, v in constants.items() if not k.isdigit()}
+
+
+def is_literal_constant(value):
+    """Whether a constant is a value (resolved again on reset), not a { call = ... } or a reference."""
+    return not (isinstance(value, dict) and len(value) == 1 and ("call" in value or "ref" in value))
 
 
 def resolve_constant(value):
@@ -1432,7 +1670,13 @@ def _capture_output(enabled):
     return sink
 
 
+UINT64_MAX = 2**64 - 1
+
+
 def fraction(value):
-    """float -> (counter, resolution) for FMI 3 *Fraction functions."""
+    """float -> (counter, resolution) for FMI 3 *Fraction functions; both are uint64, so a value
+    that needs a larger resolution (1e-20) is rounded to the nearest fraction that fits."""
     f = Fraction(str(value))
+    if f.denominator > UINT64_MAX:
+        f = f.limit_denominator(UINT64_MAX)
     return f.numerator, f.denominator

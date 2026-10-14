@@ -15,7 +15,8 @@ import keyword
 import tomllib
 from pathlib import Path
 
-from fmugen.config import FMI_VERSIONS, InterfaceError, element_count, load_config
+from fmugen.config import FMI_VERSIONS, INT_TYPES, InterfaceError, element_count, load_config
+from fmugen.templates.fmugen_runtime import SPEC_VERSION
 
 COMPOSITE_KEYS = {"name", "description", "author", "parts", "connections", "fmi_version"}
 TOP_KEYS = {"composite", "experiment"}
@@ -51,18 +52,18 @@ class Composite:
                 part_path = part_path / "fmugen.toml"
             if not part_path.is_file():
                 raise InterfaceError(f"[composite] parts.{name}: {rel!r} is not a fmugen.toml")
-            config = load_config(part_path)
-            for key in ("clocks", "structural_parameters", "events"):
-                if config.data.get(key):
-                    raise InterfaceError(f"[composite] parts.{name}: [{key}] is not supported inside a composite FMU")
-            self.parts[name] = config
+            self.parts[name] = load_config(part_path)
         self.connections = [_connection(text) for text in table.get("connections", [])]
-        entries = [c.entry_target for c in self.parts.values() if c.entry_is_file]
-        stems = [Path(e).stem for e in entries]
-        clashes = sorted({s for s in stems if stems.count(s) > 1})
+        owners = {}
+        for name, config in self.parts.items():
+            for module in config.local_modules():
+                owners.setdefault(module, []).append(name)
+        clashes = {module: names for module, names in sorted(owners.items()) if len(names) > 1}
         if clashes:
-            raise InterfaceError(f"[composite] parts share the module name(s) {clashes}: all parts run in one "
-                                 "Python process, so rename one of the files")
+            shown = "; ".join(f"{m} (in {', '.join(names)})" for m, names in clashes.items())
+            raise InterfaceError(f"[composite] parts have modules with the same name: {shown}. All parts run in "
+                                 "one Python process, which imports a module name once, so one part would run "
+                                 "the other's code: rename one of them")
 
 
 def is_composite(target):
@@ -89,6 +90,25 @@ def _connection(text):
     return tuple(ends)
 
 
+FLOAT_TYPES = ("Real", "Float32", "Float64")
+
+
+def _type_mismatch(source, target, source_interface, target_interface):
+    """Why a value of `source` can't be passed to `target`, or None. Same types, integers and
+    Booleans into floats, and integers into integers (the range is checked when it is set) work."""
+    a, b = source["type"], target["type"]
+    if a == "Enumeration" or b == "Enumeration":
+        if a != b:
+            return f"{a} to {b}"
+        items = [i.get("type_definitions", {}).get(v.get("declared_type"), {}).get("items")
+                 for i, v in ((source_interface, source), (target_interface, target))]
+        return None if items[0] == items[1] else f"the enumerations have different items {items[0]} and {items[1]}"
+    if a == b or b in FLOAT_TYPES and (a in INT_TYPES or a in FLOAT_TYPES or a == "Boolean") \
+            or a in INT_TYPES and b in INT_TYPES:
+        return None
+    return f"a {a} can't be passed to a {b}"
+
+
 def combine(composite, interfaces, version, model_name=None, author=None):
     """The FMU's interface: the parts' variables not fed by a connection, named <part>.<name>."""
     by_name = {name: {v["name"]: v for v in interface["variables"]} for name, interface in interfaces.items()}
@@ -106,8 +126,18 @@ def combine(composite, interfaces, version, model_name=None, author=None):
             raise InterfaceError(f"[composite] connection: {src}.{src_var} is an input, not a result")
         if (dst, dst_var) in fed:
             raise InterfaceError(f"[composite] connection: {dst}.{dst_var} is fed twice")
+        for end, var in ((f"{src}.{src_var}", source), (f"{dst}.{dst_var}", target)):
+            if var.get("clocks"):
+                raise InterfaceError(f"[composite] connection: {end} is a clocked variable; only variables "
+                                     "that have a value at every step can be connected")
+            if any(isinstance(d, str) for d in var.get("dimensions", ())):
+                raise InterfaceError(f"[composite] connection: {end} is an array sized by a structural "
+                                     "parameter; only fixed-size arrays can be connected")
         if element_count(source) != element_count(target):
             raise InterfaceError(f"[composite] connection: {src}.{src_var} and {dst}.{dst_var} have different sizes")
+        why = _type_mismatch(source, target, interfaces[src], interfaces[dst])
+        if why:
+            raise InterfaceError(f"[composite] connection: {src}.{src_var} -> {dst}.{dst_var}: {why}")
         fed.add((dst, dst_var))
         connections.append({"from": [src, source["valueReference"]], "to": [dst, target["valueReference"]]})
 
@@ -123,6 +153,10 @@ def combine(composite, interfaces, version, model_name=None, author=None):
                 new["declared_type"] = f"{part}.{var['declared_type']}"
             if "depends_on" in var:
                 new["depends_on"] = [f"{part}.{d}" for d in var["depends_on"] if (part, d) not in fed]
+            if var.get("clocks"):
+                new["clocks"] = [f"{part}.{c}" for c in var["clocks"]]
+            if var.get("dimensions"):   # a structural parameter sizing it is one of the FMU's variables too
+                new["dimensions"] = [f"{part}.{d}" if isinstance(d, str) else d for d in var["dimensions"]]
             variables.append(new)
     if version == 3:
         variables.append({"name": "time", "causality": "independent", "variability": "continuous",
@@ -131,6 +165,12 @@ def combine(composite, interfaces, version, model_name=None, author=None):
     for var in variables:
         var["valueReference"] = vr
         vr += element_count(var) if version == 2 else 1
+    # the parts' clocks, named <part>.<clock>, after the variables (FMI 3 only: a part's config refuses
+    # clocks for FMI 2)
+    clocks = [dict(clock, name=f"{part}.{clock['name']}", part=part, local=clock["valueReference"])
+              for part, interface in interfaces.items() for clock in interface.get("clocks", [])]
+    for vr, clock in enumerate(clocks, start=vr):
+        clock["valueReference"] = vr
 
     experiment = dict(composite.experiment)
     fixed = {i.get("experiment", {}).get("step_size") for i in interfaces.values()
@@ -140,7 +180,7 @@ def combine(composite, interfaces, version, model_name=None, author=None):
     if fixed and "step_size" not in experiment:
         experiment.update(step_size=fixed.pop(), fixed_step=True)
     return {
-        "spec_version": 1,
+        "spec_version": SPEC_VERSION,
         "composite": True,
         "fmi_version": version,
         "model_name": model_name or composite.data.get("name") or composite.path.parent.name,
@@ -151,9 +191,9 @@ def combine(composite, interfaces, version, model_name=None, author=None):
         "variables": variables,
         "type_definitions": type_definitions,
         "experiment": experiment,
-        "clocks": [],
+        "clocks": clocks,
         "events": {},
-        "has_event_mode": False,
+        "has_event_mode": any(i.get("has_event_mode") for i in interfaces.values()),
         "can_get_and_set_state": all(i.get("can_get_and_set_state", True) for i in interfaces.values()),
         "capture_output": any(i.get("capture_output") for i in interfaces.values()),
     }

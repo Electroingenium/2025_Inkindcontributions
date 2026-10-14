@@ -27,6 +27,7 @@ def test_options_are_checked(tmp_path):
         build(EXAMPLES / "simple_pid", tmp_path / "b.fmu", platforms=["win_amd64"])
 
 
+@pytest.mark.fmu
 def test_vendored_fmu_installs_its_wheels_offline_once(tmp_path, monkeypatch):
     envs = tmp_path / "envs"
     monkeypatch.setenv("FMUGEN_ENV_DIR", str(envs))
@@ -101,3 +102,14 @@ def test_hugging_face_model_ids_are_found(tmp_path):
         "constants": {"repo": {"python": "'sb3/ppo-CartPole-v1'"}, "n": {"python": "3"}},
     }
     assert hf_models(interface, tmp_path) == ["amazon/chronos-bolt-tiny", "sb3/ppo-CartPole-v1"]
+
+
+def test_file_paths_are_not_taken_for_hugging_face_models(tmp_path):
+    from fmugen.distribute import hf_models
+    (tmp_path / "run" / "data").mkdir(parents=True)
+    (tmp_path / "run" / "data" / "weather.bin").write_text("1")
+    interface = {
+        "cwd": "fmugen_model/run",   # [model] cwd = "run": data/weather.bin is opened from there
+        "variables": [{"start": "data/weather.bin"}, {"start": "results/out.csv"}, {"start": "sb3/ppo-x"}],
+    }
+    assert hf_models(interface, tmp_path) == ["sb3/ppo-x"]

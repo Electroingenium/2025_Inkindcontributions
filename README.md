@@ -163,6 +163,12 @@ uv sync
 uv run pytest
 ```
 
+That runs everything, including the `slow` tests that freeze FMUs with PyInstaller and Nuitka (minutes each). For a quick loop while editing, skip those and the `fmu` tests, which run built FMUs through UniFMU and an importer (about a minute):
+
+```bash
+uv run pytest -m "not slow and not fmu"
+```
+
 The tests cover:
 - **Adapter:** the generated adapters' behaviour for every FMI 2 and FMI 3 call, including clocks, arrays and configuration mode.
 - **Inference:** `fmugen init` on the examples and on small models.

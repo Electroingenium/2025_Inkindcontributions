@@ -12,6 +12,7 @@ from fmpy.validation import validate_fmu
 from fmugen.__main__ import build
 from fmugen.config import InterfaceError
 from fmugen.templates.fmugen_runtime import Status
+from fmugen.templates.fmugen_runtime import Status
 
 OK, WARNING, ERROR = Status.ok, Status.warning, Status.error
 
@@ -191,6 +192,7 @@ def test_output_clock_and_terminate(tmp_path, make_fmu, adapter):
     assert fmu.fmi3DoStep(4.0, 2.0, False)[2] is True                 # level 6 = 2 * capacity
 
 
+@pytest.mark.fmu
 def test_fmi2_arrays_are_one_scalar_per_element(tmp_path):
     write(tmp_path, "def f(v=(1.0, 2.0)):\n    return {'s': sum(v), 'w': [x * 10 for x in v]}\n", '''
         [model]
@@ -251,6 +253,7 @@ def slave(fmus, tmp_path):
         fmu.freeInstance()
 
 
+@pytest.mark.fmu
 def test_clocks_intervals_and_state_through_unifmu(slave):
     fmu, vr = slave("sampled_pid")
     clock = (fmi3ValueReference * 1)(vr["sample"])
@@ -283,6 +286,7 @@ def test_clocks_intervals_and_state_through_unifmu(slave):
     fmu.terminate()
 
 
+@pytest.mark.fmu
 def test_kalman_and_configuration_mode_through_unifmu(slave):
     fmu, vr = slave("kalman")
     fmu.enterConfigurationMode()
@@ -312,6 +316,7 @@ ALL_TYPES = {
 }
 
 
+@pytest.mark.fmu
 def test_every_type_clock_setting_and_state_function_through_unifmu(tmp_path):
     names = {t: t.lower() for t in ALL_TYPES}
     args = ", ".join(f"{n}_in" for n in names.values())
@@ -384,6 +389,7 @@ interval = 2.0
         fmu.freeInstance()
 
 
+@pytest.mark.fmu
 @pytest.mark.parametrize("name", ["psychrometry", "simple_pid", "rc_building"])
 def test_fmi2_examples_build_as_fmi3_with_the_same_results(tmp_path, name):
     from fmpy import simulate_fmu
@@ -398,7 +404,35 @@ def test_fmi2_examples_build_as_fmi3_with_the_same_results(tmp_path, name):
         assert list(results[2][column]) == pytest.approx(list(results[3][column]), nan_ok=True)
 
 
+@pytest.mark.fmu
 def test_plain_cosimulation_without_event_mode(fmus):
     from fmpy import simulate_fmu
     result = simulate_fmu(str(fmus["simple_pid"]), stop_time=1.0, output=["output"])
     assert result["output"][-1] == pytest.approx(2.0 + 0.5 * 1.0)
+
+
+def test_fraction_fits_in_uint64():
+    from fmugen.templates.fmugen_runtime import UINT64_MAX, fraction
+    assert fraction(0.1) == (1, 10)
+    counter, resolution = fraction(1e-20)
+    assert 0 < resolution <= UINT64_MAX and counter / resolution == pytest.approx(1e-20, rel=1e-6)
+
+
+def test_a_failed_step_reports_the_start_of_the_step_as_last_successful_time(make_fmu, adapter):
+    fmu = adapter(make_fmu(EXAMPLES / "rc_building", fmi_version=3), fmi=3)
+    fmu.initialize()
+    status, _, _, _, last = fmu.fmi3DoStep(0.0, 60.0, False)    # only 3600 s steps
+    assert status == Status.error and last == 0.0
+    status, _, _, _, last = fmu.fmi3DoStep(0.0, 3600.0, False)
+    assert status == Status.ok and last == 3600.0
+
+
+def test_instantiating_with_logging_off_turns_logging_off(make_fmu):
+    from fmugen.__main__ import isolated_imports
+    from fmugen.templates import model_fmi3
+    fmu_dir = make_fmu(EXAMPLES / "simple_pid", fmi_version=3)
+    with isolated_imports():
+        for logging_on in (False, True):
+            model = model_fmi3.Model("test", "", "", False, logging_on, False, False, [], lambda *a: None,
+                                     resources_dir=fmu_dir / "resources")
+            assert model.engine.logging_on is logging_on

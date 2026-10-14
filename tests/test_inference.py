@@ -609,3 +609,44 @@ def test_outputs_are_read_from_the_object_the_step_returns(tmp_path):
     data, _ = infer(f"{tmp_path / 'fluid.py'}:Fluid", call="with_state", starts={"temperature": 20.0})
     assert data["inputs"] == {"temperature": {"start": 20.0}}   # echoed back: not an output too
     assert data["outputs"] == {"density": {"from": "return:density"}}   # not the original object's raising ones
+
+
+@pytest.mark.parametrize("previous, following", [("x_old", "x_new"), ("last_x", "next_x"), ("prev_x", "x"),
+                                                 ("x_last", "x_next")])
+def test_state_naming_conventions(tmp_path, previous, following):
+    (tmp_path / "m.py").write_text(f"def step(u: float = 1.0, {previous}: float = 0.0):\n"
+                                   f"    return {{'{following}': {previous} + u}}\n")
+    data, _ = infer(tmp_path / "m.py", probe=False)
+    assert data["states"] == {previous: {"start": 0.0, "next": f"return:{following}"}}
+
+
+def test_a_file_that_only_re_exports_its_model(tmp_path):
+    (tmp_path / "plant_core.py").write_text("def model(x: float = 1.0):\n    return {'y': 2 * x}\n\n"
+                                            "def helper():\n    pass\n")
+    (tmp_path / "plant.py").write_text("from plant_core import model, helper\n__all__ = ['model']\n")
+    data, _ = infer(tmp_path / "plant.py", probe=False)
+    assert data["model"]["entry"] == "plant.py:model"
+    assert data["model"]["sources"] == ["plant_core.py"]
+
+
+def test_probe_timeout_stops_the_process(tmp_path):
+    import subprocess
+    (tmp_path / "slow.py").write_text("import time\n\ndef slow(x: float = 1.0):\n    time.sleep(60)\n"
+                                      "    return {'y': x}\n")
+    result = subprocess.run([sys.executable, "-m", "fmugen", "init", str(tmp_path / "slow.py"), "--probe",
+                             "--probe-timeout", "2"], capture_output=True, text=True, timeout=50)
+    assert result.returncode == 2 and "did not finish in 2 s" in result.stderr
+
+
+def test_model_files_named_like_standard_library_modules_are_refused(tmp_path):
+    from fmugen.__main__ import build, init
+    from fmugen.config import InterfaceError
+    (tmp_path / "queue.py").write_text("def step(x: float = 1.0):\n    return {'y': x}\n")
+    with pytest.raises(InterfaceError, match="queue.*standard library"):
+        init(tmp_path / "queue.py")
+    # a helper next to the entry file, copied with sources
+    (tmp_path / "plant.py").write_text("from queue import step\n\ndef plant(x: float = 1.0):\n    return step(x)\n")
+    (tmp_path / "fmugen.toml").write_text('[model]\nentry = "plant.py:plant"\nsources = ["queue.py"]\n'
+                                          '[inputs]\nx = { start = 1.0 }\n[outputs]\ny = {}\n')
+    with pytest.raises(InterfaceError, match="queue.*standard library"):
+        build(tmp_path / "fmugen.toml", tmp_path / "out", output_format="folder")

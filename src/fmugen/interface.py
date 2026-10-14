@@ -22,7 +22,9 @@ import keyword
 import math
 import pickle
 import re
+import os
 import sys
+import threading
 import traceback
 import types
 import typing
@@ -30,7 +32,7 @@ from collections.abc import Mapping
 from pathlib import Path
 
 from fmugen import static
-from fmugen.config import InterfaceError
+from fmugen.config import InterfaceError, stdlib_clash
 
 # Argument names (lowercase, without "_") that take the simulation time, and which one: the time at the
 # start of the step, the step size, or the time at its end (simpy's Environment.run(until))
@@ -49,6 +51,8 @@ SCALARS = (bool, int, float, str)
 
 def load_module(model_path):
     model_path = Path(model_path).resolve()
+    if model_path.stem in sys.stdlib_module_names:   # registering it would replace the real module here too
+        raise InterfaceError(stdlib_clash([model_path.stem]))
     if str(model_path.parent) not in sys.path:
         sys.path.insert(0, str(model_path.parent))
     spec = importlib.util.spec_from_file_location(model_path.stem, model_path)
@@ -95,6 +99,7 @@ def infer_config(target, call=None, config_dir=None, fmi_version=None, starts=No
     default; `setup` (list of "module:function(args)" / "method") is run before the probe.
     `create` names a classmethod that builds the object (e.g. "from_pretrained").
     `probe`: also call the model once (setup, construction, one step); otherwise it is never called.
+    A number is the probe's time limit in seconds (fmugen exits when it passes); True: no limit.
     `converts` ({argument: "module:function" or "numpy"}) sets how arguments are passed in.
 
     The model is imported (and probed) in config_dir, as it will run inside the FMU with
@@ -110,7 +115,30 @@ def infer_config(target, call=None, config_dir=None, fmi_version=None, starts=No
     if path:
         target = f"{path.resolve()}" + (f":{name}" if name else "")
     with contextlib.chdir(config_dir):
-        return _infer_config(target, call, config_dir, fmi_version, starts, setup, kind, create, probe, converts)
+        if probe is True or not probe:
+            return _infer_config(target, call, config_dir, fmi_version, starts, setup, kind, create, probe, converts)
+        return _with_timeout(float(probe), _infer_config, target, call, config_dir, fmi_version, starts, setup, kind,
+                             create, True, converts)
+
+
+def _with_timeout(timeout, fn, *args):
+    """fn(*args), stopping the process if it takes longer than `timeout` seconds. The model runs
+    in this thread, as without a limit (some libraries only work there), and its code can't be
+    interrupted: a watchdog thread prints why and exits instead."""
+    def abort():
+        sys.stderr.write(f"fmugen: error: the probe did not finish in {timeout:g} s: the model may wait for "
+                         "input or a device, or be slow on the start values. Give a larger --probe-timeout, "
+                         "other --start values, or run init without --probe\n")
+        sys.stderr.flush()
+        os._exit(2)
+
+    watchdog = threading.Timer(timeout, abort)
+    watchdog.daemon = True
+    watchdog.start()
+    try:
+        return fn(*args)
+    finally:
+        watchdog.cancel()
 
 
 def _infer_config(target, call, config_dir, fmi_version, starts, setup, kind, create, probe, converts):
@@ -177,7 +205,8 @@ def _infer_config(target, call, config_dir, fmi_version, starts, setup, kind, cr
     unused = set(starts) - variables - set(comments.get(POSITIONAL_STARTS, {})) \
         - {n for table in ("constants", "call_constants") for n in data["model"].get(table, {})} \
         - {str(info.get("to", "")).partition(":")[2].partition("[")[0]
-           for sec in ("parameters", "inputs", "states") for info in data.get(sec, {}).values()}         - {str(info["to"]).partition(":")[2] for sec in ("parameters", "inputs", "states")
+           for sec in ("parameters", "inputs", "states") for info in data.get(sec, {}).values()} \
+        - {str(info["to"]).partition(":")[2] for sec in ("parameters", "inputs", "states")
            for info in data.get(sec, {}).values() if "." in str(info.get("to", ""))}
     errors = comments.get(START_ERRORS, {})
     explained = sorted(n for n in unused if n in errors)
@@ -339,7 +368,8 @@ def _add_globals(data, comments, entry_module, local_dir=None):
     top = entry_module.__name__.split(".")[0]
     def local(m):   # a module of the user's project (next to the config), not an installed one
         file = getattr(m, "__dict__", {}).get("__file__")
-        return local_dir is not None and file and Path(file).resolve().is_relative_to(local_dir)             and "site-packages" not in Path(file).parts
+        return (local_dir is not None and file and Path(file).resolve().is_relative_to(local_dir)
+                and "site-packages" not in Path(file).parts)
 
     def ours(m):
         return m.__name__ == top or m.__name__.startswith(top + ".") or local(m)
@@ -397,7 +427,7 @@ def _add_requirements(data, comments, module_name, config_dir, entry_file):
             tops |= {name.split(".")[0] for name in _dotted_names(ref.partition("(")[2])}
     if any(info.get("numpy") for section in ("parameters", "inputs", "states") for info in data.get(section, {}).values()):
         tops.add("numpy")
-    distributions = importlib.metadata.packages_distributions()
+    distributions = static.packages_distributions()
     found, unknown = {}, []
     for top in sorted(tops):
         if top in sys.stdlib_module_names or top == "fmugen" or importlib.util.find_spec(top) is None:
@@ -442,6 +472,10 @@ def _pick_entry(module, name):
         and getattr(obj, "__module__", None) == module.__name__
         and not (inspect.isclass(obj) and issubclass(obj, (enum.Enum, BaseException)))
     ]
+    if not own:   # a package's __init__ that only re-exports (from .core import Model): its __all__
+        own = [obj for attr in getattr(module, "__all__", ())
+               if (inspect.isfunction(obj := getattr(module, attr, None)) or inspect.isclass(obj))
+               and not (inspect.isclass(obj) and issubclass(obj, (enum.Enum, BaseException)))]
     if len(own) != 1:
         found = ", ".join(o.__name__ for o in own) or "none"
         raise InterfaceError(
@@ -1799,15 +1833,31 @@ def _dotted_name(name):
     return all(part.isidentifier() for part in name.split("."))
 
 
+STATE_SUFFIXES = ("_prev", "_old", "_last")
+STATE_PREFIXES = ("prev_", "last_", "old_")
+
+
+def _state_base(name):
+    """'x' for an input named like a previous value (x_prev, x_old, x_last, prev_x, last_x, old_x), else None."""
+    for suffix in STATE_SUFFIXES:
+        if name.endswith(suffix) and len(name) > len(suffix):
+            return name[: -len(suffix)]
+    for prefix in STATE_PREFIXES:
+        if name.startswith(prefix) and len(name) > len(prefix):
+            return name[len(prefix):]
+    return None
+
+
 def _detect_states(data, comments, returned, attrs):
-    """An input named x_prev whose next value is returned (a key in `returned`) or stored as an
-    attribute (a name in `attrs`) x_next / x is a state."""
+    """An input named like a previous value (x_prev, x_old, last_x, ...) whose next value is
+    returned (a key in `returned`) or stored as an attribute (a name in `attrs`) as x_next,
+    next_x, x_new, new_x or x is a state."""
     inputs = data.get("inputs", {})
     for name in list(inputs):
-        if not name.endswith("_prev"):
+        base = _state_base(name)
+        if base is None:
             continue
-        base = name[: -len("_prev")]
-        for candidate in (f"{base}_next", base):
+        for candidate in (f"{base}_next", f"next_{base}", f"{base}_new", f"new_{base}", base):
             if candidate in returned:
                 source = f"return:{candidate}"
             elif candidate in attrs:

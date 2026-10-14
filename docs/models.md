@@ -176,6 +176,46 @@ dt = "step_size"
 
 Classes that keep their state in `self` don't need `[states]`; the object itself is the state.
 
+`fmugen init` recognises the usual names for a previous value: an input `x_prev`, `x_old`, `x_last`, `prev_x`, `last_x` or `old_x` whose new value is returned or stored as `x_next`, `next_x`, `x_new`, `new_x` or `x`.
+
+---
+
+## ODE right-hand sides
+
+A model written as the right-hand side of an ODE, `f(t, y) -> dy/dt` (what `scipy.integrate.solve_ivp` takes), returns derivatives, not new values. `[model] integrate` makes the FMU integrate it:
+
+```toml
+[model]
+entry = "dysts.flows:Lorenz"      # Lorenz().rhs(X, t), from PyPI, unmodified
+call = "rhs"
+integrate = "scipy:DOP853"        # or "euler" / "rk4" with substeps = N
+[time]
+t = "time"                        # the time of each solver stage
+[states]
+X = { dimensions = [3], numpy = true, start = [-9.79, -15.04, 20.53] }
+[outputs]
+dX = { from = "return", dimensions = [3] }   # the derivative at the end of the step
+```
+
+- **States:** each state is passed to the model like an input (`to`, default `arg:<name>`), and `der` says which part of the result is its derivative: `"return"` for a single state, `"return:<key>"` for several (`der = "return:dv"`).
+- **Each step:** the solver calls the model at its stages with the states it is trying; the inputs and parameters hold their values over the step. Then the model is called once more at `t + h`, and the outputs are read from that call.
+- **Solvers:** `"euler"` and `"rk4"` take `substeps` fixed sub-steps; `"scipy:<method>"` runs `solve_ivp` from `t` to `t + h` with the importer's tolerance as `rtol` (scipy's default when it gives none). A failed solve, or states that are no longer finite, return `discard`, so a variable-step importer can retry with a smaller step.
+
+## Rejecting a step
+
+Importers with a variable step size can retry a step that the model rejects. `[model] discard_on` lists the exceptions and warnings that mean "this step was too large":
+
+```toml
+[model]
+discard_on = ["scipy.integrate:IntegrationWarning", "builtins:FloatingPointError"]
+```
+
+When the step raises one of them, `doStep` returns `discard` and the FMU is put back to the start of the step (the FMU state is saved before every step, which costs a pickle per step). Warnings in the list are raised as exceptions during the step. Other exceptions are errors, as before.
+
+## Async models
+
+A step method or constructor defined with `async def` is run to completion on every call, on one event loop kept for the whole simulation (objects bound to that loop keep working). Generator models (`yield`) aren't supported: `build` refuses them, and a factory returning an object with a step method works instead.
+
 ---
 
 ## Time and step size
@@ -189,7 +229,8 @@ t  = "time"        # t: time at the start of the step
 # t_end = "end_time"   (t + h)
 ```
 
-- **Initialization:** the function (if `init_call` is on) gets `time = start time` and `step_size = [experiment] step_size`, or 0 when that isn't set.
+- **Initialization:** the function (if `init_call` is on) gets `time = start time` and `step_size = [experiment] step_size`. When the function takes the step size and `[experiment]` has no `step_size`, `init_call` is off by default, so the model is never called with a step size of 0. Its outputs then keep their start values until the first step. Set `init_call = true` to call it anyway (with 0).
+- **The init call is an extra call:** with `init_call` on, the function runs once at initialization and again in the first `doStep`, both at the start time. A model with side effects (a counter, a file it appends to, `[model] globals`) sees one more call than there are steps. Set `init_call = false` to avoid it.
 - **Fixed step size:** if the model only works with one step size (for example, it hard-codes an hour), set `[experiment] fixed_step = true` and `step_size`. The FMU then reports `canHandleVariableCommunicationStepSize="false"` and rejects any other step size with an error.
 
 ---
@@ -533,7 +574,7 @@ A `--start` name that appears in both the constructor and the step method goes t
 | **Date-time arguments** | Annotated `datetime`/`date`, or named `when`, `date`, `dateandtime`, …: [`[time]` with an `epoch`](config.md#time) |
 | **Outputs from the return value** | The code: dict keys (also a dict built in a variable), tuple positions, a single value (`y`), NamedTuple/dataclass fields, or the return annotation (a SQLAlchemy model: its typed columns; nullable ones commented out). With `--probe`: the actual result |
 | **Outputs and locals of classes** | Public attributes the step method assigns, following the methods it calls on `self` (also assigned in `__init__`: local; else output), and annotated properties. With `--probe`: also what the step actually created or changed, and every readable numeric property |
-| **States** | An input `x_prev` whose next value is returned or stored as `x_next` or `x` |
+| **States** | An input `x_prev` (or `x_old`, `x_last`, `prev_x`, `last_x`, `old_x`) whose next value is returned or stored as `x_next`, `next_x`, `x_new`, `new_x` or `x` |
 | **Sources** | Local modules under the config's folder that the model imported |
 | **Constants** | Non-FMI defaults, written as commented-out examples |
 | **Positional-only arguments** | Bound with [`to = "pos:N"`](#positional-only-arguments) |
@@ -542,7 +583,7 @@ A `--start` name that appears in both the constructor and the step method goes t
 Check afterwards:
 
 - **Start values:** arguments without a default get `0.0` unless you pass `--start`; make sure the model is valid there.
-- **States:** only inputs named `x_prev` are detected. A model that takes its own previous result under another name (Madgwick's `updateIMU(q, ...)` returning the new `q`) needs a `[states]` entry: `q = { dimensions = [4], start = [1.0, 0.0, 0.0, 0.0], next = "return" }`.
+- **States:** only inputs named like a previous value (`x_prev`, `x_old`, `last_x`, …) are detected. A model that takes its own previous result under another name (Madgwick's `updateIMU(q, ...)` returning the new `q`) needs a `[states]` entry: `q = { dimensions = [4], start = [1.0, 0.0, 0.0, 0.0], next = "return" }`.
 - **Integer vs Real:** an `int` default (`setpoint=0`) gives an Integer. Write `0.0` for a Real.
 - **Units and descriptions:** add them; they can't be inferred.
 - **Outputs and locals:** remove the ones you don't need. Types come from annotations and what the code shows (`True`, comparisons, strings, arithmetic, the arguments or attributes returned); everything else is assumed Real, and `init` names those outputs in a warning. If none is found, `init` warns that there are no outputs, and `build` notes it too. Uncomment and complete the commented lines (`dimensions = [...]`, properties, `save_state`), or rerun with `--probe`.
@@ -581,9 +622,11 @@ connections = [
 
 - **Variables:** the FMU's variables are the parts' variables, named `<part>.<name>` (`sky.dni`, `dc.y`), except the inputs fed by a connection.
 - **Each step:** the parts run in the order of `parts`. Before a part runs, each connected input gets the current value of its source: the value from this step if the source part ran before it, else from the previous step (for a feedback loop, list the parts in the order the values flow).
-- **Sources:** any output or local (`"tank.level -> valve.level"`). Targets are inputs. Sizes must match.
+- **Sources:** any output or local (`"tank.level -> valve.level"`). Targets are inputs. Sizes must match, and so must types: an integer or Boolean may feed a floating-point input and integers may feed integers, but nothing else changes type (a `String` can't feed a `Real`), and enumerations need the same items.
 - **State:** saving and restoring the FMU state covers every part; reset resets them all.
-- **Limits:** parts can't have clocks, structural parameters or `[events]`. All parts run in one Python process, so two local model files can't have the same module name. `--compile` doesn't support composites yet; `--vendor` does.
+- **Clocks and structural parameters (FMI 3):** a part's clocks become the FMU's clocks, named `<part>.<clock>`; its structural parameters (`<part>.n`) size its own arrays, and configuration mode reaches the parts that have them. Clocked variables and arrays sized by a structural parameter can't be connected.
+- **Discard:** a part that rejects its step (`[model] discard_on`) undoes the whole step: the parts that ran before it are put back too.
+- **Limits:** all parts run in one Python process, so a module name is imported once: no two parts may have local files (entry files or `sources`) with the same module name, e.g. a `utils.py` in each. Installed packages can be shared. `--vendor` and `--compile` work as for one model.
 
 ---
 

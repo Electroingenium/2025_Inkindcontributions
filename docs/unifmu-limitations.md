@@ -1,6 +1,6 @@
 # UniFMU: bugs and limitations
 
-Problems that come from [UniFMU](https://github.com/INTO-CPS-Association/unifmu) **0.14.0** (the version fmugen requires), not from fmugen. Each entry says where it was found, its effect on fmugen FMUs, and the workaround, if any. Sources: fmugen's own testing ([tested-models.md](tested-models.md), [tested-models-round2.md](tested-models-round2.md), [tested-models-rerun.md](tested-models-rerun.md), [AUDIT.md](../AUDIT.md)) and the [UniFMU README](https://github.com/INTO-CPS-Association/unifmu/blob/master/README.md).
+Problems that come from [UniFMU](https://github.com/INTO-CPS-Association/unifmu) **0.14.0** (the version fmugen requires), not from fmugen. Each entry says where it was found, its effect on fmugen FMUs, and the workaround, if any. Sources: fmugen's own testing ([tested-models.md](tested-models.md), [tested-models-round2.md](tested-models-round2.md), [tested-models-rerun.md](tested-models-rerun.md)) and the [UniFMU README](https://github.com/INTO-CPS-Association/unifmu/blob/master/README.md).
 
 | # | Problem | Kind | Workaround in fmugen |
 |---|---|---|---|
@@ -15,7 +15,7 @@ Problems that come from [UniFMU](https://github.com/INTO-CPS-Association/unifmu)
 | 9 | [Reserved module names](#9-reserved-module-names) | Limitation | None. Rename the model file |
 | 10 | [FMI 3 template declares `fmiVersion="3.0-beta.4"`](#10-fmi-3-template-declares-fmiversion30-beta4) | Bug | fmugen writes its own `modelDescription.xml` |
 | 11 | [Smaller limitations from the README](#11-smaller-limitations-from-the-readme) | Limitation | — |
-| 12 | [FMI 2 log messages are used as printf format strings](#12-fmi-2-log-messages-are-used-as-printf-format-strings) | Bug | None yet. Turn off debug logging, or avoid `%` in log messages |
+| 12 | [FMI 2 log messages are used as printf format strings](#12-fmi-2-log-messages-are-used-as-printf-format-strings) | Bug | The FMI 2 adapter doubles each `%` |
 | 13 | [A backend that exits during a call can abort the importer](#13-a-backend-that-exits-during-a-call-can-abort-the-importer) | Bug | None. Find the backend's error by running it directly |
 | 14 | [The distributed proxy's port can't be set](#14-the-distributed-proxys-port-cant-be-set) | Limitation | None. Read the port from the importer's log |
 
@@ -32,12 +32,13 @@ When the FMU's Python process writes more than about 4 KB in total to stdout/std
 - The printed text never reaches the importer's console, even when the run succeeds: it stays in the pipe.
 - Large messages through UniFMU's protocol are not affected: a 160 KB array output and a 70,000-character log message through the FMI logger both work.
 - Typical triggers: library warnings, progress bars (Hugging Face model loading), printed tracebacks.
+- Log records count too: the backend's `main.py` configures the root logger to write to the console, so the model's `logging` records go both to the importer and into the pipe. A function that logs one short warning per step hung FMPy after about 100 steps without `--capture-output` (2026-10-14).
 
 **The panic is a consequence, not the cause.** This entry first said UniFMU panics here (`zeromq-0.4.1/src/rep.rs:168:40: not yet implemented`). The recheck didn't show a panic while the backend was blocked. The panic appeared, followed by the importer aborting (exit code `0xC0000409`), when the blocked backend was then killed: that is [§13](#13-a-backend-that-exits-during-a-call-can-abort-the-importer). So a hang that ends with the backend being killed, or dying, can look like a panic.
 
-Found with Chronos-Bolt ([tested-models.md](tested-models.md), [AUDIT.md §5.7](../AUDIT.md)).
+Found with Chronos-Bolt ([tested-models.md](tested-models.md)).
 
-**Workaround:** `fmugen build --capture-output` redirects file descriptors 1 and 2 inside the backend to a temporary file, and sends the text to the importer's log as `[output]` messages after each call. Not reported upstream yet.
+**Workaround:** `fmugen build --capture-output` redirects file descriptors 1 and 2 inside the backend to a temporary file, and sends the text to the importer's log as `[output]` messages after each call. It is off by default, so a model that prints or logs a lot still hangs unless built with it. Possible next steps in fmugen: have `init --probe` suggest the flag when its probe call writes a lot, or turn it on by default. Not reported upstream yet.
 
 ## 2. The backend keeps running after an FMU error
 
@@ -53,6 +54,8 @@ Found in [tested-models-round2.md](tested-models-round2.md) (problem 1). Reprodu
 
 **Workaround:** free the instance after an error (see the FMPy entry). With `fmpy simulate`, send the output to a file, not a pipe, and kill leftover `main.py` processes.
 
+**Possible in fmugen:** fmugen's runtime runs inside the backend process, so it could stop an orphaned backend itself: a daemon thread started with the engine checks every few seconds whether the parent process is alive (`os.getppid()` on POSIX; `OpenProcess`/`WaitForSingleObject` through `ctypes` on Windows) and calls `os._exit` if it isn't. Two of fmugen's own process layers make orphans more likely on Windows, where killing a parent leaves its child running: `fmugen_launch.py` (`--vendor`) starts `main.py` with `subprocess.call`, and compiled FMUs start through `powershell -command …` (`sh -c` elsewhere). `os.execv` in the launcher on POSIX, and the watchdog or a Job object on Windows, would remove that. Starting the `.exe` directly would also save PowerShell's startup time per instance.
+
 ## 3. Error messages are lost when logging is off
 
 fmugen sends the full Python traceback of a failure to the FMI log (`logStatusError`). UniFMU drops log messages when the importer instantiates the FMU with `loggingOn=False`, which `fmpy simulate` does, even with `--fmi-logging`. The user then sees only `fmi3ExitInitializationMode failed with status 3`, with no reason.
@@ -60,6 +63,8 @@ fmugen sends the full Python traceback of a failure to the FMI log (`logStatusEr
 Found in [tested-models-round2.md](tested-models-round2.md) (problem 7).
 
 **Workaround:** turn on debug logging in the importer, e.g. `fmpy.simulate_fmu(…, debug_logging=True, logger=print)`.
+
+**Possible in fmugen:** with an environment variable such as `FMUGEN_DEBUG=1`, the runtime could also write the log and tracebacks to a file in the temp folder, so the reason for an error is kept even when the importer drops the message (also useful for §13).
 
 ## 4. Log messages only during an FMI call
 
@@ -73,7 +78,7 @@ If an importer calls a function the Python backend doesn't implement (anything m
 
 The Python backend implements Co-Simulation only (UniFMU README, "Supported Features"):
 
-- **No Model Exchange** (FMI 2 or 3), so an ODE model can't be integrated by the importer's own solver. This is the capability users will ask for most ([AUDIT.md §5.6, §8](../AUDIT.md)).
+- **No Model Exchange** (FMI 2 or 3), so an ODE model can't be integrated by the importer's own solver. This is the capability users will ask for most.
 - **No Scheduled Execution** (FMI 3).
 - **No directional or adjoint derivatives**, no input/output derivatives (`fmi2SetRealInputDerivatives`, `fmi2GetRealOutputDerivatives`, `fmi3GetOutputDerivatives`).
 - **No asynchronous steps or status queries**: `fmi2CancelStep`, `fmi2Get*Status`.
@@ -84,13 +89,13 @@ The Python backend implements Co-Simulation only (UniFMU README, "Supported Feat
 
 ## 7. Exact `protobuf==5.27.3` pin
 
-The backend's generated `*_pb2.py` files require exactly `protobuf==5.27.3` (plus `pyzmq`). Since the FMU runs with the model's own environment, this pin lands there and can conflict with packages that pin protobuf differently (TensorFlow, grpcio, …). Regenerating the schemas, or testing a range like `protobuf>=5.27,<6`, would loosen it ([AUDIT.md](../AUDIT.md)).
+The backend's generated `*_pb2.py` files require exactly `protobuf==5.27.3` (plus `pyzmq`). Since the FMU runs with the model's own environment, this pin lands there and can conflict with packages that pin protobuf differently (TensorFlow, grpcio, …). Regenerating the schemas, or testing a range like `protobuf>=5.27,<6`, would loosen it.
 
 ## 8. The FMU needs a Python interpreter
 
 UniFMU starts the backend with the command in `launch.toml`, so a Python FMU needs an interpreter and its packages on the target machine (`needsExecutionTool = true`). The README suggests bundling an interpreter yourself. fmugen offers `build --vendor` (wheels in the FMU, still needs Python) and `build --compile pyinstaller|nuitka` (no Python needed, but only runs on the OS it was built on). See [packaging.md](packaging.md).
 
-The backend also uses `match`, so it needs **Python 3.10 or newer** ([AUDIT.md](../AUDIT.md)).
+The backend also uses `match`, so it needs **Python 3.10 or newer**.
 
 ## 9. Reserved module names
 
@@ -143,7 +148,7 @@ So any error whose traceback quotes a line with a `%` (common in library code: `
 
 **Fix upstream:** call `(self.callback)(env, name, status, category, c"%s".as_ptr(), c_message.as_ptr())`, or double each `%` to `%%` in `log()`. No upstream issue was found (a search of the UniFMU issues for "logger format", "printf", "access violation" and "percent" returned nothing).
 
-**Workaround in fmugen:** none yet. Possible: the FMI 2 adapter doubles each `%` before sending a message. Since fmugen pins UniFMU 0.14.0 exactly, that is safe, but it must be removed when UniFMU fixes the bug, or `%%` would show in the log.
+**Workaround in fmugen (done, 2026-10-14):** the FMI 2 adapter (`model_fmi2.py`, `log()`) doubles each `%` before sending a message, so an importer that formats it prints a single `%`. Checked through UniFMU with FMPy and `debug_logging=True`: a model that logs `"done 50%s of %d"` crashed FMPy with an access violation without the escape, and with it the importer receives the text unchanged (`test_fmi2_log_messages_with_percent_signs_reach_the_importer`). Since fmugen pins UniFMU 0.14.0 exactly, this is safe, but it must be removed when UniFMU passes the text as an argument, or `%%` would show in the log. UniFMU's own messages (built in Rust from error text) are not escaped and can still contain a `%`.
 
 ## 13. A backend that exits during a call can abort the importer
 
@@ -191,4 +196,4 @@ The notifier logs `ACTION REQUIRED ~ Connect remote backend to dispatcher throug
 
 **Who is affected:** FMUs built with `fmugen build --distributed`. The private side can't be started before the simulation, a firewall can't be opened for one known port, and the importer must have logging on, including `logUnifmuMessages`, or the port is never shown.
 
-**Workaround in fmugen:** none, so fmugen has no port flag. The private side takes the port at start-up (`python main.py PORT`); see [packaging.md](packaging.md#distributed-fmus---distributed) for starting it from the importer's logger.
+**Workaround in fmugen:** none, so fmugen has no port flag. A possible helper: a command that reads the port from the importer's log and starts the private side with it. The private side takes the port at start-up (`python main.py PORT`); see [packaging.md](packaging.md#distributed-fmus---distributed) for starting it from the importer's logger.

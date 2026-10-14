@@ -35,7 +35,7 @@ Unknown keys are rejected with an error, so typos don't go unnoticed. Keys marke
 | `fmi_version` | `2` or `3` | `2` | FMI version to build. `fmugen build --fmi` overrides it. |
 | `call` | string or `false` | `"__call__"` if the class is callable | Classes: the method run on each step. A **function** entry with `call` set is a factory: it is called once, at the end of initialization, with the parameters (like a constructor), and `call` is the method run on each step on the object it returns, e.g. `entry = "silero_vad:load_silero_vad"`, `call = "__call__"`. `false` (classes and functions; needs `[clocks]`): nothing runs on `doStep`, only clocks run code. |
 | `name` | string | the entry's name | `modelName` in `modelDescription.xml`. `fmugen build --name` overrides it. |
-| `description` | string | first line of the entry's docstring, else the module's | `description` in `modelDescription.xml`. |
+| `description` | string | first line of the entry's docstring, else the module's (cut at 200 characters) | `description` in `modelDescription.xml`. |
 | `author` | string | `""` | `author` in `modelDescription.xml`. `fmugen build --author` overrides it. |
 | `sources` | list of strings | `[]` | Extra files and directories to copy into the FMU, keeping their paths. A file entry is always copied. Data files (CSV, EPW, JSON, …) too. Their folders go on `sys.path`, so flat and package imports both work. |
 | `globals` | list of `"module:NAME"` | `[]` | Module-level variables the model changes while it runs (`global CALLS; CALLS += 1`), e.g. pythermalcomfort's `"pythermalcomfort.jos3_functions.thermoregulation:PRE_SHIV"`. On reset they go back to their value when the model was imported, and they are saved and restored with the FMU state. `fmugen init` lists the ones holding numbers, strings or arrays that the model's modules rebind. Module globals are shared by every instance of the FMU in one process. |
@@ -45,8 +45,12 @@ Unknown keys are rejected with an error, so typos don't go unnoticed. Keys marke
 | `create` | classmethod name | none | Classes only: build the object with this classmethod instead of calling the class, e.g. `"from_pretrained"`. Parameters bound to `init:` (the default) become its arguments. For models loaded from saved weights or files. |
 | `save_state` | `true`, `false` or list of attribute names | `true` | How the FMU saves and restores its state (rollback). `true`: the whole model object is pickled (with `cloudpickle` when `pickle` can't, e.g. lambdas). `false`: not supported (`canGetAndSetFMUState="false"`), e.g. for hardware. A list such as `["_state", "_context"]`: only those attributes are saved and put back on restore; the rest of the object (an ONNX session, a device handle) is kept as it is. `fmugen init` sets it by trying to pickle the object. |
 | `setup` | list | `[]` | Calls run each time the FMU initializes (also after a reset), before the model is used. `"module:function"` or `"module:function(args)"` runs before the class is constructed (e.g. `"psychrolib:SetUnitSystem(psychrolib.SI)"`). A bare `"method"` or `"method(args)"` runs on the object right after construction (e.g. `"reset"`). Arguments are Python literals or dotted names of importable objects. The table form `{ call = "...", args = [...], kwargs = {...} }` takes the same values as `[model.constants]`. |
-| `init_call` | bool | `true` for functions with a step, `false` otherwise | Call the function or step method when leaving initialization mode, to compute the initial outputs. States are not advanced by this call. Without it, a class's outputs read from the return value are 0 at the start time. `init --probe` sets it for a class whose step method changed nothing on the object in the probe (e.g. blackscholes' `price()`). |
-| `terminate` | string | none | Classes only: a method called on `fmi2Terminate`/`fmi3Terminate` (for example `"close"`). |
+| `init_call` | bool | `true` for functions with a step (except when the function takes the step size and `[experiment]` has no `step_size`), `false` otherwise | Call the function or step method when leaving initialization mode, to compute the initial outputs. States are not advanced by this call. Without it, a class's outputs read from the return value are 0 at the start time. `init --probe` sets it for a class whose step method changed nothing on the object in the probe (e.g. blackscholes' `price()`). |
+| `terminate` | string | none | Classes only: a method called on `fmi2Terminate`/`fmi3Terminate` (for example `"close"`), and on reset when the FMU wasn't terminated first, so the resources the object holds (a serial port, a file) are released then rather than when it is garbage collected. |
+| `discard_on` | list of `"module:Class"` | `[]` | Exceptions and warnings that reject a step: when the step raises one (a warning in the list is raised as an exception during the step), `doStep` returns `discard` and the FMU is put back to the start of the step, so a variable-step importer can retry with a smaller step. E.g. `["scipy.integrate:IntegrationWarning", "builtins:ArithmeticError"]`. Undoing the step saves the FMU state before every step, so it needs `save_state` (`build` refuses `false`). Other exceptions are still errors. |
+| `integrate` | `"euler"`, `"rk4"` or `"scipy:<method>"` | none | The model is an ODE right-hand side: it returns the **derivatives** of the `[states]`, and the FMU integrates them over each step. `<method>` is a `scipy.integrate.solve_ivp` method (`RK45`, `RK23`, `DOP853`, `Radau`, `BDF`, `LSODA`), run with the importer's tolerance as `rtol`. Each state has `der` instead of `next`; `[time]` gives the model the time of each stage. A failed solve returns `discard`. See [models.md](models.md#ode-right-hand-sides). |
+| `substeps` | positive integer | `1` | With `integrate = "euler"` or `"rk4"`: fixed sub-steps per communication step. |
+| `annotations` | XML string | none | `<Tool name="...">` elements added to `modelDescription.xml`: inside `<VendorAnnotations>` in FMI 2, and as `<Annotation type="...">` inside `<Annotations>` in FMI 3. |
 
 ### `[model.constants]` and `[model.call_constants]`
 
@@ -88,6 +92,9 @@ Each key is an argument of the step function or method (or of a clock's `call` t
 | `"time"` | `t`, the communication point at the start of the step | the event time |
 | `"step_size"` | `h`, the communication step size | time since the clock last ticked (its interval on the first tick) |
 | `"end_time"` | `t + h` | the event time + the above |
+| `"start_time"` | the simulation's start time (`fmi2SetupExperiment` / `fmi3EnterInitializationMode`) | same |
+| `"stop_time"` | its stop time, or `None` when the importer gives none | same |
+| `"tolerance"` | the importer's relative tolerance, or `None` when it gives none, e.g. for `solve_ivp(rtol=...)` | same |
 
 ```toml
 [time]
@@ -117,7 +124,7 @@ Each variable is one line: `name = { key = value, ... }`. The name is the FMU va
 | `[parameters]` | `parameter` | importer → model | class: constructor argument `init:<name>`; function: `arg:<name>` |
 | `[calculated_parameters]` | `calculatedParameter` | model → importer | `attr:<name>` (classes only) |
 | `[inputs]` | `input` | importer → model | `arg:<name>` |
-| `[states]` | `local`, `initial="exact"` | fed back each step | `arg:<name>`, plus the required `next` |
+| `[states]` | `local`, `initial="exact"` | fed back each step | `arg:<name>`, plus the required `next` (`der` with `[model] integrate`) |
 | `[outputs]` | `output` | model → importer | class: `attr:<name>`; function: `return:<name>` |
 | `[locals]` | `local` | model → importer | as outputs |
 
@@ -127,10 +134,10 @@ Each variable is one line: `name = { key = value, ... }`. The name is the FMU va
 |---|---|---|---|
 | `Real` | `Real` | `Float64` | `float` |
 | `Float64` | `Real` | `Float64` | `float` |
-| `Float32` | — | `Float32` | `float` |
+| `Float32` | `Real` | `Float32` | `float` |
 | `Integer` | `Integer` | `Int32` | `int` |
 | `Int32` | `Integer` | `Int32` | `int` |
-| `Int8`, `UInt8`, `Int16`, `UInt16`, `UInt32`, `Int64`, `UInt64` | — | same | `int` (range-checked) |
+| `Int8`, `UInt8`, `Int16`, `UInt16`, `UInt32`, `Int64`, `UInt64` | `Integer` (32-bit: `build` notes that `UInt32`, `Int64` and `UInt64` values outside its range are an error) | same | `int` (range-checked) |
 | `Boolean` | `Boolean` | `Boolean` | `bool` |
 | `String` | `String` | `String` | `str` |
 | `Binary` | — | `Binary` | `bytes`; `start` is a hex string, e.g. `"0aff"` |
@@ -144,10 +151,10 @@ Without `type`, it comes from `start`: `bool` → Boolean, `int` → Integer, `s
 |---|---|---|---|
 | `type` | string | see [Types](#types) | The FMI type. |
 | `start` | value, or list for arrays | see below | Start value. An Enumeration takes an item name or a 1-based index. An array takes a flat list (row-major) or one value for every element. |
-| `unit` | string | none | Floating-point only. Added to `<UnitDefinitions>`; informational. |
+| `unit` | string | none | Floating-point only. Added to `<UnitDefinitions>`, with its SI `<BaseUnit>` (exponents, factor, offset) when fmugen recognises it: SI units and the usual derived ones with prefixes (`km`, `kW`, `mbar`), `degC`, `degF`, `deg`, `h`, `min`, `l`, `bar`, `Wh`, `rpm`, combined as in Modelica (`m/s2`, `W/(m2.K)`, `kg.m-3`). Importers use it to check and convert units. `C`, `F`, `S` and `T` on their own get none: they are as often written for Celsius, Fahrenheit, seconds and temperature as for coulomb, farad, siemens and tesla (use `degC`, `degF`, `s`). |
 | `description` | string | none | Variable description. |
 | `quantity` | string | none | Physical quantity, e.g. `"ThermodynamicTemperature"`. |
-| `min`, `max` | number | none | Numeric types and Enumeration. Declared range; not enforced by the adapter. |
+| `min`, `max` | number | none | Numeric types and Enumeration. Declared range; not enforced by the adapter. `build` checks `min <= max` and that `start` is in the range. |
 | `nominal` | number | none | Floating-point only. |
 | `variability` | string | parameters: `fixed`; others: `continuous` for unclocked floating-point, `discrete` otherwise | parameters and structural parameters: `fixed`/`tunable`; inputs: `discrete`/`continuous`; outputs and locals: also `constant`. |
 | `initial` | string | see below | Overrides the FMI `initial` attribute where FMI allows a choice. |
@@ -157,6 +164,7 @@ Without `type`, it comes from `start`: `bool` → Boolean, `int` → Integer, `s
 | `numpy` | bool | `false` | Arrays only: pass the value to the model as a `numpy.ndarray` instead of nested lists. Values coming back are accepted either way. |
 | `convert` | `"module:function"` or `"pint"` | none | Values passed to the model (parameters, inputs, states): call this function on the value first, e.g. `"torch:tensor"`, `"jax.numpy:asarray"`. `init` sets it from `torch.Tensor`, JAX and TensorFlow annotations. `"pint"` passes a pint quantity in the variable's `unit` (from pint's application registry), for models such as `fluids.units` that only accept quantities. |
 | `clocks` **FMI 3** | list with one clock name | none | Inputs, outputs and locals: the variable belongs to that clock (see [`[clocks.<name>]`](#clocksname-fmi-3)). |
+| `extra` | table | none | More XML attributes of the variable, written as given, e.g. `extra = { displayUnit = "degC", relativeQuantity = true, unbounded = true }` (in FMI 2, `displayUnit`, `relativeQuantity`, `unbounded`, `reinit` and `derivative` go on the type element). A `displayUnit` also gets its `<DisplayUnit>` in the unit definition, with the conversion when both units are recognised. Attributes fmugen writes from other keys (`start`, `unit`, `min`, …) can't be set here. |
 
 **Start values and `initial`:**
 - **Structural parameters, parameters, inputs, states:** always have a start value. If you don't give one, it is 0 / `false` / `""` / empty / the first item.
@@ -177,8 +185,9 @@ Without `type`, it comes from `start`: `bool` → Boolean, `int` → Integer, `s
 | `from` | outputs, locals, calculated_parameters | `"return"` | The whole return value. |
 | | | `"return:<key>"` | `result[key]` for a dict, `result[int(key)]` for a tuple or list, else `result.key`. A dotted path (`"return:zone.T"`) takes these steps in turn. |
 | | | `"attr:<name>"` | An attribute of the object after the step (classes). Dotted paths allowed. Calculated parameters must use this form. |
-| `next` | states (**required**) | same forms as `from` | Where the state's value for the next step comes from. |
-| `attr` | parameters, structural parameters | string or `false` | Tunable class parameters: the attribute written when the importer changes the value after initialization. Defaults to the parameter's `to` name. `false` means it is passed only to the constructor. |
+| `next` | states (**required**, except with `integrate`) | same forms as `from` | Where the state's value for the next step comes from. |
+| `der` | states, with `[model] integrate` | `"return"` (one state); required for several | Where the state's derivative comes from in the model's result, e.g. `"return:dx"`, `"return:0"`. |
+| `attr` | parameters, structural parameters | string or `false` | Tunable class parameters: the attribute written when the importer changes the value after initialization. Defaults to the parameter's `to` name; required for a tunable parameter passed by position (`to = "pos:N"`). It must be an attribute the object has: setting the parameter to a new value gives an error status otherwise, instead of adding an attribute the model never reads. `false` means it is passed only to the constructor. |
 | `depends_on` | outputs | list of input names | `<ModelStructure>` dependencies of the output. Without it, the output may depend on every input. |
 
 Constructor and call arguments named by `init:`, `arg:` and `[time]` must exist in the signature (unless it accepts `**kwargs`).
@@ -197,6 +206,8 @@ A config with `[composite]` instead of `[model]` builds one FMU from several fmu
 | `fmi_version` | 2 or 3 | 2 | As in `[model]`. |
 
 `[experiment]` may also be given. Other top-level tables are not allowed in a composite config.
+
+Parts may have clocks, structural parameters and `[events]` (FMI 3): the FMU's clocks are the parts' clocks, named `<part>.<clock>`, and a structural parameter sizes the arrays of its own part. Clocked variables and arrays sized by a structural parameter can't be connected.
 
 ---
 

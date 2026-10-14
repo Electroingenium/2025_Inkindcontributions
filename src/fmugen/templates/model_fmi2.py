@@ -31,8 +31,7 @@ class Model:
         return status
 
     def fmi2SetDebugLogging(self, categories, logging_on):
-        self.engine.logging_on = bool(logging_on)
-        return Fmi2Status.ok
+        return self.engine.set_debug_logging(logging_on, categories or ())
 
     def fmi2EnterInitializationMode(self):
         return self.engine.enter_initialization_mode()
@@ -82,6 +81,10 @@ class Model:
     # ================= Logging =================
 
     def log(self, message, status, category = "logAll"):
+        # UniFMU 0.14 passes the text to the importer's FMI 2 logger as its printf format string, with no
+        # arguments: a "%s" in a traceback or URL would crash the importer. "%%" prints as "%".
+        # (docs/unifmu-limitations.md §12; remove when UniFMU passes the text as an argument.)
+        message = message.replace("%", "%%")
         # Removing the line below will break logging.
         self._log_callback(status, category, message)
 

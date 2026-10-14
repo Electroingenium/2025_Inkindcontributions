@@ -10,6 +10,7 @@
     fmugen build path/to/fmugen.toml -o out/model.fmu --distributed  # proxy FMU + out/model_private/
 """
 import argparse
+import atexit
 import contextlib
 import importlib
 import importlib.util
@@ -84,31 +85,56 @@ def find_unifmu():
     return exe
 
 
+_templates = {}   # (unifmu executable, arguments) -> folder holding their output, generated once per process
+
+
+def _template(args, check):
+    """Run `unifmu *args` once per process, in a cached folder, and return that folder.
+
+    Every build of the same FMI version gets the same files, and generating them takes about a
+    second on Windows, mostly the virus scanner checking each new copy of UniFMU's binaries."""
+    exe = find_unifmu()
+    key = (exe, *args)
+    if key not in _templates:
+        folder = Path(tempfile.mkdtemp(prefix="fmugen-unifmu-"))
+        atexit.register(shutil.rmtree, folder, ignore_errors=True)
+        result = subprocess.run([exe, *args], capture_output=True, text=True, cwd=folder)
+        if result.returncode != 0 or not check(folder):
+            shutil.rmtree(folder, ignore_errors=True)
+            raise InterfaceError(f"`unifmu {' '.join(args)}` failed:\n{result.stdout}{result.stderr}")
+        _templates[key] = folder
+    return _templates[key]
+
+
+def _link_or_copy(src, dst):
+    """Copy a template file; UniFMU's native binaries, which are never changed, are hard-linked when
+    possible: a new copy of the 10 MB DLL is scanned by the virus scanner when first opened (~0.5 s)."""
+    if "binaries" in Path(src).parts:
+        try:
+            os.link(src, dst)
+            return dst
+        except OSError:   # another drive, or a file system without hard links
+            pass
+    return shutil.copy2(src, dst)
+
+
 def generate_boilerplate(fmi_version, dest):
     """Write UniFMU's Python FMU template for `fmi_version` (2 or 3) to `dest`."""
-    exe = find_unifmu()
-    result = subprocess.run([exe, "generate", "python", str(dest), f"fmi{fmi_version}"],
-                            capture_output=True, text=True)
-    if result.returncode != 0 or not (Path(dest) / "resources").is_dir():
-        raise InterfaceError(f"`unifmu generate python {dest} fmi{fmi_version}` failed:\n"
-                             f"{result.stdout}{result.stderr}")
+    template = _template(["generate", "python", "out", f"fmi{fmi_version}"],
+                         lambda folder: (folder / "out" / "resources").is_dir())
+    shutil.copytree(template / "out", dest, copy_function=_link_or_copy)
 
 
 def generate_distributed_boilerplate(fmi_version, dest, endpoint):
     """Write UniFMU's distributed Python template for `fmi_version` into `dest`, and return its two
     halves: the proxy (the FMU the importer loads) and the private folder (the backend, which
     connects to the proxy's host `endpoint`)."""
-    exe = find_unifmu()
+    template = _template(["generate-distributed", "python", "x", f"fmi{fmi_version}", "--endpoint", endpoint],
+                         lambda folder: (folder / "x_proxy" / "resources" / "launch.toml").is_file()
+                         and (folder / "x_private" / "main.py").is_file())
     dest = Path(dest)
-    dest.mkdir(parents=True, exist_ok=True)
-    result = subprocess.run([exe, "generate-distributed", "python", "x", f"fmi{fmi_version}", "--endpoint", endpoint],
-                            capture_output=True, text=True, cwd=dest)
-    proxy, private = dest / "x_proxy", dest / "x_private"
-    if (result.returncode != 0 or not (proxy / "resources" / "launch.toml").is_file()
-            or not (private / "main.py").is_file()):
-        raise InterfaceError(f"`unifmu generate-distributed python x fmi{fmi_version} --endpoint {endpoint}` "
-                             f"failed:\n{result.stdout}{result.stderr}")
-    return proxy, private
+    shutil.copytree(template, dest, copy_function=_link_or_copy, dirs_exist_ok=True)
+    return dest / "x_proxy", dest / "x_private"
 
 
 def private_start_command(mode=None):
@@ -214,6 +240,7 @@ def _copy_sources(config, model_dir):
 
 def _prepare(config, resources, version, model_name, author, capture_output):
     """Copy a model's code into `resources`, import it and write its interface.json."""
+    config.check_module_names()
     resources.mkdir(parents=True, exist_ok=True)
     _copy_sources(config, resources / MODEL_DIR)
     module, sys_path = config.entry_import()
@@ -225,7 +252,8 @@ def _prepare(config, resources, version, model_name, author, capture_output):
         try:
             entry_obj = getattr(importlib.import_module(module), config.entry_name)
         except (ImportError, AttributeError) as e:
-            hint = " (install the model's requirements in the environment fmugen runs in)"                 if config.requirements else ""
+            hint = (" (install the model's requirements in the environment fmugen runs in)"
+                    if config.requirements else "")
             raise InterfaceError(f"cannot import {config.model['entry']}: {e!r}{hint}") from e
         except (Exception, SystemExit) as e:
             raise import_failure(config.model["entry"], e) from e
@@ -266,6 +294,29 @@ def _write_zip(fmu_dir, output):
                     shutil.copyfileobj(src, dst)   # streamed: frozen FMUs have files of hundreds of MB
 
 
+def _replace(output, write):
+    """Call write(path) on a new path next to `output`, then put it in place of `output`: if writing
+    fails (disk full, a file an importer holds open), the previous build is left as it was."""
+    new = output.with_name(f".{output.name}.new")
+    old = output.with_name(f".{output.name}.old")
+    for leftover in (new, old):   # from a build that was interrupted
+        if leftover.is_dir():
+            shutil.rmtree(leftover)
+        else:
+            leftover.unlink(missing_ok=True)
+    try:
+        write(new)
+    except BaseException:
+        shutil.rmtree(new, ignore_errors=True) if new.is_dir() else new.unlink(missing_ok=True)
+        raise
+    if output.is_dir():   # a folder can't be replaced in one step: move the old one aside first
+        output.rename(old)
+        new.rename(output)
+        shutil.rmtree(old)
+    else:
+        os.replace(new, output)
+
+
 def build(target, output, model_name=None, author=None, output_format="fmu", call=None, fmi_version=None,
           vendor=False, platforms=(), python_versions=(), compiler=None, capture_output=False, probe=False,
           hf_weights=None, distributed=False, endpoint=None, private_output=None):
@@ -299,8 +350,6 @@ def build(target, output, model_name=None, author=None, output_format="fmu", cal
 
     composite_path = is_composite(target)
     if composite_path:
-        if compiler:
-            raise InterfaceError("--compile does not support composite FMUs yet; use --vendor")
         composite = Composite(composite_path)
         version = fmi_version or composite.fmi_version
         configs, base_dir = composite.parts, composite.path.parent
@@ -363,16 +412,12 @@ def build(target, output, model_name=None, author=None, output_format="fmu", cal
 
         output.parent.mkdir(parents=True, exist_ok=True)
         if output_format == "fmu":
-            output.unlink(missing_ok=True)
-            _write_zip(fmu_dir, output)
+            _replace(output, lambda path: _write_zip(fmu_dir, path))
         else:
-            if output.exists():
-                shutil.rmtree(output)
-            shutil.copytree(fmu_dir, output, ignore=IGNORE)
+            _replace(output, lambda path: shutil.copytree(fmu_dir, path, ignore=IGNORE))
         if distributed:
-            if private_output.exists():
-                shutil.rmtree(private_output)
-            shutil.copytree(resources, private_output, ignore=IGNORE)
+            private_output.parent.mkdir(parents=True, exist_ok=True)
+            _replace(private_output, lambda path: shutil.copytree(resources, path, ignore=IGNORE))
             interface = {**interface, "private_output": private_output, "private_start": private_start_command(mode)}
 
     return output, interface
@@ -537,7 +582,14 @@ def main(argv=None):
     b.add_argument("--private-output", metavar="PATH",
                    help="with --distributed: the private folder (default: <output stem>_private next to -o)")
 
+    for p in (i, b):
+        p.add_argument("--probe-timeout", type=float, metavar="SECONDS",
+                       help="with --probe: exit if the model's probe call takes longer (default: no limit)")
+        p.add_argument("--debug", action="store_true",
+                       help="show the full traceback of an unexpected error (default: a one-line message)")
     args = parser.parse_args(argv)
+    if args.probe and args.probe_timeout:
+        args.probe = args.probe_timeout   # a number: the probe's time limit
     try:
         if args.command == "init":
             output, _data = init(args.model, args.output, args.call, args.force, args.fmi,
@@ -552,6 +604,10 @@ def main(argv=None):
                                   args.hf_weights, args.distributed, args.endpoint, args.private_output)
     except (FileExistsError, InterfaceError) as e:
         parser.exit(2, f"fmugen: error: {e}\n")
+    except Exception as e:   # e.g. the model's own code failing while it is imported
+        if args.debug:
+            raise
+        parser.exit(1, f"fmugen: error: {type(e).__name__}: {e}\n(run with --debug for the full traceback)\n")
 
     counts = {}
     for v in interface["variables"]:

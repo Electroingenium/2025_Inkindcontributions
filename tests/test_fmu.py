@@ -38,6 +38,7 @@ def test_model_description_details(fmus):
     assert variables["ventilation_efficiency"].max == "1.0"
 
 
+@pytest.mark.fmu
 def test_fixed_step_fmu_simulates_with_input_file(fmus):
     result = simulate_fmu(str(fmus["rc_building"]), input=_csv(EXAMPLES / "rc_building" / "weather.csv"),
                           stop_time=86400, output_interval=3600, output=["t_air", "heating_demand"])
@@ -46,6 +47,7 @@ def test_fixed_step_fmu_simulates_with_input_file(fmus):
     assert abs(result["t_air"][1:] - 20.0).max() < 1.0      # ... which keeps the zone near the set point
 
 
+@pytest.mark.fmu
 def test_tunable_parameter_and_rollback_through_unifmu(fmus, tmp_path):
     unzipdir = tmp_path / "pid"
     shutil.unpack_archive(fmus["simple_pid"], unzipdir, "zip")
@@ -88,3 +90,44 @@ def test_builds_are_reproducible(tmp_path, monkeypatch):
     assert md.guid != "{00000000-0000-0000-0000-000000000000}"
     other = build(EXAMPLES / "psychrometry", tmp_path / "c.fmu")[0]
     assert read_model_description(str(other)).guid != md.guid
+
+
+def test_an_unchanged_model_rebuilds_to_the_same_guid(tmp_path, monkeypatch):
+    monkeypatch.delenv("SOURCE_DATE_EPOCH", raising=False)   # the build time differs between the builds
+    first = build(EXAMPLES / "psychrometry", tmp_path / "a", output_format="folder")[0]
+    second = build(EXAMPLES / "psychrometry", tmp_path / "b", output_format="folder")[0]
+    guid = read_model_description(str(first)).guid
+    assert guid == read_model_description(str(second)).guid
+    assert guid != "{00000000-0000-0000-0000-000000000000}"
+
+
+@pytest.mark.parametrize("output_format", ["fmu", "folder"])
+def test_a_failed_build_keeps_the_previous_output(tmp_path, monkeypatch, output_format):
+    import fmugen.__main__ as main
+    out = tmp_path / ("pid.fmu" if output_format == "fmu" else "pid")
+    build(EXAMPLES / "simple_pid", out, output_format=output_format)
+    before = sorted(p.name for p in tmp_path.iterdir())
+
+    def fail(*args, **kwargs):
+        raise OSError("disk full")
+    monkeypatch.setattr(main, "_write_zip" if output_format == "fmu" else "_copy_fmu", fail, raising=False)
+    if output_format == "folder":
+        monkeypatch.setattr(main.shutil, "copytree", fail)
+    with pytest.raises(OSError, match="disk full"):
+        build(EXAMPLES / "simple_pid", out, output_format=output_format)
+    assert sorted(p.name for p in tmp_path.iterdir()) == before   # no leftovers either
+    if output_format == "fmu":
+        assert validate_fmu(str(out)) == []
+    else:
+        assert (out / "modelDescription.xml").is_file()
+
+
+def test_an_interface_from_another_spec_version_is_refused(tmp_path, make_fmu):
+    import json
+
+    from fmugen.templates.fmugen_runtime import make_engine
+    resources = make_fmu(EXAMPLES / "simple_pid") / "resources"
+    interface = json.loads((resources / "interface.json").read_text())
+    (resources / "interface.json").write_text(json.dumps({**interface, "spec_version": 99}))
+    with pytest.raises(RuntimeError, match="spec_version 99"):
+        make_engine(resources, lambda *a: None)

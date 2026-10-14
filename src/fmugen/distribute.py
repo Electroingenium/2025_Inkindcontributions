@@ -13,6 +13,7 @@ works where it was built. Two ways to ship it elsewhere:
 """
 import ast
 import importlib.util
+import json
 import os
 import re
 import shutil
@@ -22,6 +23,7 @@ from pathlib import Path
 
 from fmugen.config import MODEL_DIR, InterfaceError
 from fmugen.interface import _dotted_names
+from fmugen.static import packages_distributions
 
 COMPILERS = {"pyinstaller": "PyInstaller", "nuitka": "nuitka"}   # --compile value -> module
 EXE_DIR = "dist/main"   # resources/dist/main/: the frozen backend
@@ -30,6 +32,10 @@ EXE_NAME = "main"
 KEEP_AFTER_COMPILE = {"dist", "launch.toml", "hf_cache"}
 HF_CACHE = "hf_cache"   # Hugging Face models inside the FMU, in resources/
 HF_REPO_ID = re.compile(r"^[A-Za-z0-9][\w.-]*/[\w.-]+$")
+# "data/input.csv" is a file the model reads, not a Hugging Face repo, even when it doesn't exist at build time
+DATA_SUFFIXES = {".csv", ".tsv", ".txt", ".json", ".yaml", ".yml", ".toml", ".xml", ".dat", ".xlsx", ".xls",
+                 ".parquet", ".feather", ".npy", ".npz", ".h5", ".hdf5", ".nc", ".mat", ".pkl", ".pickle",
+                 ".zip", ".gz", ".png", ".jpg", ".wav", ".mos", ".epw", ".fmu"}
 
 
 # ---------------- --vendor ----------------
@@ -57,7 +63,14 @@ def hf_models(interface, base_dir):
                 continue
         elif isinstance(value, str):
             texts.append(value)
-    return sorted({t for t in texts if isinstance(t, str) and HF_REPO_ID.match(t) and not (Path(base_dir) / t).exists()})
+    # a relative file path also looks like "owner/name": the model opens those from the config's folder
+    # or, with [model] cwd, from that folder
+    folders = [Path(base_dir)]
+    if interface.get("cwd"):
+        folders.append(Path(base_dir).joinpath(*Path(interface["cwd"]).parts[1:]))   # without fmugen_model/
+    return sorted({t for t in texts if isinstance(t, str) and HF_REPO_ID.match(t)
+                   and Path(t).suffix.lower() not in DATA_SUFFIXES
+                   and not any((folder / t).exists() for folder in folders)})
 
 
 def bundle_hf_models(interface, base_dir, resources):
@@ -146,9 +159,14 @@ def compile_fmu(compiler, resources, interface, work, requirements=()):
                              f"pip install {compiler} (or pip install fmugen[{compiler}])")
     resources, work = Path(resources), Path(work)
     work.mkdir(parents=True, exist_ok=True)
-    paths = [resources, *(resources / p for p in interface["sys_path"])]
-    modules = _modules(interface)
-    data = [(resources / "interface.json", ".")] + _model_data(resources, interface)
+    models = _models(resources, interface)
+    paths = [resources, *(folder / p for folder, model in models for p in model["sys_path"])]
+    modules = sorted({m for _, model in models for m in _modules(model)})
+    data = [(resources / "interface.json", ".")]
+    for folder, model in models:
+        if folder != resources:   # a part of a composite FMU reads its interface.json from parts/<name>/
+            data.append((folder / "interface.json", folder.relative_to(resources).as_posix()))
+        data += _model_data(folder, model)
     if (resources / "endpoint.toml").exists():   # a distributed FMU's private side reads it next to main
         data.append((resources / "endpoint.toml", "."))
     local = {"model", "fmugen_runtime"}
@@ -194,12 +212,31 @@ def compile_fmu(compiler, resources, interface, work, requirements=()):
                else f"it exited normally, but {built} wasn't made")
         raise InterfaceError(f"--compile {compiler} failed ({why}):\n" + "\n".join(lines)[-4000:])
 
-    for item in resources.iterdir():
-        if item.name == MODEL_DIR and interface.get("cwd"):
-            _remove_code(item)   # the model reads its data files from here ([model] cwd)
-        elif item.name not in KEEP_AFTER_COMPILE:
-            shutil.rmtree(item) if item.is_dir() else item.unlink()
+    keep = {folder / MODEL_DIR for folder, model in models if model.get("cwd")}
+    _remove_compiled(resources, keep, top=True)
     shutil.move(str(built), str(resources / EXE_DIR))
+
+
+def _models(resources, interface):
+    """[(folder, interface)] of the models in the FMU: itself, or the parts of a composite FMU."""
+    if not interface.get("composite"):
+        return [(resources, interface)]
+    return [(resources / p["dir"], json.loads((resources / p["dir"] / "interface.json").read_text()))
+            for p in interface["parts"]]
+
+
+def _remove_compiled(folder, keep, top=False):
+    """Remove what is now inside the executable, except the folders the models read data files
+    from ([model] cwd), without their code, and the folders leading to them."""
+    for item in folder.iterdir():
+        if item in keep:
+            _remove_code(item)
+        elif top and item.name in KEEP_AFTER_COMPILE:
+            continue
+        elif item.is_dir() and any(k.is_relative_to(item) for k in keep):
+            _remove_compiled(item, keep)
+        else:
+            shutil.rmtree(item) if item.is_dir() else item.unlink()
 
 
 def _is_package(name):
@@ -280,7 +317,7 @@ def _packages(modules, requirements=()):
     they may import by name.
     """
     import importlib.metadata as md
-    by_top = md.packages_distributions()
+    by_top = packages_distributions()
     tops_of = {}
     for top, names in by_top.items():
         for name in names:
@@ -324,7 +361,7 @@ def _source_hooks(packages, hooks_dir):
     hook does this for transformers itself. A package with a hook of its own is left alone.
     Returns hooks_dir, or None if no package needs it."""
     import importlib.metadata as md
-    by_top = md.packages_distributions()
+    by_top = packages_distributions()
     existing = {p.name for d in _hook_dirs() for p in Path(d).glob("hook-*.py")}
     names = []
     for top in packages:

@@ -36,7 +36,8 @@ class Model:
         self.event_mode_used = event_mode_used
         self._log_callback = _log_callback # Removing this line will break logging
         self.engine = make_engine(resources_dir or RESOURCES_DIR, self.log, info_category="logEvents")
-        # Messages are always forwarded; UniFMU filters them by the importer's logging settings.
+        # Errors are always sent; the model's log records and printed output only with logging on
+        self.engine.logging_on = bool(logging_on)
 
     # ================= doStep and updateDiscreteStates =================
 
@@ -51,16 +52,17 @@ class Model:
             self.log("an output clock ticked, but the importer does not use event mode; the tick is dropped",
                      Fmi3Status.warning, "logStatusWarning")
             event_needed = False
-            for name, clock in self.engine.clocks.items():
-                if clock["causality"] == "output":
-                    self.engine.clock_active[name] = False
+            self.engine.drop_output_ticks()
         early_return = False  # a Python step runs to completion
+        # the step failed: the FMU is still at the start of the step
+        last_successful_time = current_communication_point + (
+            communication_step_size if status <= Fmi3Status.warning else 0.0)
         return (
             status,
             event_needed,
             self.engine.terminate_requested,
             early_return,
-            current_communication_point + communication_step_size,
+            last_successful_time,
         )
 
     def fmi3UpdateDiscreteStates(self):
@@ -242,8 +244,7 @@ class Model:
     # ================= Logging =================
 
     def fmi3SetDebugLogging(self, categories, logging_on):
-        self.engine.logging_on = bool(logging_on)
-        return Fmi3Status.ok
+        return self.engine.set_debug_logging(logging_on, categories or ())
 
     def log(self, message, status, category = "logEvents"):
         # Removing the line below will break logging.

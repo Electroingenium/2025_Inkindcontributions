@@ -14,8 +14,11 @@ FMI 3-only parts (arrays, structural parameters, clocks, events).
 import datetime
 import inspect
 import keyword
+import sys
 import tomllib
 from pathlib import Path, PurePosixPath
+
+from fmugen.templates.fmugen_runtime import SPEC_VERSION
 
 FMI_VERSIONS = (2, 3)
 FLOAT_TYPES = ("Real", "Float32", "Float64")
@@ -23,7 +26,8 @@ INT_TYPES = ("Integer", "Int8", "UInt8", "Int16", "UInt16", "Int32", "UInt32", "
 FMI_TYPES = (*FLOAT_TYPES, *INT_TYPES, "Boolean", "String", "Binary", "Enumeration")
 # Config type name -> type name in the spec, per FMI version (missing: not available)
 TYPE_NAMES = {
-    2: {"Real": "Real", "Float64": "Real", "Integer": "Integer", "Int32": "Integer",
+    # FMI 2 has one float and one 32-bit integer type: the other float and integer types become those
+    2: {**{t: "Real" for t in FLOAT_TYPES}, **{t: "Integer" for t in INT_TYPES},
         "Boolean": "Boolean", "String": "String", "Enumeration": "Enumeration"},
     3: {"Real": "Float64", "Integer": "Int32", **{t: t for t in FMI_TYPES if t not in ("Real", "Integer")}},
 }
@@ -51,20 +55,24 @@ SECTIONS = {
 MODEL_KEYS = {
     "entry", "call", "name", "description", "author", "sources", "requirements",
     "constants", "call_constants", "init_call", "terminate", "fmi_version", "setup", "kind", "create",
-    "save_state", "cwd", "globals",
+    "save_state", "cwd", "globals", "discard_on", "integrate", "substeps", "annotations",
 }
 EXPERIMENT_KEYS = {"start_time", "stop_time", "step_size", "tolerance", "fixed_step"}
-TIME_SOURCES = ("time", "step_size", "end_time")
+TIME_SOURCES = ("time", "step_size", "end_time", "start_time", "stop_time", "tolerance")
+INTEGRATORS = ("euler", "rk4")   # [model] integrate, besides "scipy:<solve_ivp method>"
+SCIPY_METHODS = ("RK45", "RK23", "DOP853", "Radau", "BDF", "LSODA")
+# FMI 2 Integer is 32-bit: these types are narrowed to it
+WIDER_THAN_FMI2_INTEGER = ("Int64", "UInt32", "UInt64")
 COMMON_VAR_KEYS = {
     "type", "start", "unit", "description", "variability", "initial",
-    "min", "max", "nominal", "quantity", "items", "enum", "dimensions", "numpy", "convert",
+    "min", "max", "nominal", "quantity", "items", "enum", "dimensions", "numpy", "convert", "extra",
 }
 VAR_KEYS = {
     "structural_parameters": COMMON_VAR_KEYS | {"to", "attr"},
     "parameters": COMMON_VAR_KEYS | {"to", "attr"},
     "calculated_parameters": COMMON_VAR_KEYS | {"from"},
     "inputs": COMMON_VAR_KEYS | {"to", "clocks"},
-    "states": COMMON_VAR_KEYS | {"to", "next"},
+    "states": COMMON_VAR_KEYS | {"to", "next", "der"},
     "outputs": COMMON_VAR_KEYS | {"from", "depends_on", "clocks"},
     "locals": COMMON_VAR_KEYS | {"from", "clocks"},
 }
@@ -185,6 +193,36 @@ class Config:
             )
         return module, sys_path
 
+    def local_modules(self):
+        """Top-level module names the model's own files are imported as: its entry file and the .py
+        files and packages of its sources, under each folder put on sys.path. Installed packages
+        aren't included."""
+        module, sys_path = self.entry_import()
+        names = {module.split(".")[0]} if self.entry_is_file else set()
+        files = []
+        for src, _ in self.source_files():
+            files += sorted(src.rglob("*.py")) if src.is_dir() else [src] if src.suffix == ".py" else []
+        for path in sys_path:
+            root = self.base_dir.joinpath(*PurePosixPath(path).relative_to(MODEL_DIR).parts)
+            for file in files:
+                if file.is_relative_to(root):
+                    rel = file.relative_to(root)
+                    names.add(rel.stem if len(rel.parts) == 1 else rel.parts[0])
+        return names
+
+    def check_module_names(self):
+        """Refuse model files named like a standard library module (json.py, logging.py, queue.py):
+        the FMU's backend has already imported the real one, so importing the model's name gives the
+        standard library's module, or the model's module replaces it for the backend."""
+        clashes = sorted(self.local_modules() & set(sys.stdlib_module_names))
+        if clashes:
+            raise InterfaceError(stdlib_clash(clashes))
+
+
+def stdlib_clash(names):
+    return (f"the model's module(s) {', '.join(names)} have the name of a Python standard library module, "
+            "which the FMU's backend also imports: rename the file(s)")
+
 
 def load_config(path):
     path = Path(path)
@@ -272,6 +310,16 @@ def normalize(config, entry_obj, module_name, sys_path, model_name=None, author=
         init_sig = None
         call_sig = _signature(entry_obj) if step_call else None
 
+    if step_call and (inspect.isgeneratorfunction(entry_obj) if not is_class
+                      else call and inspect.isgeneratorfunction(getattr(entry_obj, call, None))):
+        raise InterfaceError(f"{model['entry']} is a generator (it uses yield), which fmugen can't step yet; "
+                             "a factory that returns an object with a step method works ([model] call)")
+    integrate = _integrate(model, step_call)
+    discard_on = _discard_on(model.get("discard_on", []))
+    if discard_on and _save_state(model) is False:
+        raise InterfaceError("[model] discard_on needs the FMU state (save_state not false): a rejected step is "
+                             "undone by restoring the state saved before it")
+
     def check_arg(sig, arg, what):
         if sig is not None and not _accepts(sig, arg):
             raise InterfaceError(f"{what}: {arg!r} is not an argument of {sig[1]}")
@@ -331,7 +379,10 @@ def normalize(config, entry_obj, module_name, sys_path, model_name=None, author=
     for section, causality in SECTIONS.items():
         for name, info in config.data.get(section, {}).items():
             var = _variable(section, causality, name, info, is_class, type_definitions,
-                            version, structural, clock_names)
+                            version, structural, clock_names, integrate is not None)
+            if version == 2 and info.get("type") in WIDER_THAN_FMI2_INTEGER:
+                notes.append(f"[{section}] {name}: FMI 2 has no {info['type']}; it is a 32-bit Integer "
+                             "in this FMU, so values outside -2147483648..2147483647 are an error")
             to = var.get("to")
             if to and to["kind"] in ("init", "arg"):
                 clock = (var.get("clocks") or [None])[0]
@@ -345,6 +396,13 @@ def normalize(config, entry_obj, module_name, sys_path, model_name=None, author=
             "the config defines no FMU variables: add [inputs]/[parameters] and [outputs] "
             "(the model's arguments and results could not be inferred)"
         )
+    if integrate is not None:
+        states = [v for v in variables if "der" in v]
+        if not states:
+            raise InterfaceError("[model] integrate needs [states]: the variables the model returns the derivatives of")
+        if len(states) > 1 and any(v["der"] == {"kind": "return", "name": None} for v in states):
+            raise InterfaceError("[model] integrate with several states: give each one der = \"return:...\" "
+                                 "(which part of the result is its derivative)")
     if not any("from" in v for v in variables):
         notes.append("the FMU has no outputs: add [outputs] to read results from the model")
     for pos_kind, clock_name in [("initpos", None), *(("pos", c) for c in [None, *clock_names])]:
@@ -395,12 +453,23 @@ def normalize(config, entry_obj, module_name, sys_path, model_name=None, author=
     if experiment.get("fixed_step") and "step_size" not in experiment:
         raise InterfaceError("[experiment] fixed_step = true requires step_size")
 
+    init_call = model.get("init_call", not is_class and step_call)
+    if ("init_call" not in model and init_call and "step_size" in time_args.values()
+            and "step_size" not in experiment):
+        # without a step size the init call would pass 0 as the step size (a model dividing by it fails)
+        init_call = False
+        notes.append("the function is not called at initialization: it takes the step size, and [experiment] "
+                     "has no step_size to pass; its outputs keep their start values until the first step")
+
     doc = inspect.getdoc(entry_obj) or inspect.getdoc(inspect.getmodule(entry_obj)) or ""
+    annotations = model.get("annotations")
+    if annotations is not None:
+        _check_annotations(annotations)
     return {
-        "spec_version": 1,
+        "spec_version": SPEC_VERSION,
         "fmi_version": version,
         "model_name": model_name or model.get("name") or config.entry_name,
-        "description": model.get("description", doc.strip().splitlines()[0] if doc.strip() else ""),
+        "description": model.get("description", summary(doc)),
         "author": author if author is not None else model.get("author", ""),
         "entry": {
             "module": module_name,
@@ -410,7 +479,7 @@ def normalize(config, entry_obj, module_name, sys_path, model_name=None, author=
             "factory": factory,
             "call": call if is_class and step_call else None,
             "step": step_call,
-            "init_call": model.get("init_call", not is_class and step_call),
+            "init_call": init_call,
             "terminate": model.get("terminate"),
         },
         "sys_path": sys_path,
@@ -429,8 +498,69 @@ def normalize(config, entry_obj, module_name, sys_path, model_name=None, author=
         "has_event_mode": bool(clocks or events),
         "can_get_and_set_state": _save_state(model) is not False,
         "save_state": _save_state(model),
+        "discard_on": discard_on,
+        "integrate": integrate,
+        "annotations": annotations,
         "notes": notes,
     }
+
+
+def summary(doc, limit=200):
+    """The first line of a docstring, at most `limit` characters."""
+    line = doc.strip().splitlines()[0].strip() if doc.strip() else ""
+    return line if len(line) <= limit else line[:limit - 1].rstrip() + "…"
+
+
+def _integrate(model, step_call):
+    """[model] integrate: the model returns derivatives, and the FMU integrates its states over each step."""
+    method = model.get("integrate")
+    substeps = model.get("substeps", 1)
+    if method is None:
+        if "substeps" in model:
+            raise InterfaceError("[model] substeps only applies with [model] integrate")
+        return None
+    if not step_call:
+        raise InterfaceError("[model] integrate and call = false exclude each other")
+    if not isinstance(method, str) or not (method in INTEGRATORS or method.startswith("scipy:")):
+        raise InterfaceError(f'[model] integrate must be one of {INTEGRATORS} or "scipy:<method>" '
+                             f'(a scipy.integrate.solve_ivp method, e.g. "scipy:RK45"); got {method!r}')
+    if method.startswith("scipy:"):
+        if "substeps" in model:
+            raise InterfaceError("[model] substeps only applies to euler and rk4: scipy chooses its own steps")
+        name = method.partition(":")[2]
+        if name not in SCIPY_METHODS:
+            raise InterfaceError(f"[model] integrate: {name!r} is not a solve_ivp method ({', '.join(SCIPY_METHODS)})")
+    if isinstance(substeps, bool) or not isinstance(substeps, int) or substeps < 1:
+        raise InterfaceError("[model] substeps must be a positive integer")
+    return {"method": method, "substeps": substeps}
+
+
+def _discard_on(refs):
+    """[model] discard_on = ["module:Exception", ...]: exceptions and warnings that reject a step."""
+    if not isinstance(refs, list) or not all(isinstance(r, str) for r in refs):
+        raise InterfaceError('[model] discard_on must be a list like ["scipy.integrate:IntegrationWarning"]')
+    from fmugen.templates.fmugen_runtime import resolve_reference
+    for ref in refs:
+        try:
+            cls = resolve_reference(ref)
+        except Exception as e:
+            raise InterfaceError(f"[model] discard_on: cannot import {ref!r}: {e!r}") from e
+        if not (isinstance(cls, type) and issubclass(cls, Exception)):
+            raise InterfaceError(f"[model] discard_on: {ref!r} is not an exception or warning class")
+    return list(refs)
+
+
+def _check_annotations(text):
+    """[model] annotations: XML put inside the modelDescription's <Annotations>."""
+    import xml.etree.ElementTree as ET
+    if not isinstance(text, str):
+        raise InterfaceError('[model] annotations must be XML text, e.g. \'<Tool name="mytool"><x/></Tool>\'')
+    try:
+        root = ET.fromstring(f"<Annotations>{text}</Annotations>")
+    except ET.ParseError as e:
+        raise InterfaceError(f"[model] annotations is not valid XML: {e}") from e
+    if not len(root) or any(child.tag != "Tool" or "name" not in child.attrib for child in root):
+        raise InterfaceError('[model] annotations must be <Tool name="..."> elements')
 
 
 def _save_state(model):
@@ -587,7 +717,8 @@ def element_count(var):
     return n
 
 
-def _variable(section, causality, name, info, is_class, type_definitions, version=2, structural=(), clocks=()):
+def _variable(section, causality, name, info, is_class, type_definitions, version=2, structural=(), clocks=(),
+              integrate=False):
     where = f"[{section}] {name}"
     parts = name.split(".") if section in ("outputs", "locals") else [name]   # outputs may be "zone.T"
     if not all(p.isidentifier() and not keyword.iskeyword(p) for p in parts):
@@ -704,6 +835,9 @@ def _variable(section, causality, name, info, is_class, type_definitions, versio
             if fmi_type not in (*FLOAT_TYPES, *INT_TYPES, "Enumeration") or (key == "nominal" and not is_float):
                 raise InterfaceError(f"{where}: {key} is not allowed for {fmi_type} variables")
             var[key] = info[key]
+    _check_range(where, var)
+    if "extra" in info:
+        var["extra"] = _extra(where, info["extra"])
 
     # bindings to the user's code
     if section in ("structural_parameters", "parameters", "inputs", "states"):
@@ -716,10 +850,18 @@ def _variable(section, causality, name, info, is_class, type_definitions, versio
             var["to"]["kind"] = "initpos"
         if "clocks" in var and var["to"]["kind"] == "init":
             raise InterfaceError(f"{where}: a clocked input is passed to its clock's call, not the constructor")
-        if section == "states":
+        kinds = ("return", "attr") if is_class else ("return",)
+        if section == "states" and integrate:   # the model returns the derivative; the FMU integrates it
+            if "next" in info:
+                raise InterfaceError(f"{where}: with [model] integrate, states have der = \"...\" (the "
+                                     "derivative), not next")
+            var["der"] = parse_binding(info.get("der", "return"), kinds, where)
+        elif section == "states":
+            if "der" in info:
+                raise InterfaceError(f"{where}: der only applies with [model] integrate")
             if "next" not in info:
                 raise InterfaceError(f"{where}: states need next = \"...\" (where the next value comes from)")
-            var["next"] = parse_binding(info["next"], ("return", "attr") if is_class else ("return",), where)
+            var["next"] = parse_binding(info["next"], kinds, where)
     else:
         default = f"attr:{name}" if is_class else f"return:{name}"
         var["from"] = parse_binding(info.get("from", default), ("return", "attr") if is_class else ("return",), where)
@@ -733,12 +875,52 @@ def _variable(section, causality, name, info, is_class, type_definitions, versio
         if variability == "tunable" and is_class:
             if var["to"]["kind"] == "attr" or var["to"]["kind"] == "init" and attr is None:
                 attr = var["to"]["name"]
+            if var["to"]["kind"] == "initpos" and attr is None:
+                raise InterfaceError(f"{where}: a tunable parameter passed by position needs attr = \"...\", the "
+                                     "attribute of the model object that holds it (else a new value can't reach it)")
             if attr:
                 var["attr"] = attr
 
     if section == "outputs" and "depends_on" in info:
         var["depends_on"] = list(info["depends_on"])
     return var
+
+
+def _check_range(where, var):
+    """min <= max, and the start value (each element of an array) between them."""
+    for key in ("min", "max", "nominal"):
+        if key in var and (isinstance(var[key], bool) or not isinstance(var[key], (int, float))):
+            raise InterfaceError(f"{where}: {key} must be a number, got {var[key]!r}")
+    low, high = var.get("min"), var.get("max")
+    if low is not None and high is not None and low > high:
+        raise InterfaceError(f"{where}: min {low} is larger than max {high}")
+    start = var.get("start")
+    for value in start if isinstance(start, list) else [start]:
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            continue
+        if low is not None and value < low or high is not None and value > high:
+            raise InterfaceError(f"{where}: start {value} is outside min..max ({low}..{high})")
+
+
+# XML attributes fmugen writes from the variable's own keys, which `extra` can't set
+RESERVED_ATTRIBUTES = {"name", "valueReference", "causality", "variability", "initial", "start", "description",
+                       "declaredType", "unit", "min", "max", "nominal", "quantity"}
+
+
+def _extra(where, extra):
+    """extra = { displayUnit = "degC", relativeQuantity = true }: more XML attributes of the variable."""
+    if not isinstance(extra, dict):
+        raise InterfaceError(f'{where}: extra must be a table, e.g. extra = {{ displayUnit = "degC" }}')
+    result = {}
+    for key, value in extra.items():
+        if not key.isidentifier():
+            raise InterfaceError(f"{where}: extra: {key!r} is not an XML attribute name")
+        if key in RESERVED_ATTRIBUTES:
+            raise InterfaceError(f"{where}: extra: set {key} as a key of the variable, not in extra")
+        if isinstance(value, (dict, list)):
+            raise InterfaceError(f"{where}: extra.{key} must be a single value")
+        result[key] = "true" if value is True else "false" if value is False else str(value)
+    return result
 
 
 def _type(where, info, section=None):
@@ -785,7 +967,8 @@ def _check_value(where, fmi_type, value):
     else:
         expected = {"Boolean": (bool,), "String": (str,), "Binary": (str,)}.get(fmi_type, (int,))
     if isinstance(value, bool) and fmi_type != "Boolean" or not isinstance(value, expected):
-        raise InterfaceError(f"{where}: start {value!r} is not a valid {fmi_type}")
+        hint = f" (use {str(bool(value)).lower()})" if fmi_type == "Boolean" and value in (0, 1) else ""
+        raise InterfaceError(f"{where}: start {value!r} is not a valid {fmi_type}{hint}")
     try:
         coerce(fmi_type, value)  # integer ranges, hex for Binary
     except ValueError as e:
