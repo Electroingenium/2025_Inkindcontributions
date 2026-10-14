@@ -90,6 +90,33 @@ Starts from the repo's test: A = I₃, B = 0.5·I₃, x0 = (−2, −7.5, 0), Xm
 
 In the shared venv of this test (with OpenHENS's and needforheat's dependencies installed), the same PyInstaller compile took 19 min and made a 195 MB FMU (489 MB unpacked: llvmlite, pyarrow, scipy, pandas, matplotlib, PIL). fmugen collects every gekko submodule, and `gekko.ML`, the Pyomo solver extension and `gekko.support` import scikit-learn, Pyomo and IPython inside `try:`: when those are installed, PyInstaller follows them. **Compile a model in a venv with only what it needs.**
 
+## Replacements (2026-10-14)
+
+The models that failed for reasons of their own were replaced, or reworked when the fix was small, and run through `init`, `init --probe`, build and simulate (FMI 2) with the fixes above. All 6 simulate with their `--probe` config.
+
+| Replaces | Why | Model | Source | Entry and starts |
+|---|---|---|---|---|
+| distillation script | a script, nothing to call | **Distillation column, reworked into a class** (equations unchanged) | GEKKO `examples/distillation.py` | `distillation_column.py:DistillationColumn`, `--call step`: builds the model and solves its steady state in `__init__`, then `step(rr, dt)` runs `dt` minutes at reflux ratio `rr` from where the last step ended. Results are floats set by `step()`; local solver; no plots. |
+| transmembrane | the library's GEKKO class is dead code | **Debutanizer column, steady state** (30 stages) | [Arushan45/Debutanizer-Project](https://github.com/Arushan45/Debutanizer-Project) `f6fe813` | `debutanizer.model:solve_steady_state`, installed with `pip install -e`; `--start reflux_ratio=2.5 --start alpha=1.9717789099` (the repo's calibrated α) |
+| NHES | its input CSV isn't published (the FigShare collection holds only result pickles) | **Debutanizer reflux optimization** (minimum boil-up for 99.1% purity) | same | `debutanizer.model:optimize_reflux`, `--start alpha=1.9717789099` |
+| drilling MPC | solves on APMonitor's server, not reachable from here | **Linear MPC** | [dhruvhaldar/apsis](https://github.com/dhruvhaldar/apsis) `a171cf1` | `apsis/mpc.py:solve_mpc`; the app's defaults: A = [[0, 1], [−1, −1]], B = [[0], [1]], Q = I, R = [[1]], x0 = (1, 0), N = 20, dt = 0.5, u ∈ [−1, 1] |
+| needforheat | needs DataFrames of measured data | **2×2 FOPDT process** (a `GEKKO` subclass, one step per call) | [BYU-PRISM/Transformer_MPC](https://github.com/BYU-PRISM/Transformer_MPC) `7686735`, `02_Surrogate/FOPDT/MIMO/…/functions/process_fopdt.py` | `process_fopdt.py:ProcessModel`, `--call run --start "u=[1.0, 0.5]"` |
+| OpenHENS | needs the COIN-OR couenne binary | **MPC controller for that process** (a `GEKKO` subclass) | same repo, `03_HybridModel/03_TCLab_PINN_Controllers/functions/mpc_gekko.py` | `mpc_gekko.py:MPCModel`, `--call solve` (GEKKO's own `solve`) |
+
+| Model | init | init --probe | build + simulate | Check |
+|---|---|---|---|---|
+| Distillation class | ✓ | ✓ | plain ✓ / probe ✓ | 7 outputs. At reflux 3.0, the condenser goes 0.785721, 0.837391, 0.867374 and the reboiler 0.190012, 0.145341, 0.120733: **the script's own values** for its reflux step (GEKKO applies the script's change at t = 10 from t = 9). At 0.7 it stays at the steady state (0.6961 / 0.3039). |
+| Debutanizer, steady state | ✓ | ✓ | plain build ✓, sim ✗ / **probe ✓** | Distillate C4 0.96999957519, vapor 133.0 kmol/h, duty 0.84972 MW: **the repo's `results/summary.json`** to all digits. Code-only: `c4_profile is a list of shape [30]` (known, problem 4 of the rerun; `--probe` finds it). |
+| Debutanizer, optimization | ✓ | ✓ | plain build ✓, sim ✗ / **probe ✓** | Reflux 2.7602061381, purity 0.991, vapor 142.8878332478: the repo's optimum, to all digits. |
+| Linear MPC | ✓ | ✓ | plain build ✓, sim ✗ / **probe ✓** | Returns (time, states, inputs) over the horizon: 21 + 42 + 21 outputs; time 0, 0.5, … 10. |
+| FOPDT process | ✓ | ✓ | plain build ✓, sim ✗ / **probe ✓** | y = (0.3333, 0.0833), (0.6111, 0.1528), (0.8426, 0.2106) for u = (1, 0.5): K₁₁ = 2, K₂₂ = 1, τ = 5, 1 s steps with GEKKO's implicit scheme (2·(1 − 1/1.2) = 0.3333). Outputs `y1`, `y2`, `u1`, `u2` come from the GEKKO-results fix. |
+| MPC controller | ✓ | ✓ | plain build ✓, sim ✗ / **probe ✓** | Runs, but with no setpoints given its moves stay near 0 (u ≈ 0.0002). The setpoints are attributes (`y1.SP`); an input bound to them (`to = "attr:y1.SP"`) would have to be added by hand. |
+
+Two smaller findings:
+
+- **A `GEKKO` subclass exposes GEKKO's own attributes.** For `ProcessModel` and `MPCModel`, the code-only config has `solver_options` (an empty list), which fails the step (`solver_options is a list of shape [0]`), and the `--probe` one has `csv_status` (a String output) and a commented-out `gui`. They're GEKKO's state, not the model's results.
+- **An attribute set in `__init__` that the step leaves unchanged isn't an output.** The first version of the distillation class set its compositions in `__init__`; the probe's step at the same reflux ratio didn't change them, so `--probe` found no outputs. That's by design (the probe can only tell results from what changes), so the class sets them in `step()`.
+
 ## Problems found
 
 1. **`--compile nuitka` fails on any model whose dependency tree has a single-file top-level module.** fmugen passes `--include-package-data=NAME` for every import name of every collected distribution ([distribute.py:177](../src/fmugen/distribute.py#L177)). Some of those are plain modules, not packages: matplotlib's `pylab.py`, jupyter's `jupyter.py`, `ipython_pygments_lexers.py`. Nuitka stops: `FATAL: Error, 'pylab' is a module not a package, cannot have package data.` This failed all 6 compiles (5 on `pylab`, OpenHENS on `jupyter`, needforheat on `ipython_pygments_lexers`). PyInstaller's `--collect-data` accepts modules, so the PyInstaller path isn't affected. Nuitka hadn't been run before ([rerun](tested-models-rerun.md): "Not checked: Nuitka"). The fix is to pass `--include-package-data` only for names whose spec has `submodule_search_locations`.

@@ -67,6 +67,8 @@ New fmugen problems found there:
 | A model file named `model.py` clashes with UniFMU's backend module | `build` refuses it and asks to rename the file; `init` doesn't warn. | Intended. |
 | FMI 2 step errors | not shown without debug logging; with it, Pyomo's log lines crash FMPy (UniFMU [§12](unifmu-limitations.md#12-fmi-2-log-messages-are-used-as-printf-format-strings)). | Open. |
 
+On 2026-10-14, the distillation script was reworked into a class and the 5 models that couldn't be helped easily (transmembrane, drilling MPC, needforheat, NHES, OpenHENS) were replaced by lighter published ones (a debutanizer column twice, a linear MPC, a FOPDT process and its MPC controller): **all 6 simulate**, and the column and the distillation class match their published results to all digits ([tested-models-gekko.md](tested-models-gekko.md#replacements-2026-10-14)).
+
 The other 7 failures were the models' own: two module-level scripts with nothing to call, a crash of GEKKO's local solver (ethanol bioreactor, also when run directly), a library that never imports GEKKO, inputs no FMU can give (an environment object, pandas DataFrames), a data file missing from the repository and a solver binary (COIN-OR couenne) that isn't installed.
 
 ## Summary (first run)
