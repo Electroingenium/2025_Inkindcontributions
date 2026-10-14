@@ -143,7 +143,7 @@ So any error whose traceback quotes a line with a `%` (common in library code: `
 
 **Fix upstream:** call `(self.callback)(env, name, status, category, c"%s".as_ptr(), c_message.as_ptr())`, or double each `%` to `%%` in `log()`. No upstream issue was found (a search of the UniFMU issues for "logger format", "printf", "access violation" and "percent" returned nothing).
 
-**Workaround in fmugen:** none yet. Possible: the FMI 2 adapter doubles each `%` before sending a message. Since fmugen pins UniFMU 0.14.0 exactly, that is safe, but it must be removed when UniFMU fixes the bug, or `%%` would show in the log.
+**Workaround in fmugen (done, 2026-10-14):** the FMI 2 adapter (`model_fmi2.py`, `log()`) doubles each `%` before sending a message, so an importer that formats it prints a single `%`. Checked through UniFMU with FMPy and `debug_logging=True`: a model that logs `"done 50%s of %d"` crashed FMPy with an access violation without the escape, and with it the importer receives the text unchanged (`test_fmi2_log_messages_with_percent_signs_reach_the_importer`). Since fmugen pins UniFMU 0.14.0 exactly, this is safe, but it must be removed when UniFMU passes the text as an argument, or `%%` would show in the log. UniFMU's own messages (built in Rust from error text) are not escaped and can still contain a `%`.
 
 ## 13. A backend that exits during a call can abort the importer
 

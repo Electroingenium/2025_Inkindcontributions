@@ -333,14 +333,34 @@ def _resolve(node, namespace):
 
 def _installed_packages():
     """Top-level import names of the installed distributions."""
+    return set(packages_distributions())
+
+
+_DISTRIBUTIONS = {}   # (folders holding distributions, their modification times) -> packages_distributions()
+
+
+def packages_distributions():
+    """importlib.metadata.packages_distributions(), cached: it reads the file list of every installed
+    distribution (~1 s with a few hundred packages). The key is the sys.path folders that hold
+    distributions (*.dist-info, *.egg-info) and their modification times: installing or removing a
+    package changes its folder's time. Folders of model code (which init adds to sys.path) don't count."""
     import importlib.metadata
-    global _INSTALLED
-    if _INSTALLED is None:
-        _INSTALLED = set(importlib.metadata.packages_distributions())
-    return _INSTALLED
+    import os
+    import sys
 
-
-_INSTALLED = None
+    def holding(path):
+        try:
+            with os.scandir(path or ".") as entries:
+                if any(e.name.endswith((".dist-info", ".egg-info")) for e in entries):
+                    return os.stat(path or ".").st_mtime_ns
+        except OSError:
+            pass
+        return None
+    key = tuple((path, t) for path in sys.path for t in [holding(path)] if t is not None)
+    if key not in _DISTRIBUTIONS:
+        _DISTRIBUTIONS.clear()
+        _DISTRIBUTIONS[key] = importlib.metadata.packages_distributions()
+    return _DISTRIBUTIONS[key]
 
 
 def foreign_class(klass, cls):

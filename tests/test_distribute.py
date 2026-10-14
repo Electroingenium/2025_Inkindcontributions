@@ -27,6 +27,7 @@ def test_options_are_checked(tmp_path):
         build(EXAMPLES / "simple_pid", tmp_path / "b.fmu", platforms=["win_amd64"])
 
 
+@pytest.mark.fmu
 def test_vendored_fmu_installs_its_wheels_offline_once(tmp_path, monkeypatch):
     envs = tmp_path / "envs"
     monkeypatch.setenv("FMUGEN_ENV_DIR", str(envs))

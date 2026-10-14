@@ -38,6 +38,7 @@ def test_model_description_details(fmus):
     assert variables["ventilation_efficiency"].max == "1.0"
 
 
+@pytest.mark.fmu
 def test_fixed_step_fmu_simulates_with_input_file(fmus):
     result = simulate_fmu(str(fmus["rc_building"]), input=_csv(EXAMPLES / "rc_building" / "weather.csv"),
                           stop_time=86400, output_interval=3600, output=["t_air", "heating_demand"])
@@ -46,6 +47,7 @@ def test_fixed_step_fmu_simulates_with_input_file(fmus):
     assert abs(result["t_air"][1:] - 20.0).max() < 1.0      # ... which keeps the zone near the set point
 
 
+@pytest.mark.fmu
 def test_tunable_parameter_and_rollback_through_unifmu(fmus, tmp_path):
     unzipdir = tmp_path / "pid"
     shutil.unpack_archive(fmus["simple_pid"], unzipdir, "zip")

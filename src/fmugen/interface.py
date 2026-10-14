@@ -401,7 +401,7 @@ def _add_requirements(data, comments, module_name, config_dir, entry_file):
             tops |= {name.split(".")[0] for name in _dotted_names(ref.partition("(")[2])}
     if any(info.get("numpy") for section in ("parameters", "inputs", "states") for info in data.get(section, {}).values()):
         tops.add("numpy")
-    distributions = importlib.metadata.packages_distributions()
+    distributions = static.packages_distributions()
     found, unknown = {}, []
     for top in sorted(tops):
         if top in sys.stdlib_module_names or top == "fmugen" or importlib.util.find_spec(top) is None:

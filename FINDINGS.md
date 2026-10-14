@@ -30,7 +30,7 @@ I checked this with `simple_pid:PID` and `Kp = { start = 2.0, variability = "tun
 The same thing happens when `to = "init:x"` but the constructor stores the value under another name (`self._x = x`). `setattr(obj, "x", …)` then creates a new attribute that nothing reads, and nobody is told.
 **Fix:** at build time, refuse `tunable` with an `initpos` binding unless `attr` is given. For `init:x` without `attr`, warn when the class has no attribute `x` (`static.assigned_attributes` already knows which attributes `__init__` sets).
 
-### 1.3 🟠 FMI 2 log messages with `%` can crash the importer: still no workaround [code + documented]
+### 1.3 ✅ Fixed (workaround): FMI 2 log messages with `%` can crash the importer [verified]
 This is documented in [unifmu-limitations.md §12](docs/unifmu-limitations.md#12-fmi-2-log-messages-are-used-as-printf-format-strings) but not fixed. Any traceback or URL in the log that contains `%s` causes an access violation in FMPy when logging is on. fmugen pins UniFMU 0.14.0 exactly, so the fix is safe and very small: in `model_fmi2.py`'s `log()`, send `message.replace("%", "%%")`. Remove it when the UniFMU pin moves to a fixed version. Of all the crash paths, this is the cheapest one to remove.
 
 ### 1.4 ✅ Fixed: Function models are called with `dt = 0` at initialization when there is no `[experiment] step_size` [code]
@@ -121,17 +121,20 @@ Ordered by value for users, with the main files each one touches.
 ## 4. Tests, CI and repo hygiene
 
 - **No CI yet** (`.github/` doesn't exist). Start with a Windows + Linux job: `uv sync`, install UniFMU 0.14.0 from the release, then `pytest -m "not slow"`. Add the slow `--compile` tests nightly.
-- **The quick suite is slow:** `pytest -m "not slow"` gives 156 passed, 9 skipped in **11 min** on this machine. Most of that is UniFMU subprocess runs. Mark those `slow` (or add an `fmu` marker), so the in-process `Engine` tests make a sub-minute loop.
-- **Missing tests**, each of which would have caught a bug above:
+- ✅ **The quick suite was slow** (5.5 min alone, 11 min with other load). UniFMU runs weren't the main cost; building was:
+  - The first open of each new copy of `unifmu.dll` costs ~0.55 s while the virus scanner checks it, and `unifmu generate` takes ~0.6 s. Builds now generate UniFMU's template once per process and hard-link its unchanged binaries, so a folder build takes 0.34 s instead of 1.9 s.
+  - `importlib.metadata.packages_distributions()` took 0.8 s per `init`. It is now cached per process, keyed on the folders that hold distributions and their modification times.
+  - Tests that run built FMUs through UniFMU and an importer are marked `fmu`. `pytest -m "not slow and not fmu"` now takes about 64 s (161 tests), and `-m "not slow"` about 2 min (179 tests).
+- ✅ **Missing tests**, each of which would have caught a bug above (all added):
   - GUID stability without `SOURCE_DATE_EPOCH` (1.1).
-  - A tunable parameter changed in step mode, for each binding kind (`init`, `initpos`, `attr`, `call`, `arg`) (1.2).
-  - An FMI 2 log message containing `%s` (1.3).
+  - A tunable parameter changed between steps, for each binding kind (`init`, `initpos`, `attr`, `call`, `arg`) (1.2).
+  - An FMI 2 log message containing `%s`, in-process and through UniFMU with FMPy (1.3).
   - A function model with a `dt` argument and no experiment step size (1.4).
   - A composite whose two parts each have a `utils.py` (1.5).
 - **No `LICENSE`** (AUDIT §2.5, still 🔴). This blocks any public release, and the licence of the generated FMUs (which contain fmugen's runtime and UniFMU's MIT code) needs a sentence in the docs.
 - **AUDIT.md is partly stale.** §7 says the Docker demo is FMI 2 only, but `docker/app/fmu_runner.py` now handles `FMU3Slave` too. §3.1 says `--python` and `--vendor` were removed, but `--vendor` exists. Mark it as a historical document, or update the status column.
 - `image.png` at the root, and `.gitignore` entries for `out/`, `dist/` and `.pytest_cache/` (AUDIT §7, open). `out/` is untracked but sits in the root.
-- `src/fmugen/__init__.py`: still no `__version__` (AUDIT §7, open).
+- ✅ `src/fmugen/__init__.py` has `__version__`, read from the installed package's metadata (AUDIT §7).
 
 ---
 

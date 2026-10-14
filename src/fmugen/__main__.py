@@ -10,6 +10,7 @@
     fmugen build path/to/fmugen.toml -o out/model.fmu --distributed  # proxy FMU + out/model_private/
 """
 import argparse
+import atexit
 import contextlib
 import importlib
 import importlib.util
@@ -84,31 +85,56 @@ def find_unifmu():
     return exe
 
 
+_templates = {}   # (unifmu executable, arguments) -> folder holding their output, generated once per process
+
+
+def _template(args, check):
+    """Run `unifmu *args` once per process, in a cached folder, and return that folder.
+
+    Every build of the same FMI version gets the same files, and generating them takes about a
+    second on Windows, mostly the virus scanner checking each new copy of UniFMU's binaries."""
+    exe = find_unifmu()
+    key = (exe, *args)
+    if key not in _templates:
+        folder = Path(tempfile.mkdtemp(prefix="fmugen-unifmu-"))
+        atexit.register(shutil.rmtree, folder, ignore_errors=True)
+        result = subprocess.run([exe, *args], capture_output=True, text=True, cwd=folder)
+        if result.returncode != 0 or not check(folder):
+            shutil.rmtree(folder, ignore_errors=True)
+            raise InterfaceError(f"`unifmu {' '.join(args)}` failed:\n{result.stdout}{result.stderr}")
+        _templates[key] = folder
+    return _templates[key]
+
+
+def _link_or_copy(src, dst):
+    """Copy a template file; UniFMU's native binaries, which are never changed, are hard-linked when
+    possible: a new copy of the 10 MB DLL is scanned by the virus scanner when first opened (~0.5 s)."""
+    if "binaries" in Path(src).parts:
+        try:
+            os.link(src, dst)
+            return dst
+        except OSError:   # another drive, or a file system without hard links
+            pass
+    return shutil.copy2(src, dst)
+
+
 def generate_boilerplate(fmi_version, dest):
     """Write UniFMU's Python FMU template for `fmi_version` (2 or 3) to `dest`."""
-    exe = find_unifmu()
-    result = subprocess.run([exe, "generate", "python", str(dest), f"fmi{fmi_version}"],
-                            capture_output=True, text=True)
-    if result.returncode != 0 or not (Path(dest) / "resources").is_dir():
-        raise InterfaceError(f"`unifmu generate python {dest} fmi{fmi_version}` failed:\n"
-                             f"{result.stdout}{result.stderr}")
+    template = _template(["generate", "python", "out", f"fmi{fmi_version}"],
+                         lambda folder: (folder / "out" / "resources").is_dir())
+    shutil.copytree(template / "out", dest, copy_function=_link_or_copy)
 
 
 def generate_distributed_boilerplate(fmi_version, dest, endpoint):
     """Write UniFMU's distributed Python template for `fmi_version` into `dest`, and return its two
     halves: the proxy (the FMU the importer loads) and the private folder (the backend, which
     connects to the proxy's host `endpoint`)."""
-    exe = find_unifmu()
+    template = _template(["generate-distributed", "python", "x", f"fmi{fmi_version}", "--endpoint", endpoint],
+                         lambda folder: (folder / "x_proxy" / "resources" / "launch.toml").is_file()
+                         and (folder / "x_private" / "main.py").is_file())
     dest = Path(dest)
-    dest.mkdir(parents=True, exist_ok=True)
-    result = subprocess.run([exe, "generate-distributed", "python", "x", f"fmi{fmi_version}", "--endpoint", endpoint],
-                            capture_output=True, text=True, cwd=dest)
-    proxy, private = dest / "x_proxy", dest / "x_private"
-    if (result.returncode != 0 or not (proxy / "resources" / "launch.toml").is_file()
-            or not (private / "main.py").is_file()):
-        raise InterfaceError(f"`unifmu generate-distributed python x fmi{fmi_version} --endpoint {endpoint}` "
-                             f"failed:\n{result.stdout}{result.stderr}")
-    return proxy, private
+    shutil.copytree(template, dest, copy_function=_link_or_copy, dirs_exist_ok=True)
+    return dest / "x_proxy", dest / "x_private"
 
 
 def private_start_command(mode=None):

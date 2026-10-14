@@ -47,6 +47,7 @@ def test_options_need_distributed(tmp_path):
         build(EXAMPLES / "simple_pid", tmp_path / "a.fmu", private_output=tmp_path / "p")
 
 
+@pytest.mark.fmu
 @pytest.mark.parametrize("fmi_version", [2, 3])
 def test_proxy_and_private_side_simulate_like_a_normal_fmu(tmp_path, fmi_version):
     expected = list(simulate_fmu(str(build(EXAMPLES / "simple_pid", tmp_path / "pid.fmu", fmi_version=fmi_version)[0]),
@@ -69,6 +70,7 @@ def test_proxy_and_private_side_simulate_like_a_normal_fmu(tmp_path, fmi_version
     assert _simulate(fmu, private, [sys.executable, "main.py"], fmi_version) == expected
 
 
+@pytest.mark.fmu
 def test_vendored_private_side_installs_its_wheels(tmp_path, monkeypatch):
     monkeypatch.setenv("FMUGEN_ENV_DIR", str(tmp_path / "envs"))
     expected = list(simulate_fmu(str(build(EXAMPLES / "simple_pid", tmp_path / "pid.fmu")[0]),
@@ -82,6 +84,7 @@ def test_vendored_private_side_installs_its_wheels(tmp_path, monkeypatch):
     assert _simulate(fmu, private, [sys.executable, "fmugen_launch.py"]) == expected
 
 
+@pytest.mark.fmu
 def test_composite_distributed(tmp_path):
     from test_composite import closed_loop, write_composite
     fmu, interface = build(write_composite(tmp_path), tmp_path / "loop.fmu", distributed=True)

@@ -45,7 +45,7 @@ You also need [UniFMU](https://github.com/INTO-CPS-Association/unifmu/releases) 
 
 To simulate and validate FMUs as in the examples below, install [FMPy](https://github.com/CATIA-Systems/FMPy) (`pip install fmpy`).
 
-To work on fmugen itself, clone the repository and run `uv sync`; then use `uv run fmugen …` and `uv run pytest`.
+To work on fmugen itself, clone the repository and run `uv sync`; then use `uv run fmugen …` and `uv run pytest` (`-m "not slow and not fmu"` for the in-process tests only, about a minute).
 
 ## 3. Workflow
 

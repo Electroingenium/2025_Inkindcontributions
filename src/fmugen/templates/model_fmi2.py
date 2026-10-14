@@ -82,6 +82,10 @@ class Model:
     # ================= Logging =================
 
     def log(self, message, status, category = "logAll"):
+        # UniFMU 0.14 passes the text to the importer's FMI 2 logger as its printf format string, with no
+        # arguments: a "%s" in a traceback or URL would crash the importer. "%%" prints as "%".
+        # (docs/unifmu-limitations.md §12; remove when UniFMU passes the text as an argument.)
+        message = message.replace("%", "%%")
         # Removing the line below will break logging.
         self._log_callback(status, category, message)
 

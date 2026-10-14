@@ -22,6 +22,7 @@ from pathlib import Path
 
 from fmugen.config import MODEL_DIR, InterfaceError
 from fmugen.interface import _dotted_names
+from fmugen.static import packages_distributions
 
 COMPILERS = {"pyinstaller": "PyInstaller", "nuitka": "nuitka"}   # --compile value -> module
 EXE_DIR = "dist/main"   # resources/dist/main/: the frozen backend
@@ -291,7 +292,7 @@ def _packages(modules, requirements=()):
     they may import by name.
     """
     import importlib.metadata as md
-    by_top = md.packages_distributions()
+    by_top = packages_distributions()
     tops_of = {}
     for top, names in by_top.items():
         for name in names:
@@ -335,7 +336,7 @@ def _source_hooks(packages, hooks_dir):
     hook does this for transformers itself. A package with a hook of its own is left alone.
     Returns hooks_dir, or None if no package needs it."""
     import importlib.metadata as md
-    by_top = md.packages_distributions()
+    by_top = packages_distributions()
     existing = {p.name for d in _hook_dirs() for p in Path(d).glob("hook-*.py")}
     names = []
     for top in packages:

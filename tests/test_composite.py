@@ -88,6 +88,7 @@ def test_composite_state_rollback_and_reset(tmp_path, adapter):
     assert fmu.fmi2DoStep(0.0, 1.0, False) == OK and fmu.get("tank.y") == closed_loop(1)[0]
 
 
+@pytest.mark.fmu
 def test_composite_through_unifmu(tmp_path):
     fmu = tmp_path / "loop.fmu"
     build(write_composite(tmp_path), fmu)

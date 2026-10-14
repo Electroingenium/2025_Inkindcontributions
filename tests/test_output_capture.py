@@ -9,6 +9,8 @@ import subprocess
 import sys
 import textwrap
 
+import pytest
+
 from fmugen.__main__ import build
 
 SIMULATE = textwrap.dedent("""
@@ -26,6 +28,7 @@ SIMULATE = textwrap.dedent("""
 """)
 
 
+@pytest.mark.fmu
 def test_large_console_output_reaches_the_log_instead_of_crashing(tmp_path):
     (tmp_path / "noisy.py").write_text(textwrap.dedent("""
         import sys
@@ -59,3 +62,42 @@ def test_output_goes_to_the_console_by_default(tmp_path):
         fmu = build(tmp_path / "quiet.py", tmp_path / f"quiet{flag}.fmu", capture_output=flag)[0]
         with zipfile.ZipFile(fmu) as z:
             assert json.loads(z.read("resources/interface.json"))["capture_output"] is flag
+
+
+PERCENT_LOG = textwrap.dedent("""
+    import sys
+    from fmpy import simulate_fmu
+    logs = []
+    # FMPy formats FMI 2 messages with their variadic arguments: an unescaped "%s" reads a missing argument
+    # and crashes. Two steps: UniFMU's backend also echoes each record to its console, which must stay
+    # under the ~4 KB that hangs UniFMU 0.14 (docs/unifmu-limitations.md section 1).
+    result = simulate_fmu(sys.argv[1], stop_time=1, output_interval=0.5, output=["y"],
+                          logger=lambda *args: logs.append(args[-1]), debug_logging=True)
+    messages = [m.decode() if isinstance(m, bytes) else m for m in logs]
+    print("OK", result["y"][-1], any("done 50%s of %d" in m for m in messages))
+""")
+
+
+@pytest.mark.fmu
+def test_fmi2_log_messages_with_percent_signs_reach_the_importer(tmp_path):
+    # UniFMU 0.14 passes FMI 2 messages to the importer as printf format strings (unifmu-limitations.md
+    # section 12); fmugen's FMI 2 adapter escapes them
+    (tmp_path / "progress.py").write_text(textwrap.dedent("""
+        import logging
+        def progress(x=3.0):
+            logging.getLogger("progress").warning("done 50%s of %d")
+            return {"y": x}
+    """))
+    fmu = build(tmp_path / "progress.py", tmp_path / "progress.fmu")[0]
+    (tmp_path / "simulate.py").write_text(PERCENT_LOG)
+    log = tmp_path / "simulate.log"
+    with log.open("w") as out:   # a file, not a pipe: a backend left running would keep a pipe open
+        try:
+            subprocess.run([sys.executable, str(tmp_path / "simulate.py"), str(fmu)],
+                           stdout=out, stderr=subprocess.STDOUT, timeout=120)
+        except subprocess.TimeoutExpired:
+            pass
+    text = log.read_text(errors="replace")
+    ok = [line for line in text.splitlines() if line.startswith("OK")]
+    assert ok, "the importer crashed or hung:\n" + text[-2000:]
+    assert ok[0].split()[1:] == ["3.0", "True"]

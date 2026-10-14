@@ -192,6 +192,7 @@ def test_output_clock_and_terminate(tmp_path, make_fmu, adapter):
     assert fmu.fmi3DoStep(4.0, 2.0, False)[2] is True                 # level 6 = 2 * capacity
 
 
+@pytest.mark.fmu
 def test_fmi2_arrays_are_one_scalar_per_element(tmp_path):
     write(tmp_path, "def f(v=(1.0, 2.0)):\n    return {'s': sum(v), 'w': [x * 10 for x in v]}\n", '''
         [model]
@@ -252,6 +253,7 @@ def slave(fmus, tmp_path):
         fmu.freeInstance()
 
 
+@pytest.mark.fmu
 def test_clocks_intervals_and_state_through_unifmu(slave):
     fmu, vr = slave("sampled_pid")
     clock = (fmi3ValueReference * 1)(vr["sample"])
@@ -284,6 +286,7 @@ def test_clocks_intervals_and_state_through_unifmu(slave):
     fmu.terminate()
 
 
+@pytest.mark.fmu
 def test_kalman_and_configuration_mode_through_unifmu(slave):
     fmu, vr = slave("kalman")
     fmu.enterConfigurationMode()
@@ -313,6 +316,7 @@ ALL_TYPES = {
 }
 
 
+@pytest.mark.fmu
 def test_every_type_clock_setting_and_state_function_through_unifmu(tmp_path):
     names = {t: t.lower() for t in ALL_TYPES}
     args = ", ".join(f"{n}_in" for n in names.values())
@@ -385,6 +389,7 @@ interval = 2.0
         fmu.freeInstance()
 
 
+@pytest.mark.fmu
 @pytest.mark.parametrize("name", ["psychrometry", "simple_pid", "rc_building"])
 def test_fmi2_examples_build_as_fmi3_with_the_same_results(tmp_path, name):
     from fmpy import simulate_fmu
@@ -399,6 +404,7 @@ def test_fmi2_examples_build_as_fmi3_with_the_same_results(tmp_path, name):
         assert list(results[2][column]) == pytest.approx(list(results[3][column]), nan_ok=True)
 
 
+@pytest.mark.fmu
 def test_plain_cosimulation_without_event_mode(fmus):
     from fmpy import simulate_fmu
     result = simulate_fmu(str(fmus["simple_pid"]), stop_time=1.0, output=["output"])
