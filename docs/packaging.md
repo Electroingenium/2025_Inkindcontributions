@@ -15,48 +15,7 @@
 
 Install fmugen into your model's virtual environment (`pip install fmugen`) and run it from there. `fmugen build` also needs the UniFMU 0.14.0 CLI (see [UniFMU version](#unifmu-version)). To work on fmugen itself, `uv sync` installs it in editable mode with the test dependencies.
 
-### `fmugen init`
-
-```
-fmugen init MODEL [-o OUTPUT] [--call METHOD] [--fmi {2,3}] [--start NAME=VALUE ...] [--setup CALL ...] [--kind function] [--create CLASSMETHOD] [--force]
-```
-
-| Argument | Description |
-|---|---|
-| `MODEL` | `model.py`, `model.py:Name`, or `package.module:Name` (an installed module). |
-| `-o, --output` | Where to write the config. Default: `fmugen.toml` next to the model (or in the current directory for an installed module). `-` prints it instead. The model file must be inside the config's folder. |
-| `--call` | For classes: the method run on each step, when it isn't `step`/`do_step`/`update`/`__call__`/the only public method. |
-| `--fmi {2,3}` | Write `fmi_version` into the config. With `3`, also infer arrays and Binary. |
-| `--start NAME=VALUE` | Start value for an argument (a Python literal), e.g. one without a default; also used by `--probe`. Repeatable. |
-| `--setup CALL` | A `[model] setup` call, e.g. `'psychrolib:SetUnitSystem(psychrolib.SI)'` or `reset`; run before the probe with `--probe`. Repeatable. |
-| `--kind function` | Treat a class whose constructor does the work as a function called every step. |
-| `--create CLASSMETHOD` | Build the object with this classmethod (e.g. `from_pretrained`) instead of the class. |
-| `--probe` | Also call the model once, to find what reading the code can't (array sizes, runtime results, `save_state`). Without it, the model is never called. |
-| `--convert NAME=module:function` | How an argument is passed in, e.g. `x=torch:tensor`. Repeatable. |
-| `--force` | Overwrite an existing config. |
-
-What it infers: [models.md](models.md#what-fmugen-init-infers).
-
-### `fmugen build`
-
-```
-fmugen build MODEL -o OUTPUT [options]
-```
-
-| Argument | Description |
-|---|---|
-| `MODEL` | A `fmugen.toml`, a directory containing one, or a model (`model.py[:Name]`, `package.module:Name`) whose config is inferred in memory. |
-| `-o, --output` | Output path, used exactly as given. |
-| `--fmi {2,3}` | FMI version to build. Default: `[model] fmi_version`, else 2. |
-| `--format {fmu,folder}` | `fmu` (default): zipped `.fmu` archive. `folder`: unzipped UniFMU folder. |
-| `--name` | `modelName` in `modelDescription.xml`; overrides `[model] name`. |
-| `--author` | `author` in `modelDescription.xml`; overrides `[model] author`. |
-| `--call` | Like `init --call`, when `MODEL` is a `.py` file with a class. |
-| `--vendor` | Put wheels of every requirement into the FMU; it installs them offline on its first run. See [FMUs for other machines](#fmus-for-other-machines). |
-| `--platform TAG` | With `--vendor`: also vendor wheels for this platform. Repeatable. |
-| `--python-version X.Y` | With `--vendor`: vendor wheels for this Python version. Repeatable. |
-| `--compile {pyinstaller,nuitka}` | Freeze everything into an executable: no sources in the FMU, no Python needed, this OS only. |
-| `--capture-output` | Send what the model prints to the importer's log instead of the console (UniFMU 0.14 hangs when the FMU's Python prints more than about 4 KB). |
+Every option of `fmugen init` and `fmugen build` is in [manual.md](manual.md#4-commands). This page explains what `build` does and the options for other machines (`--vendor`, `--compile`, `--hf-weights`).
 
 ---
 

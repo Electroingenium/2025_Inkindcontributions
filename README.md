@@ -120,12 +120,13 @@ See [docs/fmi.md](docs/fmi.md) for what each FMI call does, function by function
 
 | Page | Contents |
 |---|---|
-| [docs/manual.md](docs/manual.md) | **The manual**: every command option and every `fmugen.toml` key on one page, with recipes and troubleshooting |
+| [docs/manual.md](docs/manual.md) | **The manual**: installation, every `fmugen init` / `fmugen build` option, recipes and troubleshooting |
+| [docs/config.md](docs/config.md) | `fmugen.toml` reference: every key, its default, validation rules and a complete example |
 | [docs/models.md](docs/models.md) | Writing models: the supported shapes with examples, what `fmugen init` infers and what to check |
-| [docs/config.md](docs/config.md) | `fmugen.toml` reference: every key and its default |
-| [docs/tested-models.md](docs/tested-models.md) | The 20 published models fmugen was tried on (FMI 2 and FMI 3), what each needed, and the results |
+| [docs/init-tutorial.md](docs/init-tutorial.md) | Tutorial: reading and editing the `fmugen.toml` that `fmugen init` writes, with a checklist and FAQ |
+| [docs/tested-models.md](docs/tested-models.md) | The first published models fmugen was tried on (FMI 2 and FMI 3), what each needed, and the results. Later runs: [round 2](docs/tested-models-round2.md), [round 3](docs/tested-models-round3.md), [rerun](docs/tested-models-rerun.md), [GEKKO](docs/tested-models-gekko.md) |
 | [docs/fmi.md](docs/fmi.md) | FMI 2 and FMI 3 behaviour: function-by-function support, initialization, steps, clocks, state, logging |
-| [docs/packaging.md](docs/packaging.md) | CLI, the generated FMU's layout, the FMU's Python environment, updating UniFMU |
+| [docs/packaging.md](docs/packaging.md) | What `fmugen build` does, the generated FMU's layout, the FMU's Python environment, updating UniFMU |
 | [docs/unifmu-limitations.md](docs/unifmu-limitations.md) | Bugs and limitations of UniFMU 0.14 that affect fmugen FMUs, and their workarounds |
 | [docs/fmpy-limitations.md](docs/fmpy-limitations.md) | Bugs and limitations of FMPy 0.3.32, the importer fmugen is tested with, and their workarounds |
 | [docker/Readme.md](docker/Readme.md) | Demo stack: the FMU in Docker or Kubernetes (runs offloaded with Liqo), exchanging data over OPC UA, with a Streamlit dashboard |
