@@ -21,6 +21,7 @@ import sys
 from pathlib import Path
 
 from fmugen.config import MODEL_DIR, InterfaceError
+from fmugen.interface import _dotted_names
 
 COMPILERS = {"pyinstaller": "PyInstaller", "nuitka": "nuitka"}   # --compile value -> module
 EXE_DIR = "dist/main"   # resources/dist/main/: the frozen backend
@@ -132,8 +133,13 @@ def vendor(requirements, wheels_dir, platforms=(), python_versions=()):
 
 # ---------------- --compile ----------------
 
-def compile_fmu(compiler, resources, interface, work):
-    """Freeze resources/main.py and everything it runs into resources/dist/main/; drop the sources."""
+def compile_fmu(compiler, resources, interface, work, requirements=()):
+    """Freeze resources/main.py and everything it runs into resources/dist/main/; drop the sources.
+
+    Besides what the imports reach, the model's packages and their dependencies are collected
+    whole (data files, binaries, metadata), and the direct ones with all their submodules:
+    libraries read files next to their code, find plugins through entry points, and import
+    modules by name, which no freezer follows."""
     module = COMPILERS[compiler]
     if not importlib.util.find_spec(module):
         raise InterfaceError(f"--compile {compiler} needs {module} in this environment: "
@@ -143,6 +149,8 @@ def compile_fmu(compiler, resources, interface, work):
     paths = [resources, *(resources / p for p in interface["sys_path"])]
     modules = _modules(interface)
     data = [(resources / "interface.json", ".")] + _model_data(resources, interface)
+    local = {"model", "fmugen_runtime"}
+    direct, packages, distributions, imports = _packages([m for m in modules if m not in local], requirements)
 
     if compiler == "pyinstaller":
         cmd = [sys.executable, "-m", "PyInstaller", "--noconfirm", "--log-level", "WARN", "--name", EXE_NAME,
@@ -150,6 +158,15 @@ def compile_fmu(compiler, resources, interface, work):
         cmd += [arg for p in paths for arg in ("--paths", str(p))]
         cmd += [arg for m in modules for arg in ("--hidden-import", m)]
         cmd += [arg for src, dest in data for arg in ("--add-data", f"{src}{os.pathsep}{dest}")]
+        cmd += [arg for p in packages for arg in ("--collect-data", p, "--collect-binaries", p)]
+        cmd += [arg for p in direct for arg in ("--collect-submodules", p)]
+        cmd += [arg for p in imports for arg in ("--hidden-import", p)]
+        if "numpy" in packages:   # numpy 2's numpy.core aliases: what older pickles name (np.load of .npz)
+            cmd += ["--collect-submodules", "numpy.core"]
+        cmd += [arg for src, dest in _plugin_dirs(direct) for arg in ("--add-data", f"{src}{os.pathsep}{dest}")]
+        cmd += [arg for d in distributions for arg in ("--copy-metadata", d)]
+        hooks = _source_hooks(packages, work / "hooks")
+        cmd += ["--additional-hooks-dir", str(hooks)] if hooks else []
         built = work / "dist" / EXE_NAME
         env = None
     else:
@@ -157,13 +174,23 @@ def compile_fmu(compiler, resources, interface, work):
                f"--output-dir={work}", f"--output-filename={EXE_NAME}"]
         cmd += [f"--include-module={m}" for m in modules]
         cmd += [f"--include-data-files={src}={Path(dest, src.name).as_posix()}" for src, dest in data]
+        cmd += _nuitka_package_args(packages, direct)
+        cmd += [f"--include-module={p}" for p in imports]
+        cmd += ["--include-module=numpy.core.multiarray"] if "numpy" in packages else []
+        cmd += [f"--include-data-dir={src}={dest}" for src, dest in _plugin_dirs(direct)]
+        cmd += [f"--include-distribution-metadata={d}" for d in distributions]
         built = work / "main.dist"
         env = {**os.environ, "PYTHONPATH": os.pathsep.join(map(str, paths))}
     cmd.append(str(resources / "main.py"))
 
     result = subprocess.run(cmd, capture_output=True, text=True, cwd=work, env=env)
     if result.returncode != 0 or not built.is_dir():
-        raise InterfaceError(f"--compile {compiler} failed:\n{result.stdout[-4000:]}{result.stderr[-4000:]}")
+        # warnings (Nuitka writes hundreds about duplicate data files) would push the error out of the tail
+        lines = [line for line in (result.stdout + result.stderr).splitlines()
+                 if line.strip() and ":WARNING:" not in line and not line.startswith(("WARNING:", "INFO:"))]
+        why = (f"exit status {result.returncode}" if result.returncode != 0
+               else f"it exited normally, but {built} wasn't made")
+        raise InterfaceError(f"--compile {compiler} failed ({why}):\n" + "\n".join(lines)[-4000:])
 
     for item in resources.iterdir():
         if item.name == MODEL_DIR and interface.get("cwd"):
@@ -171,6 +198,26 @@ def compile_fmu(compiler, resources, interface, work):
         elif item.name not in KEEP_AFTER_COMPILE:
             shutil.rmtree(item) if item.is_dir() else item.unlink()
     shutil.move(str(built), str(resources / EXE_DIR))
+
+
+def _is_package(name):
+    """Whether the top-level import `name` is a package (a folder), not a single module (matplotlib's
+    pylab.py, an extension .pyd). find_spec doesn't import a top-level name. A module that sets
+    __path__ = [] (six, for six.moves) has no folder either."""
+    try:
+        spec = importlib.util.find_spec(name)
+    except (ImportError, ValueError):
+        return False
+    return spec is not None and bool(spec.submodule_search_locations)
+
+
+def _nuitka_package_args(packages, direct):
+    """Nuitka's options for collecting `packages` (data files) and `direct` (all submodules). Nuitka
+    refuses package options for a single module ("'pylab' is a module not a package"): a module has
+    no data files of its own, and is included as a module."""
+    args = [f"--include-package-data={p}" for p in packages if _is_package(p)]
+    args += [f"--include-package={p}" if _is_package(p) else f"--include-module={p}" for p in direct]
+    return args
 
 
 def _remove_code(folder):
@@ -197,7 +244,13 @@ def _modules(interface):
     refs += [td["enum"] for td in interface.get("type_definitions", {}).values() if td.get("enum")]
     refs += [c["call"] for c in interface.get("clocks", []) if c.get("call")]
     for table in ("constants", "call_constants"):
-        refs += [v["ref"] for v in interface.get(table, {}).values() if isinstance(v, dict) and "ref" in v]
+        for value in interface.get(table, {}).values():
+            if isinstance(value, dict) and "ref" in value:
+                refs.append(value["ref"])
+            elif isinstance(value, dict) and isinstance(value.get("call"), str):
+                # "module:fn(numpy.linspace(...))": the module, and the dotted names in the arguments
+                call = value["call"]
+                refs += [call.partition("(")[0], *_dotted_names(f"f({call.partition('(')[2]})")]
     for step in interface.get("setup", []):
         refs += [a["ref"] for a in [*step.get("args", []), *step.get("kwargs", {}).values()]
                  if isinstance(a, dict) and "ref" in a]
@@ -207,6 +260,135 @@ def _modules(interface):
         elif "." in ref:
             modules.add(ref.split(".")[0])
     return sorted(modules)
+
+
+NOT_COLLECTED = {"fmugen", "pyinstaller", "pyinstaller-hooks-contrib", "nuitka", "pip", "setuptools", "wheel"}
+
+
+def _packages(modules, requirements=()):
+    """Installed packages the frozen model needs, for the freezer to collect whole.
+
+    Returns (direct, packages, distributions, imports): `direct` are the import names of
+    `modules` (the entry's, setup's and constants' packages) and of the `requirements`, whose
+    submodules may be imported dynamically (by name, or by unpickling a model that was saved
+    with them); `packages` adds those of every distribution they depend on, whose data files
+    and binaries a freezer doesn't find by following imports; `distributions` are all those
+    distributions, for their metadata (version lookups, entry points); `imports` are the
+    packages the direct ones depend on (with their installed optional dependencies), which
+    they may import by name.
+    """
+    import importlib.metadata as md
+    by_top = md.packages_distributions()
+    tops_of = {}
+    for top, names in by_top.items():
+        for name in names:
+            tops_of.setdefault(_canonical(name), set()).add(top)
+    direct = {m.split(".")[0] for m in modules} - set(sys.stdlib_module_names)
+    direct = {top for top in direct if top in by_top}
+    queue = [_canonical(n) for top in sorted(direct) for n in by_top[top]]
+    required = [_canonical(re.match(r"[A-Za-z0-9._-]+", r).group()) for r in requirements if r.strip()]
+    direct |= {top for name in required for top in tops_of.get(name, ())
+               if top.isidentifier() and top not in sys.stdlib_module_names}
+    queue += required
+    # The model's own distributions: their dependencies, and their optional ones when installed
+    # here, are imported too, since libraries import them by name when needed (pybamm's anytree).
+    roots = set(queue)
+    seen, imported = set(), set()
+    while queue:
+        name = queue.pop()
+        if name in seen or name in NOT_COLLECTED:
+            continue
+        try:
+            dist = md.distribution(name)
+        except md.PackageNotFoundError:
+            continue
+        seen.add(name)
+        extras = (dist.metadata.get_all("Provides-Extra") or []) if name in roots else []
+        deps = [dep for req in dist.requires or [] for dep in [_dependency(req, extras)] if dep]
+        imported |= set(deps) if name in roots else set()
+        queue += deps
+    usable = lambda top: top.isidentifier() and top not in sys.stdlib_module_names
+    imports = {top for name in imported & seen for top in tops_of.get(name, ()) if usable(top)}
+    packages = {top for name in seen for top in tops_of.get(name, ()) if usable(top)}
+    return sorted(direct), sorted(packages | direct), sorted(seen), sorted(imports - direct)
+
+
+NEEDS_SOURCE = {"transformers"}   # libraries that read the source of code built on them (inspect.getsource)
+
+
+def _source_hooks(packages, hooks_dir):
+    """PyInstaller hooks that also ship the .py files of `packages` built on NEEDS_SOURCE (transformers'
+    docstring decorators read the source of the model classes they decorate). PyInstaller's own
+    hook does this for transformers itself. A package with a hook of its own is left alone.
+    Returns hooks_dir, or None if no package needs it."""
+    import importlib.metadata as md
+    by_top = md.packages_distributions()
+    existing = {p.name for d in _hook_dirs() for p in Path(d).glob("hook-*.py")}
+    names = []
+    for top in packages:
+        if f"hook-{top}.py" in existing or top in NEEDS_SOURCE:
+            continue
+        for dist in by_top.get(top, []):
+            try:
+                requires = md.distribution(dist).requires or []
+            except md.PackageNotFoundError:
+                continue
+            if any(_dependency(r) in NEEDS_SOURCE for r in requires):
+                names.append(top)
+                break
+    if not names:
+        return None
+    hooks_dir.mkdir(parents=True, exist_ok=True)
+    for top in names:
+        (hooks_dir / f"hook-{top}.py").write_text("module_collection_mode = 'pyz+py'\n")
+    return hooks_dir
+
+
+def _hook_dirs():
+    """PyInstaller's and pyinstaller-hooks-contrib's hook folders (empty if not installed)."""
+    dirs = []
+    for name in ("PyInstaller.hooks", "_pyinstaller_hooks_contrib.stdhooks"):
+        spec = importlib.util.find_spec(name)
+        dirs += list(spec.submodule_search_locations or []) if spec else []
+    return dirs
+
+
+def _plugin_dirs(packages):
+    """(folder, destination) for the folders of `packages` that hold .py files but aren't packages
+    (no __init__.py): code a library loads by path (pyromat's registry), so it ships as files."""
+    found = []
+    for name in packages:
+        spec = importlib.util.find_spec(name)
+        if spec is None or not spec.submodule_search_locations:
+            continue
+        for location in spec.submodule_search_locations:
+            root = Path(location)
+            for folder in sorted(p for p in root.rglob("*") if p.is_dir()):
+                if folder.name in ("__pycache__", "tests", "test", "doc", "docs") or (folder / "__init__.py").exists():
+                    continue
+                if any(folder.glob("*.py")) and all((parent / "__init__.py").exists()
+                                                    for parent in folder.parents if parent.is_relative_to(root)):
+                    found.append((folder, Path(name, folder.relative_to(root)).as_posix()))
+    return found
+
+
+def _canonical(name):
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def _dependency(requirement, extras=()):
+    """The distribution a Requires-Dist line needs here, or None (another platform, or an extra
+    not in `extras`). An optional dependency that isn't installed is skipped by the caller."""
+    try:
+        from packaging.requirements import Requirement
+    except ImportError:   # without packaging: extras only when asked, the rest always
+        if "extra" in requirement.partition(";")[2] and not extras:
+            return None
+        return _canonical(re.match(r"[A-Za-z0-9._-]+", requirement).group())
+    req = Requirement(requirement)
+    if req.marker and not any(req.marker.evaluate({"extra": e}) for e in ["", *extras]):
+        return None
+    return _canonical(req.name)
 
 
 def _model_data(resources, interface):

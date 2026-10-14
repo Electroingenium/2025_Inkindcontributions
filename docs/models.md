@@ -129,7 +129,7 @@ class Zone:
         self.heating_demand = ...
 ```
 
-For a class, an output reads the attribute with its own name by default (`from = "attr:<name>"`). Dotted paths such as `attr:results.t_air` also work.
+For a class, an output reads the attribute with its own name by default (`from = "attr:<name>"`). Dotted paths such as `attr:results.t_air` also work, with list indexes counted from the end too: `attr:history.-1` is the last element. A GEKKO model keeps its results in its variables (`self.X = m.Var(...)`, read as `X.value` after `m.solve()`). For these, `init --probe` writes `from = "attr:X.value.-1"`: the value at the end of the time horizon (`m.time`).
 
 ```toml
 [outputs]
@@ -506,23 +506,13 @@ When it is true after a step or a clock tick, the FMU returns `terminateSimulati
 
 ## What `fmugen init` infers
 
-```bash
-fmugen init {path/to/model.py[:Name] | package.module:Name} [--call METHOD] [--fmi {2,3}] [--start NAME=VALUE ...] [--setup CALL ...] [--kind function] [--create CLASSMETHOD] [--probe] [--convert NAME=module:function ...] [-o fmugen.toml | -o -] [--force]
-```
+Every `init` option is in [manual.md](manual.md#fmugen-init); [init-tutorial.md](init-tutorial.md) walks through a generated config.
 
 It imports the module, picks the entry, reads the signatures and **the source code**, and writes a commented config. **It does not call the model**: no object is built, no setup call or step is run. Models that need a device, a network or a licence can be configured anywhere. (Importing the module runs its top-level code, as any import does.)
 
-Reading the code is enough for most plain-Python models. On the published models in [tested-models.md](tested-models.md), it gives the same outputs as calling the model for all 11 scalar functions (pvlib, fluids, ht, chemicals, iapws, psychrolib) and for the RC building. What it can't know, the config says in comments: array sizes (FMI 3), results built at runtime, code without Python source (C extensions), unannotated properties, and whether the object can be pickled (`save_state`).
+Reading the code is enough for most plain-Python models. On the published models in [tested-models.md](tested-models.md), it gives the same outputs as calling the model for all 11 scalar functions (pvlib, fluids, ht, chemicals, iapws, psychrolib) and for the RC building. What it can't know, the config says in comments ([below](#not-inferred)).
 
 **`--probe`** also calls the model once with the start values (setup calls, construction, one step), and fills in exactly those. Use it for ML models, C extensions and anything with array results. The probe only works if the model accepts the start values: arguments without a default start at `0`, which many models reject (`Re=0`, `dim=0`, a time step of 0).
-
-| Option | Use |
-|---|---|
-| `--start NAME=VALUE` | A realistic start value (a Python literal; a list for an array), also used by `--probe`. Repeatable. |
-| `--setup CALL` | A [setup call](#libraries-that-need-setup-first), written to the config; with `--probe`, also run before the probe. Repeatable. |
-| `--kind function` | For [constructors that do the work](#constructors-that-do-the-work). |
-| `--probe` | Call the model once to find what the code doesn't show. |
-| `--convert NAME=module:function` | How an argument is passed in (`x=torch:tensor`, `x=numpy`, `x=pint`), when it isn't annotated. `pint` also needs a `unit` on the variable. |
 
 ```bash
 fmugen init fluids.friction:friction_factor --start Re=1e5 -o -
@@ -532,16 +522,16 @@ fmugen init fluids.friction:friction_factor --start Re=1e5 -o -
 fmugen init psychrolib:GetHumRatioFromRelHum --setup "psychrolib:SetUnitSystem(psychrolib.SI)" --start TDryBulb=25.0 --start RelHum=0.5 --start Pressure=101325.0 -o -
 ```
 
-A `--start` name that appears in both the constructor and the step method goes to the one without a default; on a tie, to the step method. Names that neither declares are passed through `**kwargs`, if one of them accepts it. For a constructor that only declares `(*args, **kwargs)`, such as `control.StateSpace`, they are passed by position instead (`to = "pos:N"`), in the order given. `ARG.FIELD` names go wherever `ARG` goes; `init` stops with an error if `ARG`'s class can't be told from its default or annotation, or has no such field.
+A `--start` name that appears in both the constructor and the step method goes to the one without a default; on a tie, to the step method. Names that neither declares are passed through `**kwargs`, if one of them accepts it. For a constructor that only declares `(*args, **kwargs)`, such as `control.StateSpace`, they are passed by position instead (`to = "pos:N"`), in the order given. When the step method also takes only `*args` (SWIG classes such as `openturns.Normal(mu, sigma).computePDF(x)`), the signatures can't tell which values go where: with `--probe`, the first values in `--start` order go to the constructor and the rest to the method, and `init` keeps the first split for which both calls work, trying the constructor with as many values as possible first. Without `--probe`, all of them go to the constructor, with a warning. If the constructor and the step method both have an argument `NAME` (radioactivedecay's `Inventory(contents, units).decay(decay_time, units)`), the step method's variable is named `<method>_NAME` (`decay_units`), bound with `to = "arg:NAME"`. To give both a value, pass the step method's by that name: `--start decay_units=…` goes to the step method, and then `--start units=…` to the constructor. With `--fmi 3`, a variable for an argument or result named `time`, which FMI 3 reserves, is named `model_time` and bound with `to` / `from`. A signature default that is a descriptor with a `default` (astropy's `Parameter(default=3.04, ...)`) is read as that default. `ARG.FIELD` names go wherever `ARG` goes; `init` stops with an error if `ARG`'s class can't be told from its default or annotation, or has no such field.
 
 | | Inferred from |
 |---|---|
 | **Entry** | The name after `:`, else the only public function or class defined in the module |
 | **Inputs (functions) / parameters (classes)** | Arguments with a `bool`/`int`/`float`/`str` default, or with no default |
 | **Start values and types** | The default value. With no default: the annotation, otherwise Real `0.0` |
-| **Time arguments** | Arguments named `dt`, `step_size`, `h` (step size) or `t`, `time` (time) |
+| **Time arguments** | Arguments named `dt`, `h`, `step_size`, `stepSize`, `time_step` (step size); `t`, `time`, `currentTime`, `t_now` (time at the start of the step); `until`, `end_time`, `t_end`, `t_next` (time at its end, e.g. simpy's `Environment.run(until)`). Case and underscores don't matter. A `--start` for one of them makes it a fixed input instead, with a hint |
 | **Date-time arguments** | Annotated `datetime`/`date`, or named `when`, `date`, `dateandtime`, …: [`[time]` with an `epoch`](config.md#time) |
-| **Outputs from the return value** | The code: dict keys (also a dict built in a variable), tuple positions, a single value (`y`), NamedTuple/dataclass fields, or the return annotation. With `--probe`: the actual result |
+| **Outputs from the return value** | The code: dict keys (also a dict built in a variable), tuple positions, a single value (`y`), NamedTuple/dataclass fields, or the return annotation (a SQLAlchemy model: its typed columns; nullable ones commented out). With `--probe`: the actual result |
 | **Outputs and locals of classes** | Public attributes the step method assigns, following the methods it calls on `self` (also assigned in `__init__`: local; else output), and annotated properties. With `--probe`: also what the step actually created or changed, and every readable numeric property |
 | **States** | An input `x_prev` whose next value is returned or stored as `x_next` or `x` |
 | **Sources** | Local modules under the config's folder that the model imported |
@@ -557,6 +547,16 @@ Check afterwards:
 - **Units and descriptions:** add them; they can't be inferred.
 - **Outputs and locals:** remove the ones you don't need. Types come from annotations and what the code shows (`True`, comparisons, strings, arithmetic, the arguments or attributes returned); everything else is assumed Real, and `init` names those outputs in a warning. If none is found, `init` warns that there are no outputs, and `build` notes it too. Uncomment and complete the commented lines (`dimensions = [...]`, properties, `save_state`), or rerun with `--probe`.
 - **Tunable parameters:** `init` only suggests them in comments (see [above](#a-class-with-a-step-method)).
+
+<a id="not-inferred"></a>Not inferred from the code (use `--probe`, or write them by hand; the config says so in comments):
+
+- **Array sizes.** With `--fmi 3`, array results appear as commented lines with `dimensions = [...]` to fill in.
+- **Results built at runtime** (filled in loops, set by helper functions, returned from library calls) and **code without Python source** (C extensions, compiled models): the `[outputs]` section says the outputs couldn't be read.
+- **Unannotated properties**: commented lines, to uncomment if they are numbers (reading a property runs code).
+- **`save_state`**: a commented `save_state = false` line to uncomment if the model holds a device, file, socket or ONNX session.
+- **Factories whose class the code doesn't show**: the step method's inputs and outputs. The class is found from the return annotation, or from return statements that call a class, or a function that does (tellurium's `loada` → `loadAntimonyModel` → `roadrunner.RoadRunner(...)`); otherwise it is only known by calling the factory.
+
+Never inferred: units, descriptions, tunable variability (suggested in comments), states with other names, clocks, events, setter-method inputs (`call:`). With `--probe`, if the probe call fails, `init` still writes the config, with what the code shows, and says why in a comment.
 
 `fmugen build model.py` runs the same inference in memory. That's handy for a quick try; for anything you keep, write the config.
 

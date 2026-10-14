@@ -71,12 +71,34 @@ def test_rendered_config_round_trips(tmp_path):
         init(tmp_path / "tank.py")
 
 
+def test_config_of_a_model_file_must_be_next_to_it_or_above(tmp_path):
+    model = EXAMPLES / "psychrometry" / "psychrometry.py"
+    with pytest.raises(InterfaceError, match="must be in the folder of psychrometry.py or a folder above"):
+        init(model, tmp_path / "fmugen.toml")
+    assert not (tmp_path / "fmugen.toml").exists()
+
+
 def test_ambiguous_module_needs_a_name(tmp_path):
     (tmp_path / "two.py").write_text("def a(x=1.0):\n    return x\n\ndef b(x=1.0):\n    return x\n")
     with pytest.raises(InterfaceError, match="cannot tell which"):
         infer(tmp_path / "two.py")
     data, _ = infer(f"{tmp_path / 'two.py'}:b")
     assert data["model"]["entry"] == "two.py:b"
+
+
+def test_model_that_fails_when_imported(tmp_path):
+    # a script that solves at module level: its error, and where, not a traceback through fmugen
+    (tmp_path / "helper.py").write_text("def solve():\n    raise FileNotFoundError('options.json')\n")
+    (tmp_path / "script.py").write_text("import helper\n\ndef f(x=1.0):\n    return x\n\nhelper.solve()\n")
+    message = (r"importing .*script\.py failed: FileNotFoundError: options\.json "
+               r"\(at script\.py:6, in helper\.py:2\); importing a module runs its top-level code")
+    with pytest.raises(InterfaceError, match=message):
+        infer(tmp_path / "script.py", probe=False)
+    (tmp_path / "fmugen.toml").write_text('[model]\nentry = "script.py:f"\nsources = ["helper.py"]\n\n'
+                                         '[outputs]\ny = { from = "return" }\n')
+    from fmugen.__main__ import build
+    with pytest.raises(InterfaceError, match=r"importing script\.py:f failed: FileNotFoundError: options\.json"):
+        build(tmp_path, tmp_path / "script.fmu")
 
 
 def test_unknown_config_keys_are_rejected(tmp_path):
@@ -208,6 +230,65 @@ def test_pint_outputs_get_their_unit(tmp_path):
     data, _ = infer(tmp_path / "q.py")
     assert data["outputs"]["v"]["unit"] == "m/s"
     assert "unit" not in data["outputs"]["n"]
+
+
+def test_gekko_results_kept_on_the_object_are_outputs(tmp_path):
+    pytest.importorskip("gekko")
+    (tmp_path / "tank.py").write_text(textwrap.dedent("""
+        import numpy as np
+        from gekko import GEKKO
+
+        class Tank:
+            def __init__(self, k=0.5):
+                self.m = GEKKO(remote=False)
+                self.m.time = np.linspace(0, 1, 11)
+                self.k = self.m.Const(k)
+                self.inflow = self.m.Param(1.0)
+                self.h = self.m.Var(1.0)
+                self.out = self.m.Intermediate(self.k * self.h)
+                self.levels = {"main": self.h}
+                self.m.Equation(self.h.dt() == self.inflow - self.out)
+                self.m.options.IMODE = 4
+
+            def solve(self):
+                self.m.solve(disp=False)
+    """))
+    data, comments = infer(f"{tmp_path / 'tank.py'}:Tank", call="solve")
+    # Var and Intermediate are results; Const and Param are not; a dict of them is read by key
+    assert data["outputs"] == {"h": {"from": "attr:h.value.-1"}, "out": {"from": "attr:out.value.-1"},
+                               "levels.main": {"from": "attr:levels.main.value.-1"}}
+    assert "end of the time horizon" in comments[("outputs", "h")]
+
+
+def test_a_library_base_class_state_is_not_an_output(tmp_path):
+    # like `class Plant(GEKKO)`: what the library's own code sets on self (GHFilter.update's x, dx, y)
+    # is its state; only what the model's code sets is a result. A base in the user's files still counts.
+    pytest.importorskip("filterpy")
+    (tmp_path / "base.py").write_text(textwrap.dedent("""
+        class Smoother:
+            def smooth(self, z):
+                self.smoothed = 0.5 * z
+    """))
+    (tmp_path / "tracker.py").write_text(textwrap.dedent("""
+        from filterpy.gh import GHFilter
+        from base import Smoother
+
+        class Tracker(GHFilter):
+            def track(self, z=1.0):
+                self.update(z)
+                self.estimate = float(self.x)
+
+        class Local(Smoother):
+            def step(self, z=1.0):
+                self.smooth(z)
+    """))
+    starts = {"x": 0.0, "dx": 0.0, "dt": 1.0, "g": 0.5, "h": 0.1}
+    for probe in (False, True):
+        data, _ = infer(f"{tmp_path / 'tracker.py'}:Tracker", call="track", starts=starts, probe=probe)
+        assert list(data["outputs"]) == ["estimate"], probe
+        assert not set(data.get("locals", {})) & {"x", "dx", "y", "x_prediction", "dx_prediction"}
+        data, _ = infer(f"{tmp_path / 'tracker.py'}:Local", probe=probe)
+        assert list(data["outputs"]) == ["smoothed"], probe
 
 
 NESTED = """
@@ -342,3 +423,189 @@ def test_isolated_imports_forgets_namespace_subpackages(tmp_path):
         import pkg.ns.mod  # noqa: F401
     assert not {"pkg", "pkg.ns", "pkg.ns.mod"} & set(sys.modules)
     assert str(tmp_path) not in sys.path
+
+
+def test_names_build_would_reject_are_renamed(tmp_path):
+    (tmp_path / "names.py").write_text(textwrap.dedent('''
+        import dataclasses
+
+        def source(time, alpha=1.0):   # e.g. pygfunction's finite_line_source(time, alpha, ...)
+            return alpha * time
+
+        class Inventory:   # e.g. radioactivedecay's Inventory(contents, units).decay(decay_time, units)
+            def __init__(self, amount=1.0, units="Bq"):
+                self.amount, self.units = amount, units
+
+            def decay(self, decay_time, units="s"):
+                return self.amount / (1.0 + decay_time)
+
+        @dataclasses.dataclass(frozen=True)
+        class Parameter:   # a descriptor used as a signature default, like astropy.cosmology's
+            default: float = 0.0
+            doc: str = ""
+
+            def __get__(self, obj, owner=None):
+                return self
+
+        class Cosmology:
+            def __init__(self, H0, Neff=Parameter(default=3.04, doc="neutrino species")):
+                self.H0, self.Neff = H0, Neff
+
+            def age(self, z):
+                return 1.0 / (self.H0 * (1.0 + z))
+    '''))
+    # FMI 3 reserves `time`: the argument becomes model_time, bound to it
+    data, _ = infer(f"{tmp_path / 'names.py'}:source", starts={"time": 10.0}, fmi_version=3)
+    assert data["inputs"]["model_time"] == {"start": 10.0, "to": "arg:time"} and "time" not in data["inputs"]
+    # the step method's units, beside the constructor's
+    data, _ = infer(f"{tmp_path / 'names.py'}:Inventory", call="decay", starts={"decay_time": 1.0, "units": "y"})
+    assert data["parameters"]["units"] == {"start": "Bq"}
+    assert data["inputs"]["decay_units"] == {"start": "y", "to": "arg:units"}
+    # both copies: the method's by its variable name, then the plain name is the constructor's
+    data, _ = infer(f"{tmp_path / 'names.py'}:Inventory", call="decay",
+                    starts={"decay_time": 1.0, "units": "Ci", "decay_units": "y"})
+    assert data["parameters"]["units"] == {"start": "Ci"}
+    assert data["inputs"]["decay_units"] == {"start": "y", "to": "arg:units"}
+    # a descriptor default stands for its `default`; it isn't split into fields
+    data, _ = infer(f"{tmp_path / 'names.py'}:Cosmology", call="age", starts={"H0": 70.0, "z": 1.0})
+    assert data["parameters"] == {"H0": {"start": 70.0}, "Neff": {"start": 3.04}}
+    for target, kwargs in ((f"{tmp_path / 'names.py'}:source", {"starts": {"time": 10.0}, "fmi_version": 3}),
+                           (f"{tmp_path / 'names.py'}:Inventory", {"call": "decay",
+                                                                   "starts": {"decay_time": 1.0, "units": "y"}})):
+        output = tmp_path / "fmugen.toml"
+        with isolated_imports():
+            init(target, output=output, force=True, probe=True, **kwargs)
+        load_config(output)   # and build accepts it:
+        from fmugen.__main__ import build
+        build(output, tmp_path / "out", output_format="folder")
+
+
+def test_entry_keeps_the_name_it_was_given(tmp_path):
+    # PyCO2SYS:sys is engine.nd.CO2SYS, while PyCO2SYS:CO2SYS is an older, different function;
+    # rdkit's Descriptors.MolWt is a lambda
+    (tmp_path / "carbonate_engine.py").write_text("def CO2SYS(par1=1.0):\n    return {'new': par1}\n")
+    (tmp_path / "carbonate.py").write_text(textwrap.dedent('''
+        from carbonate_engine import CO2SYS as sys
+
+        def CO2SYS(par1=1.0, old_option=0):
+            return {"old": par1}
+
+        MolWt = lambda *x, **y: 46.069
+    '''))
+    data, _ = infer(f"{tmp_path / 'carbonate.py'}:sys")
+    assert data["model"]["entry"] == "carbonate.py:sys" and "new" in data["outputs"]
+    output = tmp_path / "fmugen.toml"
+    with isolated_imports():
+        init(f"{tmp_path / 'carbonate.py'}:MolWt", output=output, starts={"mol": 1.0}, probe=True)
+    assert load_config(output).model["entry"] == "carbonate.py:MolWt"
+
+
+def test_results_that_refuse_float_are_read_through_their_properties(tmp_path):
+    (tmp_path / "errors.py").write_text(textwrap.dedent('''
+        class Affine:   # like uncertainties' AffineScalarFunc: __float__ raises
+            __slots__ = ("_value", "_sigma")
+
+            def __init__(self, value, sigma):
+                self._value, self._sigma = value, sigma
+
+            def __float__(self):
+                raise TypeError("can't convert an affine function to float; use x.nominal_value")
+
+            @property
+            def nominal_value(self):
+                return self._value
+
+            n = nominal_value
+
+            @property
+            def std_dev(self):
+                return self._sigma
+
+        def scaled(x=1.0, sigma=0.1):
+            return Affine(2 * x, 2 * sigma)
+    '''))
+    data, _ = infer(f"{tmp_path / 'errors.py'}:scaled")
+    assert data["outputs"] == {"nominal_value": {}, "std_dev": {}}   # from = "return:<name>", the default
+
+
+def test_time_arguments_are_recognized_by_common_names(tmp_path):
+    (tmp_path / "clocks.py").write_text(textwrap.dedent('''
+        class Environment:   # like simpy's Environment.run(until)
+            def __init__(self):
+                self.now = 0.0
+
+            def run(self, until=None):
+                if until is None:
+                    return None
+                if until <= self.now:
+                    raise ValueError(f"until ({until}) must be greater than the current simulation time")
+                self.now = until
+                return self.now
+
+        class Solver:   # like tellurium's oneStep(currentTime, stepSize)
+            def oneStep(self, currentTime, stepSize):
+                return currentTime + stepSize
+    '''))
+    data, comments = infer(f"{tmp_path / 'clocks.py'}:Environment", call="run")
+    assert data["time"] == {"until": "end_time"} and data["outputs"]["y"] == {"from": "return"}
+    data, _ = infer(f"{tmp_path / 'clocks.py'}:Environment", call="run", probe=False)
+    assert "can also return None" in render_toml(data, _)
+    data, _ = infer(f"{tmp_path / 'clocks.py'}:Solver", call="oneStep")
+    assert data["time"] == {"currentTime": "time", "stepSize": "step_size"}
+    # given by --start, it is a fixed value, with a hint
+    data, comments = infer(f"{tmp_path / 'clocks.py'}:Environment", call="run", starts={"until": 5.0})
+    assert data["inputs"]["until"] == {"start": 5.0}
+    assert '[time] until = "end_time"' in comments[("inputs", "until")]
+
+
+def test_requirements_are_the_installed_distributions_the_model_uses(tmp_path):
+    import importlib.metadata
+    (tmp_path / "helper.py").write_text("SCALE = 2.0\n")
+    (tmp_path / "uses.py").write_text(textwrap.dedent('''
+        import json
+        import pytest   # a third-party package, as numpy would be
+        from helper import SCALE
+
+        def f(x=1.0):
+            return {"y": SCALE * x}
+    '''))
+    data, comments = infer(tmp_path / "uses.py", probe=False)
+    assert data["model"]["requirements"] == [f"pytest=={importlib.metadata.version('pytest')}"]
+    assert "requirements = [" in render_toml(data, comments)
+
+
+def test_result_keys_that_are_not_names_get_valid_ones(tmp_path):
+    (tmp_path / "decay.py").write_text(textwrap.dedent('''
+        def decay(t=1.0):   # like radioactivedecay's Inventory.contents
+            return {"contents": {"C-14": 1.0 - t / 10, "N-14": t / 10}, "2x": 2 * t, "class": 0.5}
+    '''))
+    data, _ = infer(tmp_path / "decay.py")
+    assert data["outputs"] == {"contents.C_14": {"from": "return:contents.C-14"},
+                               "contents.N_14": {"from": "return:contents.N-14"},
+                               "_2x": {"from": "return:2x"}, "_class": {"from": "return:class"}}
+
+
+def test_outputs_are_read_from_the_object_the_step_returns(tmp_path):
+    (tmp_path / "fluid.py").write_text(textwrap.dedent('''
+        class Fluid:   # like pyfluids' Fluid(...).with_state(...): a new object, read through properties
+            def __init__(self, name="Water"):
+                self.__name, self.__temperature = name, None
+
+            def with_state(self, temperature=20.0):
+                fluid = Fluid(self.__name)
+                fluid.__temperature = temperature
+                return fluid
+
+            @property
+            def temperature(self) -> float:
+                if self.__temperature is None:
+                    raise ValueError("Invalid or not defined state!")
+                return self.__temperature
+
+            @property
+            def density(self) -> float:
+                return 1000.0 - 0.2 * self.temperature
+    '''))
+    data, _ = infer(f"{tmp_path / 'fluid.py'}:Fluid", call="with_state", starts={"temperature": 20.0})
+    assert data["inputs"] == {"temperature": {"start": 20.0}}   # echoed back: not an output too
+    assert data["outputs"] == {"density": {"from": "return:density"}}   # not the original object's raising ones

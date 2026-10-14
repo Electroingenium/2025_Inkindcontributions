@@ -9,6 +9,7 @@ The user's code is never modified. The FMI-version-specific adapters translate
 FMI calls into the methods of `Engine`.
 """
 import ast
+import builtins
 import contextlib
 import copy
 import dataclasses
@@ -81,6 +82,7 @@ class Engine:
         self.experiment = self.interface.get("experiment", {})
 
         self.logging_on = True
+        _quiet_debug_logging()
         hf_cache = self.resources_dir / "hf_cache"
         if hf_cache.is_dir():   # Hugging Face models bundled by fmugen build: load them from the FMU, offline
             os.environ.update(HF_HUB_CACHE=str(hf_cache), HF_HUB_OFFLINE="1", TRANSFORMERS_OFFLINE="1")
@@ -92,9 +94,9 @@ class Engine:
                 name: resolve_reference(td["enum"])
                 for name, td in self.interface.get("type_definitions", {}).items() if td.get("enum")
             }
-            self.constants = {k: resolve_constant(v) for k, v in self.interface.get("constants", {}).items()}
-            self.call_constants = {k: resolve_constant(v)
-                                   for k, v in self.interface.get("call_constants", {}).items()}
+            # constants ({ call = ... } may download or compute) are resolved when the FMU initializes,
+            # where a failure is reported to the importer with its traceback (resolve_constants)
+            self.constants = self.call_constants = None
             self.converters = {v["name"]: converter(v) for v in self.variables if v.get("convert")}
             # [model] globals: module-level state, put back to its import-time value on reset
             self.globals = [split_global(ref) for ref in self.interface.get("globals", [])]
@@ -140,9 +142,10 @@ class Engine:
 
     def exit_initialization_mode(self, next_mode="step"):
         def initialize():
+            self._resolve_constants()
             self._run_setup(after_construction=False)
             if self.is_class:
-                kwargs = dict(self.constants)
+                kwargs = keyword_constants(self.constants)
                 kwargs.update(self._bound("init"))
                 create = self.interface["entry"].get("create")
                 self.obj = (getattr(self.entry, create) if create else self.entry)(
@@ -607,6 +610,7 @@ class Engine:
 
     def _from_python(self, var, value):
         if var.get("dimensions"):
+            value = plain_number(value, var.get("unit"))   # an array quantity (pint, astropy)
             flat = flatten(value.tolist() if hasattr(value, "tolist") else value)
             n = self.size(var)
             if len(flat) != n:
@@ -621,10 +625,48 @@ class Engine:
                 return list(enum).index(value) + 1
         if value is None:
             raise TypeError(f"{var['name']} is None")
+        value = self._single_value(var, value)
         if isinstance(value, str) and var["type"] not in ("String", "Boolean", "Binary") and not _is_number(value):
             raise TypeError(f"{var['name']} is a string ({value[:80]!r}), not a {var['type']}: "
                             f"set type = \"String\" for it in the config")
         return coerce(var["type"], plain_number(value, var.get("unit")))
+
+    @staticmethod
+    def _single_value(var, value):
+        """The value of a scalar variable: a one-element array, list or tuple gives its element;
+        a longer one is an error saying the variable needs dimensions."""
+        if isinstance(value, (str, bytes, Mapping)):
+            return value
+        shape = getattr(value, "shape", None)
+        if shape is not None and hasattr(value, "tolist") and not isinstance(shape, Mapping):
+            shape = tuple(int(n) for n in shape)
+            if shape == () or math.prod(shape) == 1:
+                return flatten(value.tolist())[0] if shape else value
+        elif isinstance(value, (list, tuple)):
+            shape = (len(value),)
+            if len(value) == 1:
+                return value[0]
+        else:
+            return value
+        kind = "a tuple" if isinstance(value, tuple) else "an array" if hasattr(value, "tolist") else "a list"
+        raise TypeError(f"{var['name']} is {kind} of shape {list(shape)}, not a single value: give it "
+                        f"dimensions = {list(shape)} (FMI 3) or read one element (from = \"...:0\"); "
+                        "fmugen init --probe finds them")
+
+    def _resolve_constants(self):
+        """[model] constants and call_constants as Python values, computed once."""
+        if self.constants is not None:
+            return
+        resolved = {}
+        for table in ("constants", "call_constants"):
+            resolved[table] = {}
+            for name, value in self.interface.get(table, {}).items():
+                try:
+                    resolved[table][name] = resolve_constant(value)
+                except Exception as e:
+                    shown = value["call"] if isinstance(value, dict) and "call" in value else value
+                    raise RuntimeError(f"[model] {table}.{name} = {shown!r} failed: {e!r}") from e
+        self.constants, self.call_constants = resolved["constants"], resolved["call_constants"]
 
     def _run_setup(self, after_construction):
         """[model] setup: "module:function" calls run before construction, method names after it."""
@@ -639,12 +681,15 @@ class Engine:
     def _positional(self, clock=None, kind="pos"):
         """Values of variables bound to positional arguments (to = "pos:N"), in order: of the call
         ("pos"), or of the constructor ("initpos", a class's parameters)."""
-        bound = sorted(
-            (int(v["to"]["name"]), self._to_python(v, self.values[v["name"]]))
+        bound = {
+            int(v["to"]["name"]): self._to_python(v, self.values[v["name"]])
             for v in self.variables
             if v.get("to", {}).get("kind") == kind and _clock_of(v) == clock
-        )
-        return [value for _, value in bound]
+        }
+        if clock is None:   # constants named "0", "1", ...: positions of *args
+            constants = self.call_constants if self.is_class and kind == "pos" else self.constants
+            bound.update((int(k), value) for k, value in constants.items() if k.isdigit())
+        return [bound[i] for i in sorted(bound)]
 
     def _bound_target(self, kind, clock):
         """The function whose arguments `kind` ("init" or "arg") variables are bound to."""
@@ -681,7 +726,7 @@ class Engine:
 
     def _call(self, time, step_size, clock=None):
         if clock is None:
-            kwargs = dict(self.call_constants if self.is_class else self.constants)
+            kwargs = keyword_constants(self.call_constants if self.is_class else self.constants)
             kwargs.update(self._bound("arg"))
         else:
             kwargs = self._bound("arg", clock=clock)
@@ -1171,6 +1216,11 @@ def build_object(fn, name, fields):
     return cls(**fields)
 
 
+def keyword_constants(constants):
+    """The constants passed by keyword: all but those named "0", "1", ... (positions of *args)."""
+    return {k: v for k, v in constants.items() if not k.isdigit()}
+
+
 def resolve_constant(value):
     if isinstance(value, dict) and len(value) == 1:
         if "python" in value:
@@ -1196,17 +1246,42 @@ def parse_call_text(text):
 
 
 def call_reference(text):
-    """Call 'module:function(args)' and return the result. Arguments are Python literals or
-    dotted names of importable objects, e.g. load_from_hub(repo_id="sb3/x", filename="m.zip")."""
+    """Call 'module:function(args)' and return the result, e.g. load_from_hub(repo_id="sb3/x",
+    filename="m.zip"). Without parentheses, 'module:attr.path' is the object itself, not called
+    (a function to pass, an enum member). Arguments: see call_argument."""
+    target, paren, _ = text.partition("(")
+    if not paren:
+        return resolve_reference(target.strip())
     target, args, kwargs = parse_call_text(text)
+    return resolve_reference(target)(*[call_argument(a) for a in args],
+                                     **{k: call_argument(v) for k, v in kwargs.items()})
 
-    def value(node):
-        try:
-            return ast.literal_eval(node)
-        except ValueError:
-            return resolve_reference(ast.unparse(node))
 
-    return resolve_reference(target)(*[value(a) for a in args], **{k: value(v) for k, v in kwargs.items()})
+def call_argument(node):
+    """The value of an argument in a call constant: a Python literal; a dotted name of an importable
+    object or a builtin (numpy.sin, float); a call of one (numpy.linspace(0, 1, 5), float("inf")); or
+    a list, tuple, set or dict of these."""
+    with contextlib.suppress(ValueError, SyntaxError, TypeError):
+        return ast.literal_eval(node)
+    if isinstance(node, ast.Name) and hasattr(builtins, node.id):
+        return getattr(builtins, node.id)
+    if isinstance(node, (ast.Name, ast.Attribute)):
+        return resolve_reference(ast.unparse(node))
+    if isinstance(node, ast.Call) and isinstance(node.func, (ast.Name, ast.Attribute)):
+        if any(k.arg is None for k in node.keywords) or any(isinstance(a, ast.Starred) for a in node.args):
+            raise ValueError(f"{ast.unparse(node)!r}: * and ** arguments are not supported")
+        return call_argument(node.func)(*[call_argument(a) for a in node.args],
+                                        **{k.arg: call_argument(k.value) for k in node.keywords})
+    if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+        items = [call_argument(e) for e in node.elts]
+        return {ast.List: list, ast.Tuple: tuple, ast.Set: set}[type(node)](items)
+    if isinstance(node, ast.Dict) and None not in node.keys:
+        return {call_argument(k): call_argument(v) for k, v in zip(node.keys, node.values)}
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.USub, ast.UAdd)):
+        value = call_argument(node.operand)
+        return -value if isinstance(node.op, ast.USub) else value
+    raise ValueError(f"{ast.unparse(node)!r}: arguments must be literals, names of importable objects, "
+                     "calls of those, or lists/tuples/dicts of these")
 
 
 def converter(var):
@@ -1223,22 +1298,32 @@ def _labelled(obj):
 
 
 def plain_number(value, unit=None):
-    """A pint quantity (anything with .magnitude and .units) as a number, in `unit` when given;
+    """A pint quantity (anything with .magnitude and .units) or an astropy one as a number, in `unit`
+    when given;
     a one-value pandas/xarray column as its value."""
     if type(value).__module__.split(".")[0] in ("pandas", "xarray") and getattr(value, "size", None) == 1:
         value = value.item()
     if hasattr(value, "magnitude") and hasattr(value, "units"):
         return value.m_as(unit) if unit and hasattr(value, "m_as") else value.magnitude
+    if hasattr(value, "unit") and hasattr(value, "to_value"):   # an astropy Quantity
+        try:
+            return value.to_value(unit) if unit else value.value
+        except Exception:   # a unit astropy doesn't know: the value in its own unit
+            return value.value
     return value
 
 
 def get_path(obj, path):
-    """Follow a dotted path through attributes, mapping keys and sequence indexes: "state.T", "rewards.speed", "4.x"."""
+    """Follow a dotted path through attributes, mapping keys and sequence indexes: "state.T", "rewards.speed", "4.x",
+    "X.value.-1" (the last element)."""
     for part in path.split("."):
         if isinstance(obj, Mapping) and (part in obj or not hasattr(obj, part)) or _labelled(obj) and part in obj:   # "options.update": the method
             obj = obj[part]
-        elif part.isdigit() and isinstance(obj, (tuple, list)):
-            obj = obj[int(part)]
+        elif part.lstrip("-").isdigit() and part.count("-") <= 1 and isinstance(obj, (tuple, list)):
+            try:
+                obj = obj[int(part)]
+            except TypeError as e:   # a list-like wrapping a single value (a GEKKO variable before its first solve)
+                raise IndexError(f"{part}: {e}") from e
         else:
             obj = getattr(obj, part)
     return obj
@@ -1311,6 +1396,19 @@ def coerce(fmi_type, value):
             return bytes.fromhex(value)
         return bytes(value)
     return str(value)
+
+
+def _quiet_debug_logging():
+    """Inside UniFMU's backend, raise the root logger from DEBUG to INFO.
+
+    The backend's main.py calls logging.basicConfig(level=logging.DEBUG), so every library logs
+    its debug records to the console: numba writes about 3 MB while compiling antropy's functions.
+    UniFMU 0.14 crashes (its dispatcher panics) when the backend writes that much, and the importer
+    then waits forever. INFO and above still reach the console and the importer's log.
+    """
+    root = logging.getLogger()
+    if "UNIFMU_DISPATCHER_ENDPOINT" in os.environ and root.level < logging.INFO:
+        root.setLevel(logging.INFO)
 
 
 def _capture_output(enabled):

@@ -135,6 +135,27 @@ def test_exceptions_become_errors_with_traceback(tmp_path, make_fmu, adapter):
     assert "ZeroDivisionError" in fmu.logs[-1][2] and "fragile.py" in fmu.logs[-1][2]
 
 
+def test_failing_computed_constant_is_an_initialization_error(tmp_path, make_fmu, adapter):
+    write(tmp_path, "deriv.py", """
+        def derivative(fun, x=0.5):
+            return fun(x)
+    """, """
+        [model]
+        entry = "deriv.py:derivative"
+        [model.constants]
+        fun = { call = "math:nosuch" }
+        [inputs]
+        x = { start = 0.5 }
+        [outputs]
+        y = { from = "return" }
+    """)
+    fmu = adapter(make_fmu(tmp_path / "fmugen.toml"))   # instantiating doesn't compute constants
+    assert fmu.fmi2SetupExperiment(0.0, None, None) == OK and fmu.fmi2EnterInitializationMode() == OK
+    assert fmu.fmi2ExitInitializationMode() == ERROR
+    message = fmu.logs[-1][2]
+    assert "constants.fun = 'math:nosuch' failed" in message and "AttributeError" in message
+
+
 def test_enumeration(tmp_path, make_fmu, adapter):
     write(tmp_path, "valve.py", '''
         import enum
@@ -516,6 +537,22 @@ def test_dotted_path_reaches_methods_of_a_dict():
     assert get_path({"keys": 5}, "keys") == 5   # a key wins over a method of the same name
 
 
+def test_dotted_path_reads_the_last_element():
+    from fmugen.templates.fmugen_runtime import get_path
+
+    class Wrapper(list):   # like GEKKO's GK_Value: a list-like around a list, or a single value before a solve
+        def __init__(self, value):
+            self.inner = value
+
+        def __getitem__(self, i):
+            return self.inner[i]
+
+    assert get_path({"x": [1.0, 2.0, 3.0]}, "x.-1") == 3.0 and get_path({"x": (1, 2)}, "x.-2") == 1
+    assert get_path({"x": Wrapper([4.0, 5.0])}, "x.-1") == 5.0
+    with pytest.raises(IndexError):   # read as missing, as for an attribute not set yet
+        get_path({"x": Wrapper(4.0)}, "x.-1")
+
+
 COUNTER = """
 CALLS = 0
 SCALE = 2.0
@@ -591,6 +628,47 @@ def test_star_args_constructor_gets_positional_parameters(tmp_path, make_fmu, ad
     fmu.initialize()
     assert fmu.fmi2DoStep(0.0, 1.0, False) == OK
     assert fmu.get("y") == 3.5
+
+
+def test_star_args_constructor_and_method_split_by_the_probe(tmp_path, make_fmu, adapter):
+    write(tmp_path, "normal.py", """
+        import math
+
+        class Normal:   # like SWIG's openturns.Normal(mu, sigma).computePDF(x)
+            def __init__(self, *args):
+                self.mu, self.sigma = args
+
+            def pdf(self, *args):
+                (x,) = args
+                return math.exp(-((x - self.mu) / self.sigma) ** 2 / 2) / (self.sigma * math.sqrt(2 * math.pi))
+    """)
+    starts = {"mu": 0.0, "sigma": 1.0, "x": 0.5}
+    output, data = init(f"{tmp_path / 'normal.py'}:Normal", call="pdf", starts=starts, probe=True)
+    assert data["parameters"] == {"mu": {"start": 0.0, "to": "pos:0"}, "sigma": {"start": 1.0, "to": "pos:1"}}
+    assert data["inputs"] == {"x": {"start": 0.5, "to": "pos:0"}}
+    fmu = adapter(make_fmu(output))
+    fmu.initialize()
+    assert fmu.fmi2DoStep(0.0, 1.0, False) == OK
+    assert fmu.get("y") == pytest.approx(0.3520653267642995)
+
+
+def test_computed_constant_for_star_args(tmp_path, make_fmu, adapter):
+    write(tmp_path, "affine.py", """
+        class Affine:
+            def __init__(self, *args):   # e.g. nashpy.Game(A)
+                self.a, self.b = args
+
+            def step(self, x=1.0):
+                return self.a * x + self.b
+    """)
+    output, data = init(tmp_path / "affine.py", starts={"a": {"call": "math:sqrt(4.0)"}, "b": 0.5})
+    assert data["model"]["constants"] == {"0": {"call": "math:sqrt(4.0)"}}
+    assert data["parameters"] == {"b": {"start": 0.5, "to": "pos:1"}}
+    assert '0 = { call = "math:sqrt(4.0)" }' in output.read_text()
+    fmu = adapter(make_fmu(output))
+    fmu.initialize()
+    assert fmu.fmi2DoStep(0.0, 1.0, False) == OK
+    assert fmu.get("y") == 2.5
 
 
 def test_namedtuple_argument_fields(tmp_path, make_fmu, adapter):
@@ -719,6 +797,14 @@ def test_misspelled_field_and_unknown_argument_are_named(tmp_path):
         init(f"{tmp_path / 'objs.py'}:f", starts={"w.T": 1.0, "v.T": 1.0})
 
 
+def test_init_start_for_a_callable_without_signature():
+    from fmugen.config import InterfaceError
+
+    # max is a C built-in: inspect.signature fails, so the --start names can't be placed
+    with pytest.raises(InterfaceError, match=r"--start a, b: cannot tell which arguments these are, since max has no signature"):
+        init("builtins:max", starts={"a": 1.0, "b": 2.0})
+
+
 def test_probe_retries_a_date_time_in_utc(tmp_path):
     write(tmp_path, "sun.py", """
         def altitude(when):
@@ -782,3 +868,122 @@ def test_probe_checks_a_date_time_guessed_from_the_name(tmp_path, body, kind, co
     output, data = init(tmp_path / "m.py", probe=True)
     assert "when" in data.get(kind, {}) and "when" not in data.get("time" if kind == "inputs" else "inputs", {})
     assert comment in output.read_text()
+
+
+def test_call_arguments_can_be_calls_builtins_and_containers():
+    import math
+    import operator
+
+    from fmugen.templates.fmugen_runtime import call_reference
+    assert call_reference("operator:add(math.sqrt(16.0), -1)") == 3.0
+    assert call_reference('builtins:list((float("inf"), math.pi))') == [math.inf, math.pi]
+    assert call_reference("builtins:dict(a=math.floor(2.5), b={'k': [math.e]})") == {"a": 2, "b": {"k": [math.e]}}
+    # without parentheses: the object itself (a function to pass, an enum member), not called
+    assert call_reference("math:sin") is math.sin
+    assert call_reference("operator:attrgetter") is operator.attrgetter
+    with pytest.raises(ValueError, match="arguments must be"):
+        call_reference("builtins:print(lambda: 0)")
+
+
+def test_init_stops_when_a_computed_constant_fails(tmp_path):
+    write(tmp_path, "deriv.py", """
+        def derivative(fun, x=0.5):
+            return fun(x)
+    """)
+    from fmugen.config import InterfaceError
+    with pytest.raises(InterfaceError, match="constants.fun = call:math:nosuch fails: AttributeError"):
+        init(tmp_path / "deriv.py", starts={"fun": {"call": "math:nosuch"}}, probe=True)
+    _, data = init(tmp_path / "deriv.py", output="-", starts={"fun": {"call": "math:cos"}}, probe=True)
+    assert data["outputs"] == {"y": {"from": "return"}}
+
+
+def test_array_result_for_a_scalar_output(tmp_path, make_fmu, adapter):
+    pytest.importorskip("numpy")
+    write(tmp_path, "enu.py", """
+        import numpy
+
+        def enu(x=1.0):   # like pymap3d's geodetic2enu: a tuple; or an array of one element
+            return (x, 2 * x, 3 * x) if x > 0 else numpy.array([x])
+    """, """
+        [model]
+        entry = "enu.py:enu"
+        [inputs]
+        x = { start = -1.0 }
+        [outputs]
+        y = { from = "return" }
+    """)
+    fmu = adapter(make_fmu(tmp_path / "fmugen.toml"))
+    fmu.initialize()
+    assert fmu.get("y") == -1.0   # one element: its value
+    assert fmu.set("x", 1.0) == OK
+    assert fmu.fmi2DoStep(0.0, 1.0, False) == ERROR
+    assert "y is a tuple of shape [3], not a single value: give it dimensions = [3]" in fmu.logs[-1][2]
+
+
+def test_a_step_that_changes_nothing_also_runs_at_initialization(tmp_path, make_fmu, adapter):
+    write(tmp_path, "option.py", """
+        class Call:   # like blackscholes.BlackScholesCall(...).price()
+            def __init__(self, S=55.0, K=50.0):
+                self.S, self.K = S, K
+
+            def price(self):
+                return max(self.S - self.K, 0.0)
+
+        class Counter:
+            def __init__(self):
+                self.n = 0
+
+            def step(self, u=1.0):
+                self.n += 1
+                return self.n * u
+    """)
+    output, data = init(f"{tmp_path / 'option.py'}:Call", call="price", probe=True)
+    assert data["model"]["init_call"] is True
+    fmu = adapter(make_fmu(output))
+    fmu.initialize()
+    assert fmu.get("y") == 5.0   # at the start time, before any step
+    output, data = init(f"{tmp_path / 'option.py'}:Counter", output=tmp_path / "counter.toml", probe=True)
+    assert "init_call" not in data["model"]   # the step changes the object: running it twice would count twice
+
+
+def test_numbers_are_retried_as_one_element_arrays(tmp_path, make_fmu, adapter):
+    pytest.importorskip("numpy")
+    write(tmp_path, "heat.py", """
+        import numpy as np
+
+        def heat_index(t2_k, rh):   # like thermofeel: numpy.nonzero refuses 0-d arrays
+            t2_k = np.asarray(t2_k)
+            out = t2_k.copy()
+            out[np.nonzero(rh > 40)] += 0.01 * rh
+            return out
+    """)
+    output, data = init(tmp_path / "heat.py", starts={"t2_k": 300.0, "rh": 50.0}, probe=True)
+    assert data["inputs"]["t2_k"] == {"start": 300.0, "convert": "numpy:atleast_1d"}
+    assert data["outputs"] == {"y": {"from": "return"}}
+    fmu = adapter(make_fmu(output))
+    fmu.initialize()
+    assert fmu.fmi2DoStep(0.0, 1.0, False) == OK
+    assert fmu.get("y") == pytest.approx(300.5)
+
+
+def test_debug_logging_of_the_backend_is_raised_to_info(tmp_path, make_fmu, adapter, monkeypatch):
+    # UniFMU's main.py sets the root logger to DEBUG; numba then writes megabytes while compiling
+    # (antropy), which crashes UniFMU 0.14 and hangs the importer
+    import logging
+    write(tmp_path, "chatty.py", """
+        import logging
+
+        def f(x=1.0):
+            logging.getLogger("numba.core.ssa").debug("Running <numba.core.ssa._FreshVarHandler>")
+            logging.getLogger("chatty").info("step")
+            return {"y": x}
+    """)
+    fmu_dir = make_fmu(tmp_path / "chatty.py")
+    root = logging.getLogger()
+    monkeypatch.setattr(root, "level", logging.DEBUG)
+    monkeypatch.setenv("UNIFMU_DISPATCHER_ENDPOINT", "tcp://127.0.0.1:1")
+    fmu = adapter(fmu_dir)
+    assert root.level == logging.INFO
+    fmu.initialize()
+    messages = [entry[2] for entry in fmu.logs]
+    assert any("[chatty] step" in m for m in messages) and not any("numba" in m for m in messages)

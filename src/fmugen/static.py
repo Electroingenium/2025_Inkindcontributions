@@ -26,6 +26,8 @@ class Returned:
     types: dict = dataclasses.field(default_factory=dict)    # name -> FMI type (when known)
     array: bool = False      # the whole result is an array (size unknown)
     unknown: str = None      # why the result couldn't be read, if it couldn't
+    may_be_none: bool = False   # some return statements return None (simpy's Environment.run)
+    nullable: list = dataclasses.field(default_factory=list)   # names whose value may be None (database columns)
 
 
 def function_node(fn):
@@ -163,6 +165,28 @@ def _fields_of(hint):
     return names, {n: _hint_type(hints.get(n)) for n in names if _hint_type(hints.get(n))}
 
 
+def _table_columns(hint):
+    """(names, {name: type}, nullable names) of the typed columns of a SQLAlchemy model class
+    (mendeleev's Element), else None."""
+    columns = getattr(getattr(hint, "__table__", None), "columns", None) if isinstance(hint, type) else None
+    if columns is None:
+        return None
+    names, types, nullable = [], {}, []
+    for column in columns:
+        try:
+            kind = PRIMITIVE_TYPES.get(column.type.python_type)
+        except Exception:   # NotImplementedError for types without one
+            kind = None
+        name = getattr(column, "key", None) or column.name
+        if kind is None or not str(name).isidentifier():
+            continue
+        names.append(name)
+        types[name] = kind
+        if getattr(column, "nullable", True):
+            nullable.append(name)
+    return (names, types, nullable) if names else None
+
+
 def returned(fn, namespace=None, attributes=None):
     """What fn returns: dict keys, tuple positions, NamedTuple/dataclass fields, or a single value.
     `attributes` ({attr: kind}, for a method) gives the kind of a returned self.attr."""
@@ -174,6 +198,10 @@ def returned(fn, namespace=None, attributes=None):
     if fields:
         names, types = fields
         return Returned(names, {n: f"return:{n}" for n in names}, types)
+    table = _table_columns(unwrap_optional(hint))
+    if table:
+        names, types, nullable = table
+        return Returned(names, {n: f"return:{n}" for n in names}, types, nullable=nullable)
     if hint is type(None):
         return Returned()
     if _hint_type(hint):
@@ -211,13 +239,15 @@ def returned(fn, namespace=None, attributes=None):
             return attributes.get(value.attr)
         return _literal_type(value)
 
-    shapes = []
+    shapes, none = [], False
     for item in _own_nodes(node):
-        if not isinstance(item, ast.Return) or item.value is None:
+        if not isinstance(item, ast.Return):
             continue
         value = item.value
-        if isinstance(value, ast.Constant) and value.value is None or \
-                isinstance(value, ast.Name) and value.id == self_name:
+        if value is None or isinstance(value, ast.Constant) and value.value is None:
+            none = True
+            continue
+        if isinstance(value, ast.Name) and value.id == self_name:
             continue
         if isinstance(value, ast.Dict) and _str_keys(value):
             leaves = _dict_leaves(value, kind)
@@ -243,7 +273,7 @@ def returned(fn, namespace=None, attributes=None):
     if len(kinds) == 1 and kinds <= {"tuple", "single"} and len({len(n) for _, n, _ in shapes}) == 1:
         kind, names, types = shapes[0]
         sources = {n: f"return:{i}" for i, n in enumerate(names)} if kind == "tuple" else {"y": "return"}
-        return Returned(names, sources, {k: t for k, t in types.items() if t})
+        return Returned(names, sources, {k: t for k, t in types.items() if t}, may_be_none=none)
     return Returned(unknown="its return statements return different shapes")
 
 
@@ -301,15 +331,56 @@ def _resolve(node, namespace):
     return obj
 
 
+def _installed_packages():
+    """Top-level import names of the installed distributions."""
+    import importlib.metadata
+    global _INSTALLED
+    if _INSTALLED is None:
+        _INSTALLED = set(importlib.metadata.packages_distributions())
+    return _INSTALLED
+
+
+_INSTALLED = None
+
+
+def foreign_class(klass, cls):
+    """Whether klass, a base of the model class cls, comes from an installed library other than the
+    model's own package (GEKKO for `class Plant(GEKKO)`): what its code sets on self is the
+    library's state, not the model's results. A base in the user's own files is not foreign, and
+    for a model class from an installed library (a library built on another), no base is."""
+    package, own = klass.__module__.split(".")[0], cls.__module__.split(".")[0]
+    installed = _installed_packages()
+    return package != own and package in installed and own not in installed
+
+
+def foreign_attributes(cls):
+    """Attributes that the code of cls's foreign bases (see foreign_class) sets on self."""
+    names = set()
+    for klass in cls.__mro__[1:]:
+        if klass is object or not foreign_class(klass, cls):
+            continue
+        for name, member in vars(klass).items():
+            if inspect.isfunction(member):
+                names |= set(assigned_attributes(klass, name, depth=0, raw=True))
+    return names
+
+
 def assigned_attributes(cls, method_name, depth=MAX_DEPTH, raw=False):
     """{attribute: kind} that method_name sets on self, following self.other() calls. The kind is
-    "Boolean", "String", "Real", "array", "other" (not an FMI value) or None (not obvious)."""
+    "Boolean", "String", "Real", "array", "other" (not an FMI value) or None (not obvious).
+    Methods of a foreign base (see foreign_class) aren't followed: what they set is the library's."""
     kinds, seen = {}, set()
+
+    def defined_in(name):
+        return next((klass for klass in cls.__mro__ if name in vars(klass)), None)
 
     def visit(name, level):
         if name in seen or level > depth:
             return
         seen.add(name)
+        owner = defined_in(name)
+        if owner is not None and owner is not cls and foreign_class(owner, cls):
+            return
         method = inspect.getattr_static(cls, name, None)
         node = function_node(method) if method is not None else None
         if node is None or not node.args.args:
@@ -419,10 +490,34 @@ def own_properties(cls):
     return found
 
 
-def factory_class(factory):
-    """The class a factory function is annotated to return, if any (e.g. `-> torchani.arch.ANI`)."""
+def factory_class(factory, depth=0):
+    """The class a factory function returns, if the code tells: its return annotation
+    (`-> torchani.arch.ANI`), else what all its return statements call, followed through other
+    functions (tellurium's loada returns loadAntimonyModel(...), which returns roadrunner.RoadRunner(...))."""
     try:
         hint = typing.get_type_hints(factory).get("return")
     except Exception:
+        hint = None
+    if isinstance(hint, type):
+        return hint if hint.__module__ != "builtins" else None
+    node = function_node(factory)
+    if node is None or depth >= 3:
         return None
-    return hint if isinstance(hint, type) and hint.__module__ != "builtins" else None
+    namespace = getattr(inspect.unwrap(factory), "__globals__", {})
+    found = set()
+    for item in _own_nodes(node):
+        if not isinstance(item, ast.Return) or item.value is None:
+            continue
+        if not isinstance(item.value, ast.Call):
+            return None
+        target = _resolve(item.value.func, namespace)
+        if isinstance(target, type):
+            found.add(target)
+        elif inspect.isfunction(target):
+            found.add(factory_class(target, depth + 1))
+        else:
+            return None
+    if len(found) != 1 or None in found:
+        return None
+    cls = found.pop()
+    return cls if cls.__module__ != "builtins" else None

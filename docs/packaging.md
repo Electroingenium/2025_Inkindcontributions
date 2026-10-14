@@ -15,48 +15,7 @@
 
 Install fmugen into your model's virtual environment (fmugen is not on PyPI yet: `pip install path/to/2025_Inkindcontributions`) and run it from there. `fmugen build` also needs the UniFMU 0.14.0 CLI (see [UniFMU version](#unifmu-version)). To work on fmugen itself, `uv sync` installs it in editable mode with the test dependencies.
 
-### `fmugen init`
-
-```
-fmugen init MODEL [-o OUTPUT] [--call METHOD] [--fmi {2,3}] [--start NAME=VALUE ...] [--setup CALL ...] [--kind function] [--create CLASSMETHOD] [--probe] [--convert NAME=module:function ...] [--force]
-```
-
-| Argument | Description |
-|---|---|
-| `MODEL` | `model.py`, `model.py:Name`, or `package.module:Name` (an installed module). |
-| `-o, --output` | Where to write the config. Default: `fmugen.toml` next to the model (or in the current directory for an installed module). `-` prints it instead. The model file must be inside the config's folder. |
-| `--call` | For classes: the method run on each step, when it isn't `step`/`do_step`/`update`/`__call__`/the only public method. |
-| `--fmi {2,3}` | Write `fmi_version` into the config. With `3`, also infer arrays and Binary. |
-| `--start NAME=VALUE` | Start value for an argument (a Python literal), e.g. one without a default; also used by `--probe`. Repeatable. |
-| `--setup CALL` | A `[model] setup` call, e.g. `'psychrolib:SetUnitSystem(psychrolib.SI)'` or `reset`; run before the probe with `--probe`. Repeatable. |
-| `--kind function` | Treat a class whose constructor does the work as a function called every step. |
-| `--create CLASSMETHOD` | Build the object with this classmethod (e.g. `from_pretrained`) instead of the class. |
-| `--probe` | Also call the model once, to find what reading the code can't (array sizes, runtime results, `save_state`). Without it, the model is never called. |
-| `--convert NAME=module:function` | How an argument is passed in, e.g. `x=torch:tensor`. Repeatable. |
-| `--force` | Overwrite an existing config. |
-
-What it infers: [models.md](models.md#what-fmugen-init-infers).
-
-### `fmugen build`
-
-```
-fmugen build MODEL -o OUTPUT [options]
-```
-
-| Argument | Description |
-|---|---|
-| `MODEL` | A `fmugen.toml`, a directory containing one, or a model (`model.py[:Name]`, `package.module:Name`) whose config is inferred in memory. |
-| `-o, --output` | Output path, used exactly as given. |
-| `--fmi {2,3}` | FMI version to build. Default: `[model] fmi_version`, else 2. |
-| `--format {fmu,folder}` | `fmu` (default): zipped `.fmu` archive. `folder`: unzipped UniFMU folder. |
-| `--name` | `modelName` in `modelDescription.xml`; overrides `[model] name`. |
-| `--author` | `author` in `modelDescription.xml`; overrides `[model] author`. |
-| `--call` | Like `init --call`, when `MODEL` is a `.py` file with a class. |
-| `--vendor` | Put wheels of every requirement into the FMU; it installs them offline on its first run. See [FMUs for other machines](#fmus-for-other-machines). |
-| `--platform TAG` | With `--vendor`: also vendor wheels for this platform. Repeatable. |
-| `--python-version X.Y` | With `--vendor`: vendor wheels for this Python version. Repeatable. |
-| `--compile {pyinstaller,nuitka}` | Freeze everything into an executable: no sources in the FMU, no Python needed, this OS only. |
-| `--capture-output` | Send what the model prints to the importer's log instead of the console (UniFMU 0.14 hangs when the FMU's Python prints more than about 4 KB). |
+Every option of `fmugen init` and `fmugen build` is in [manual.md](manual.md#4-commands). This page explains what `build` does and the options for other machines (`--vendor`, `--compile`, `--hf-weights`).
 
 ---
 
@@ -163,7 +122,7 @@ The FMU then sets `HF_HUB_CACHE` to that folder and `HF_HUB_OFFLINE=1` before im
 
 ### `--compile`
 
-`fmugen build --compile pyinstaller` (or `nuitka`) freezes UniFMU's backend, fmugen's adapter and runtime, your model and every package it imports, together with the Python interpreter, into `resources/dist/main/`. All `.py` files, `fmugen_model/`, `interface.json` and `requirements.txt` are removed from the FMU; `resources/` keeps only `dist/` and `launch.toml`:
+`fmugen build --compile pyinstaller` (or `nuitka`) freezes UniFMU's backend, fmugen's adapter and runtime, your model and every package it imports, together with the Python interpreter, into `resources/dist/main/`. All `.py` files, `fmugen_model/`, `interface.json` and `requirements.txt` are removed from the FMU; `resources/` keeps only `dist/` and `launch.toml` (the exceptions inside `dist/` are listed [below](#what-the-compiler-is-told)):
 
 ```toml
 linux = ["sh", "-c", "chmod +x dist/main/main && ./dist/main/main"]
@@ -183,7 +142,19 @@ Neither can cross-compile: the executable runs only on the OS and CPU architectu
 
 With `cwd` set, `fmugen_model/` stays, without its `.py` files, so the model still finds its data files.
 
-fmugen tells the compiler about the modules the runtime imports by name (the model's entry, `setup` calls, enums, references in constants, clock calls) and bundles the model's non-Python files next to its modules. A package that imports parts of itself dynamically may still be missed; the build's error, or the FMU's log, then names the missing module.
+#### What the compiler is told
+
+A freezer only follows `import` statements. Libraries also read files next to their code, find plugins through package metadata, and import modules by name, and none of that is followed. So fmugen also tells the compiler:
+
+- **The modules the runtime imports by name:** the model's entry, `setup` calls, enums, clock calls, and the modules in constants (`ref` and `{ call = "module:fn(...)" }`, including dotted names in the arguments, such as `numpy.linspace`).
+- **The model's packages, with every submodule:** the packages of those modules and of `[model] requirements`.
+- **Their whole dependency tree, with every package's data files, binaries and metadata.** The tree is read from the installed packages' metadata, and also includes the optional dependencies of the model's own packages that are installed. This is how, for example, iapws's `VERSION`, ahrs's `WMM.COF`, mendeleev's `elements.db`, pymsis's `msis21.parm`, silero-vad's ONNX file and pybamm's parameter sets get into the FMU.
+- **The packages the model's packages depend on, imported by name** (pybamm imports `anytree` that way).
+- **Folders of `.py` files inside the model's packages that aren't packages** (no `__init__.py`), e.g. pyromat's `registry`. Libraries load these by path, so they ship as files.
+- **numpy's `numpy.core` compatibility modules**, which older pickles name, e.g. data loaded with `numpy.load`.
+- **The `.py` sources of packages built on transformers** (PyInstaller only). transformers reads the source of the classes it decorates, as PyInstaller's own hook already arranges for transformers itself. These sources are in the FMU.
+
+A model that unpickles objects, e.g. `joblib.load` of a scikit-learn model, needs the packages of those objects listed in `[model] requirements` (`init` can't see them): then their submodules are collected too. The FMU grows by the collected files: in the tests, 0 to 25 MB more than before this change (pvlib, mesa) for models that already worked. The model's non-Python files are bundled next to its modules. If something is still missed, the build's error or the FMU's log names it. When the importer shows nothing, see [unifmu-limitations.md §13](unifmu-limitations.md#13-a-backend-that-exits-during-a-call-can-abort-the-importer) for running the frozen backend directly to read its error.
 
 ---
 

@@ -135,6 +135,7 @@ Runs show up in the UI as `fmu-run-… • succeeded on fmu-remote`. `MODEL=... 
 | `STEP_DELAY` | `0.5` | Wall-clock pause between steps, in seconds |
 | `OPCUA_ENDPOINT` | `opc.tcp://opcua-server:4840` | OPC UA server |
 | `OPC_TIMEOUT` | `60` | How long to retry connecting to the OPC UA server, in seconds |
+| `RUN_TIMEOUT` | 600 + 2 × steps × `STEP_DELAY` | Seconds after which an unfinished run is stopped (exit status 1), logging what it was doing and printing the results so far. `0`: no limit. Kubernetes Jobs also get `activeDeadlineSeconds`, 300 s later |
 
 **OPC UA server**
 
@@ -152,6 +153,7 @@ Runs show up in the UI as `fmu-run-… • succeeded on fmu-remote`. `MODEL=... 
 | `FMU_IMAGE` | `fmugen-sim:latest` (docker); this pod's image (kubernetes) | Image for runs |
 | `FMU_CONTAINER_NAME_BASE` | `fmu-run` | Prefix of run names |
 | `STEP_DELAY` | `0.5` | Passed to runs |
+| `RUN_TIMEOUT` | unset | Passed to runs (unset: the runner's default) |
 | `DOCKER_NETWORK` | `simnet` | docker: network that run containers join |
 | `RUN_PLACEMENT` | `remote` | kubernetes: default of **Run on** |
 | `POD_NAME` | | kubernetes: this pod's name (downward API), to find its image |

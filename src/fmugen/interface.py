@@ -18,8 +18,12 @@ import importlib
 import importlib.util
 import inspect
 import json
+import keyword
 import math
+import pickle
+import re
 import sys
+import traceback
 import types
 import typing
 from collections.abc import Mapping
@@ -28,7 +32,16 @@ from pathlib import Path
 from fmugen import static
 from fmugen.config import InterfaceError
 
-TIME_NAMES = {"dt": "step_size", "step_size": "step_size", "h": "step_size", "t": "time", "time": "time"}
+# Argument names (lowercase, without "_") that take the simulation time, and which one: the time at the
+# start of the step, the step size, or the time at its end (simpy's Environment.run(until))
+TIME_NAMES = {"t": "time", "time": "time", "currenttime": "time", "tcurrent": "time", "tnow": "time",
+              "dt": "step_size", "h": "step_size", "stepsize": "step_size", "timestep": "step_size",
+              "until": "end_time", "endtime": "end_time", "tend": "end_time", "tnext": "end_time"}
+
+
+def _time_source(name):
+    """The [time] source for an argument named like a time (currentTime, step_size, until), or None."""
+    return TIME_NAMES.get(name.lower().replace("_", ""))
 CALL_NAMES = ("step", "do_step", "update", "__call__")
 PROBE_STEP_SIZE = 1.0
 SCALARS = (bool, int, float, str)
@@ -43,6 +56,21 @@ def load_module(model_path):
     sys.modules[model_path.stem] = module
     spec.loader.exec_module(module)
     return module
+
+
+def import_failure(target, error):
+    """InterfaceError for a model whose top-level code raised while it was imported (a script that
+    solves or plots when imported, a missing data file), naming where it raised."""
+    frames = traceback.extract_tb(error.__traceback__)
+    # the innermost line of the model's own code, and where the error was raised if that's elsewhere
+    ours = [f for f in frames if "importlib" not in f.filename and "fmugen" not in Path(f.filename).parts]
+    where = [ours[0]] if ours else []
+    if frames and (not where or frames[-1] is not where[0]):
+        where.append(frames[-1])
+    at = ", in ".join(f"{Path(f.filename).name}:{f.lineno}" for f in where)
+    return InterfaceError(f"importing {target} failed: {type(error).__name__}: {error}"
+                          + (f" (at {at})" if at else "")
+                          + "; importing a module runs its top-level code")
 
 
 def parse_target(target):
@@ -74,6 +102,11 @@ def infer_config(target, call=None, config_dir=None, fmi_version=None, starts=No
     """
     path, _module_name, name = parse_target(target)
     config_dir = Path(config_dir or (path.parent if path else ".")).resolve()
+    if path and not path.resolve().is_relative_to(config_dir):
+        raise InterfaceError(
+            f"the config must be in the folder of {path.name} or a folder above it, since it names the model "
+            f"by a path relative to itself: write it to {path.resolve().parent / 'fmugen.toml'} "
+            f"(not {config_dir})")
     if path:
         target = f"{path.resolve()}" + (f":{name}" if name else "")
     with contextlib.chdir(config_dir):
@@ -92,13 +125,18 @@ def _infer_config(target, call, config_dir, fmi_version, starts, setup, kind, cr
         module = load_module(path) if path else importlib.import_module(module_name)
     except ImportError as e:
         raise InterfaceError(f"cannot import {target}: {e} (is it installed in this environment?)") from e
+    except (Exception, SystemExit) as e:
+        raise import_failure(target, e) from e
     entry = _pick_entry(module, name)
 
+    # the name it was given: an alias (PyCO2SYS:sys) or a lambda (rdkit's Descriptors.MolWt) has
+    # another __name__, which may name a different object or none
+    entry_name = name or entry.__name__
     if path:
         rel = Path(path).resolve().relative_to(config_dir).as_posix()
-        entry_ref = f"{rel}:{entry.__name__}"
+        entry_ref = f"{rel}:{entry_name}"
     else:
-        entry_ref = f"{module_name}:{entry.__name__}"
+        entry_ref = f"{module_name}:{entry_name}"
 
     data = {"model": {"entry": entry_ref}}
     if fmi_version:
@@ -126,6 +164,8 @@ def _infer_config(target, call, config_dir, fmi_version, starts, setup, kind, cr
         _infer_function(entry, data, comments, **options)
     _add_data_files(data, comments, config_dir, Path(path).resolve() if path else None)
     _add_globals(data, comments, module, config_dir if path else None)
+    _add_requirements(data, comments, module_name, config_dir, Path(path).resolve() if path else None)
+    _rename_duplicates(data, comments)
     if fmi_version == 3:
         _rename_reserved(data, comments, is_class="call" in data["model"] or inspect.isclass(entry))
     else:
@@ -134,7 +174,7 @@ def _infer_config(target, call, config_dir, fmi_version, starts, setup, kind, cr
     unknown = set(converts or {}) - variables
     if unknown:
         raise InterfaceError(f"--convert names that are not arguments of the model: {sorted(unknown)}")
-    unused = set(starts) - variables \
+    unused = set(starts) - variables - set(comments.get(POSITIONAL_STARTS, {})) \
         - {n for table in ("constants", "call_constants") for n in data["model"].get(table, {})} \
         - {str(info.get("to", "")).partition(":")[2].partition("[")[0]
            for sec in ("parameters", "inputs", "states") for info in data.get(sec, {}).values()}         - {str(info["to"]).partition(":")[2] for sec in ("parameters", "inputs", "states")
@@ -146,6 +186,12 @@ def _infer_config(target, call, config_dir, fmi_version, starts, setup, kind, cr
         for name in explained:
             by_message.setdefault(errors[name], []).append(name)
         raise InterfaceError("; ".join(f"--start {', '.join(names)}: {message}" for message, names in by_message.items()))
+    if unused and comments.get(NO_SIGNATURE):
+        unreadable = list(dict.fromkeys(comments[NO_SIGNATURE]))
+        raise InterfaceError(
+            f"--start {', '.join(sorted(unused))}: cannot tell which arguments these are, since "
+            f"{' and '.join(unreadable)} {'has' if len(unreadable) == 1 else 'have'} no signature (e.g. a C built-in); "
+            "write the config by hand, with to = \"pos:N\" for arguments passed by position (docs/config.md)")
     if unused:
         raise InterfaceError(f"--start names that are not arguments of the model: {sorted(unused)}")
     return data, comments
@@ -176,15 +222,40 @@ def _fmi2_types(data, comments):
 
 
 def _rename_reserved(data, comments, is_class):
-    """FMI 3 reserves `time`: an output or local read from the model's own `time` becomes `model_time`."""
-    for section in ("outputs", "locals"):
+    """FMI 3 reserves `time`: a variable for the model's own `time` (an argument, an output) becomes
+    `model_time`, bound to it with `to` / `from`."""
+    for section in ("parameters", "inputs", "states", "outputs", "locals"):
         variables = data.get(section, {})
-        if "time" in variables and "model_time" not in variables:
-            info = variables.pop("time")
+        if "time" not in variables:
+            continue
+        new = next(n for n in ("model_time", f"model_time_{section}") if n not in _taken(data))
+        info = variables.pop("time")
+        if section in ("outputs", "locals"):
             info.setdefault("from", "attr:time" if is_class else "return:time")
-            variables["model_time"] = info
-            comments.pop((section, "time"), None)
-            comments[(section, "model_time")] = "the model's `time` (FMI 3 reserves that name)"
+        else:
+            info.setdefault("to", "init:time" if section == "parameters" and is_class else "arg:time")
+        variables[new] = info
+        comments.pop((section, "time"), None)
+        comments[(section, new)] = "the model's `time` (FMI 3 reserves that name)"
+
+
+def _rename_duplicates(data, comments):
+    """A constructor argument and a step method argument with the same name (radioactivedecay's
+    Inventory(..., units).decay(..., units)) can't both be called NAME: the method's becomes
+    <method>_NAME, bound to it with `to`."""
+    method = data["model"].get("call", "call").strip("_")
+    parameters = data.get("parameters", {})
+    for section in ("inputs", "states"):
+        variables = data.get(section, {})
+        for name in [n for n in variables if n in parameters]:
+            new = f"{method}_{name}"
+            if new in _taken(data):
+                continue
+            info = variables.pop(name)
+            info.setdefault("to", f"arg:{name}")
+            variables[new] = info
+            comments[(section, new)] = f"{method}()'s {name} (the constructor also has a {name})"
+            comments.pop((section, name), None)
 
 
 def _run_setup(data, obj=None):
@@ -293,6 +364,72 @@ def _add_globals(data, comments, entry_module, local_dir=None):
                                           "put back on reset and saved with the FMU state")
 
 
+def _add_requirements(data, comments, module_name, config_dir, entry_file):
+    """[model] requirements: the installed distributions (pinned to their versions here) that provide
+    the entry's package, the modules the local model files import, and modules named in setup,
+    computed constants, convert and enum. A Docker image or --vendor installs these."""
+    import importlib.metadata
+    tops = set()
+    if module_name:
+        tops.add(module_name.split(".")[0])
+    files = [entry_file] if entry_file else []
+    for source in data["model"].get("sources", []):
+        source = config_dir / source
+        files += sorted(source.rglob("*.py")) if source.is_dir() else [source] if source.suffix == ".py" else []
+    for file in files:
+        try:
+            tree = ast.parse(file.read_text(encoding="utf-8"))
+        except (OSError, SyntaxError, UnicodeDecodeError):
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                tops |= {alias.name.split(".")[0] for alias in node.names}
+            elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                tops.add(node.module.split(".")[0])
+    references = [step if isinstance(step, str) else step.get("call", "") for step in data["model"].get("setup", [])]
+    for table in ("constants", "call_constants"):
+        references += [v["call"] for v in data["model"].get(table, {}).values() if isinstance(v, dict) and "call" in v]
+    references += [info[key] for section in ("parameters", "inputs", "states")
+                   for info in data.get(section, {}).values() for key in ("convert", "enum") if key in info]
+    for ref in references:
+        if ":" in ref:   # module:function(numpy.linspace(...)): the module, and the dotted names in the arguments
+            tops.add(ref.partition(":")[0].split(".")[0])
+            tops |= {name.split(".")[0] for name in _dotted_names(ref.partition("(")[2])}
+    if any(info.get("numpy") for section in ("parameters", "inputs", "states") for info in data.get(section, {}).values()):
+        tops.add("numpy")
+    distributions = importlib.metadata.packages_distributions()
+    found, unknown = {}, []
+    for top in sorted(tops):
+        if top in sys.stdlib_module_names or top == "fmugen" or importlib.util.find_spec(top) is None:
+            continue
+        spec = importlib.util.find_spec(top)
+        origin = Path(spec.origin).resolve() if spec.origin else None
+        if origin is not None and origin.is_relative_to(config_dir) and "site-packages" not in origin.parts:
+            continue   # one of the model's own files
+        names = distributions.get(top, [])
+        if len(set(names)) != 1:
+            unknown.append(top)
+            continue
+        dist = importlib.metadata.distribution(names[0])
+        found[dist.metadata["Name"]] = f"{dist.metadata['Name']}=={dist.version}"
+    if found:
+        data["model"]["requirements"] = sorted(found.values(), key=str.lower)
+        comments[("model", "requirements")] = "the versions installed here; installed into Docker images and by --vendor"
+    if unknown:
+        comments[("model", "#requirements")] = (f"add the PyPI packages that provide {', '.join(unknown)} to "
+                                                "requirements (they could not be told from what is installed)")
+
+
+def _dotted_names(text):
+    """Dotted names (numpy.linspace) in a Python expression, or [] if it doesn't parse."""
+    try:
+        tree = ast.parse(text.rstrip().removesuffix(")") or "0", mode="eval")
+    except SyntaxError:
+        return []
+    return [ast.unparse(n) for n in ast.walk(tree) if isinstance(n, ast.Name)
+            or isinstance(n, ast.Attribute) and isinstance(n.value, (ast.Name, ast.Attribute))]
+
+
 def _pick_entry(module, name):
     if name:
         if not hasattr(module, name):
@@ -324,6 +461,8 @@ def _infer_function(fn, data, comments, arrays=False, starts=None, probe=False, 
         try:
             _run_setup(data)
             result = _probe_call(fn, data, comments)
+        except ConstantError:
+            raise
         except Exception as e:
             comments[("outputs", None)] = f"probe call failed ({e!r}); outputs below are read from the code"
         else:
@@ -359,12 +498,17 @@ def _infer_class(cls, call, data, comments, arrays=False, starts=None, create=No
         constructor = factory
         # The step method's arguments may be known only once the object exists: names the factory
         # declares go to it, everything else to the step method (even if the factory takes **kwargs).
-        declared = inspect.signature(factory).parameters
+        try:
+            declared = inspect.signature(factory).parameters
+        except (TypeError, ValueError):   # a C built-in: _arguments reports it
+            declared = {}
         init_starts = {k: v for k, v in (starts or {}).items() if k in declared}
         call_starts = {k: v for k, v in (starts or {}).items() if k not in declared}
     else:
         constructor = getattr(cls, create) if create else cls.__init__   # a bound classmethod has no cls argument
         init_starts, call_starts = _assign_starts(constructor, getattr(cls, method_name, None), starts or {})
+        init_starts, call_starts = _split_varargs(cls, create, method_name, init_starts, call_starts, data,
+                                                  comments, probe)
     _arguments(constructor, "parameters", data, comments, skip_self=not (create or factory), allow_time=False,
                arrays=arrays, starts=init_starts, positional=False)
     _apply_converts(data, converts)
@@ -422,9 +566,11 @@ def _probe_class(cls, method_name, data, comments, arrays, call_starts, create, 
     try:
         _run_setup(data)
         build = factory or (getattr(cls, create) if create else cls)
-        args, kwargs = _probe_args(data, ("parameters",), build)
+        args, kwargs = _probe_args(data, ("parameters",), build, "constants")
         obj = build(*args, **_probe_constants(data, "constants"), **kwargs)
         _run_setup(data, obj)
+    except ConstantError:
+        raise
     except Exception as e:
         comments[("outputs", None)] = f"probe construction failed ({e!r}); outputs below are read from the code"
         if cls is not None:
@@ -448,14 +594,22 @@ def _probe_class(cls, method_name, data, comments, arrays, call_starts, create, 
     _arguments(method, "inputs", data, comments, skip_self=not factory, constants_key="call_constants",
                arrays=arrays, starts=call_starts)
     _apply_converts(data, converts)
-    before = _numeric_attributes(obj, arrays)
+    before, state_before = _numeric_attributes(obj, arrays), _state_bytes(obj)
     try:
         result = _probe_call(getattr(obj, method_name), data, comments, constants_key="call_constants")
+    except ConstantError:
+        raise
     except Exception as e:
         comments[("outputs", None)] = f"probe call failed ({e!r}); outputs below are read from the code"
         return obj, set(), set(getattr(obj, "__dict__", {}))
     comments[PROBED] = True
     after = _numeric_attributes(obj, arrays)
+    state_after = _state_bytes(obj)
+    if result is not None and _same(before, after) and (state_before is None or state_before == state_after):
+        # the step changed nothing: running it at initialization too gives the outputs at the start time
+        data["model"]["init_call"] = True
+        comments[("model", "init_call")] = (f"{method_name}() changed nothing in the probe, so it also runs at "
+                                            "initialization: outputs have values at the start time")
     _check_picklable(obj, data, comments)
 
     returned = set()
@@ -468,6 +622,8 @@ def _probe_class(cls, method_name, data, comments, arrays, call_starts, create, 
             comments[("outputs", attr)] = "a property of the object"
     unfit = _unfit_properties(obj, data, comments, arrays, taken)
     taken |= set(data.get("outputs", {})) | unfit
+    taken |= _gekko_outputs(obj, data, comments, taken)
+    taken |= static.foreign_attributes(type(obj))   # a library base's own state (GEKKO's csv_status)
     for attr, value in getattr(obj, "__dict__", {}).items():   # complex attributes (None ones are too common)
         if not attr.startswith("_") and attr not in taken and value is not None and _misfit(value):
             _unfit_value(comments, "outputs", attr, value, f"attr:{attr}", arrays)
@@ -483,6 +639,46 @@ def _probe_class(cls, method_name, data, comments, arrays, call_starts, create, 
             comments[("locals", attr)] = f"changed by {method_name}()"
     _check_sizes(obj, method_name, data, comments)
     return obj, returned, set(getattr(obj, "__dict__", {})) | set(_property_values(obj, arrays)) | unfit
+
+
+GEKKO_RESULTS = ("GKVariable", "GK_Intermediate", "GK_FV")   # Var/SV/CV, Intermediate, FV/MV (not Param, Const)
+
+
+def _gekko_result(value):
+    """The value of a solved GEKKO variable, intermediate, FV or MV at the end of its time horizon
+    (m.time), or None: GEKKO keeps results in these objects, as `x.value` after `m.solve()`."""
+    if not type(value).__module__.startswith("gekko.") \
+            or not any(k.__name__ in GEKKO_RESULTS for k in type(value).__mro__):
+        return None
+    try:
+        last = value.value[-1]
+    except Exception:   # not solved yet: a single value
+        return None
+    return last if _fmi_value(last) else None
+
+
+def _gekko_outputs(obj, data, comments, taken):
+    """Outputs for the object's attributes that hold GEKKO results (`self.X = m.Var(...)`), and for
+    dicts of them (`self.W = {"HOU1": m.Var(...)}`), read as their last value. Returns their names."""
+    found = {}
+    for attr, value in getattr(obj, "__dict__", {}).items():
+        if attr.startswith("_"):
+            continue
+        if _gekko_result(value) is not None:
+            found[attr] = (f"{attr}.value.-1", value)
+        elif isinstance(value, Mapping):
+            for key, item in value.items():
+                if isinstance(key, str) and "." not in key and key and _gekko_result(item) is not None:
+                    found[_valid_name(f"{attr}.{key}")] = (f"{attr}.{key}.value.-1", item)
+    names = set()
+    for name, (path, value) in found.items():
+        if name in taken:
+            continue
+        data.setdefault("outputs", {})[name] = _typed({"from": f"attr:{path}"}, _gekko_result(value))
+        comments[("outputs", name)] = (f"a GEKKO {type(value).__name__}: its value at the end of the time "
+                                       f"horizon (m.time); the whole trajectory is {path[:-3]}")
+        names.add(name)
+    return names
 
 
 def _unfit_properties(obj, data, comments, arrays, taken):
@@ -588,9 +784,17 @@ def _add_returned(read, data, comments, is_class, arrays, probe, seen):
             info["type"] = kind
         elif kind is None:
             _guessed(comments, name)
+        if name in read.nullable and not probe:   # e.g. a database column: None fails the step
+            comments[("outputs", f"#{name}")] = f"{_key(name)} = {_value(info)}"
+            comments.setdefault(("outputs", None), "results that can be None (nullable database columns) are "
+                                                   "commented out: uncomment the ones this model always has, "
+                                                   "or run init --probe")
+            continue
         data.setdefault("outputs", {})[name] = info
         if probe:
             comments[("outputs", name)] = "from the code; not seen in the probe"
+        elif read.may_be_none and source == "return":
+            comments[("outputs", name)] = "the code can also return None, which fails the step: check it, or run init --probe"
 
 
 def _add_attributes(cls, method_name, data, comments, arrays, probe, seen):
@@ -632,7 +836,9 @@ def _add_attributes(cls, method_name, data, comments, arrays, probe, seen):
 
 
 DATETIME_BY_NAME = ("init", "date-time by name")   # comments key (not rendered): [time] args only named like one
+POSITIONAL_STARTS = ("init", "positional starts")   # comments key (not rendered): {--start name: *args position}
 START_ERRORS = ("init", "start errors")   # comments key (not rendered): {--start name: why it can't be used}
+NO_SIGNATURE = ("init", "no signature")   # comments key (not rendered): callables whose arguments can't be read
 
 
 def _start_error(comments, name, message):
@@ -685,6 +891,9 @@ ASSUMPTIONS = (
     ("epoch in UTC", "a date-time epoch taken as UTC (the probe failed without a time zone)"),
     ("passed by position to *args", "passed by position to *args in the order of --start: check the order"),
     ("passed through **kwargs", "passed through **kwargs: check the model uses them"),
+    ("can also return None", "the code can also return None, which fails the step: check it, or run init --probe"),
+    ("so a fixed value; to pass the simulation time", "named like a time but given by --start, so a fixed "
+                                                     "value: add [time] NAME = ... to pass the simulation time"),
     ("the probe failed with lists", "passed as arrays of another kind, since the probe failed with lists"),
     ("fed back from", "taken as states from their names (x_prev fed back from x / x_next)"),
     ("set its dimensions and uncomment", "arrays left commented out: set their dimensions and uncomment"),
@@ -694,7 +903,7 @@ ASSUMPTIONS = (
 # Section notes (and [model] comments) that are warnings as they are.
 NOTE_WARNINGS = ("probe call failed", "probe construction failed", "outputs could not be read",
                  "cannot inspect the signature", "is known only by running it", "skipped ",
-                 "can't be pickled")
+                 "can't be pickled", "both take *args", "results that can be None")
 
 
 def assumptions(comments):
@@ -709,6 +918,9 @@ def assumptions(comments):
                 notes.append(f"[{section}] {text}")
             continue
         name = str(name)
+        if name == "#requirements":
+            notes.append(f"[model] {text}")
+            continue
         if name.count("#") > 1 or name == "#save_state":   # unfit outputs: reported on their own
             continue
         for fragment, warning in ASSUMPTIONS:
@@ -770,10 +982,24 @@ def _apply_converts(data, converts):
 ARRAY_RETRIES = ("numpy", "torch:tensor")   # tried in order when a probe call fails with list inputs
 
 
-def _probe_constants(data, table):
-    """Constants set in the config (e.g. computed by a call), resolved as the FMU would."""
+def _probe_constants(data, table, positional=False):
+    """Constants set in the config (e.g. computed by a call), resolved as the FMU would: the keyword
+    ones, or with positional=True {position: value} of those named "0", "1", ... (passed to *args)."""
     from fmugen.templates.fmugen_runtime import resolve_constant
-    return {k: resolve_constant(v) for k, v in data["model"].get(table, {}).items()}
+    values = {}
+    for k, v in data["model"].get(table, {}).items():
+        if k.isdigit() != positional:
+            continue
+        try:
+            values[int(k) if positional else k] = resolve_constant(v)
+        except Exception as e:
+            what = f"call:{v['call']}" if isinstance(v, dict) and "call" in v else _value(v)
+            raise ConstantError(f"[model] {table}.{k} = {what} fails: {type(e).__name__}: {e}") from e
+    return values
+
+
+class ConstantError(InterfaceError):
+    """A constant (e.g. --start NAME=call:...) that can't be computed: the FMU would fail the same way."""
 
 
 def _probe_call(fn, data, comments, constants_key="constants"):
@@ -817,7 +1043,7 @@ def _probe_call(fn, data, comments, constants_key="constants"):
 
 
 def _call_with_probe_inputs(fn, data, constants_key):
-    args, kwargs = _probe_args(data, ("inputs",), fn)
+    args, kwargs = _probe_args(data, ("inputs",), fn, constants_key)
     kwargs.update(_time_kwargs(data.get("time", {})))
     kwargs.update(_probe_constants(data, constants_key))
     return fn(*args, **kwargs)
@@ -851,7 +1077,10 @@ def _probe_once(fn, data, comments, constants_key="constants"):
         plain = [info for info in data.get("inputs", {}).values()
                  if "dimensions" in info and not info.get("numpy") and not info.get("convert")]
         if not plain:
-            raise
+            result = _retry_as_arrays(call, data, comments)
+            if result is _FAILED:
+                raise
+            return result
         for converter in ARRAY_RETRIES:
             module = "numpy" if converter == "numpy" else converter.partition(":")[0]
             if importlib.util.find_spec(module) is None:
@@ -870,6 +1099,39 @@ def _probe_once(fn, data, comments, constants_key="constants"):
                 comments[("inputs", name)] = f"passed as {shown}: the probe failed with lists"
             return result
         raise
+
+
+_FAILED = object()
+
+
+def _retry_as_arrays(call, data, comments):
+    """When a call fails with numbers as inputs, call it again with each number as a one-element numpy
+    array (convert = "numpy:atleast_1d"): some libraries take only arrays (thermofeel's
+    calculate_heat_index_simplified calls numpy.nonzero on its inputs). Returns the result, or _FAILED."""
+    numbers = {name: info for name, info in data.get("inputs", {}).items()
+               if isinstance(info.get("start"), (int, float)) and not isinstance(info.get("start"), bool)
+               and "dimensions" not in info and not info.get("convert") and not info.get("numpy")}
+    if not numbers or importlib.util.find_spec("numpy") is None:
+        return _FAILED
+    for info in numbers.values():
+        info["convert"] = "numpy:atleast_1d"
+    try:
+        result = call()
+    except Exception:
+        for info in numbers.values():
+            del info["convert"]
+        return _FAILED
+    for name in numbers:
+        comments[("inputs", name)] = "passed as numpy.atleast_1d(...): the probe failed with plain numbers"
+    return result
+
+
+def _state_bytes(obj):
+    """The object's attributes pickled, to tell whether a call changed them; None if they can't be."""
+    try:
+        return pickle.dumps(vars(obj))
+    except Exception:
+        return None
 
 
 def _check_picklable(obj, data, comments):
@@ -910,6 +1172,8 @@ def _assign_starts(init, method, starts):
 
     A name goes to the argument that has no default (it needs a value); on a tie, to the
     step method. Names neither declares go to whichever accepts **kwargs (method first).
+    For a name both declare, <method>_NAME (the variable name init gives the method's one)
+    goes to the method, and then NAME to the constructor: x0 and calculate_optimal_actuation_x0.
     """
     def params(fn):
         try:
@@ -919,10 +1183,20 @@ def _assign_starts(init, method, starts):
 
     init_p, call_p = params(init), params(method)
     init_starts, call_starts = {}, {}
+    # the method's copy of a shared name, given by the name _rename_duplicates gives its variable
+    prefix = f"{getattr(method, '__name__', 'call').strip('_')}_"
+    for name, value in list(starts.items()):
+        shared = name[len(prefix):] if name.startswith(prefix) and name not in init_p and name not in call_p else None
+        if shared and shared.partition(".")[0] in init_p and shared.partition(".")[0] in call_p:
+            call_starts[shared] = value
     for name, value in starts.items():
         base = name.partition(".")[0]   # ARG.FIELD goes where ARG goes
         in_init, in_call = init_p.get(base), call_p.get(base)
-        if in_init and in_call:
+        if name.startswith(prefix) and name[len(prefix):] in call_starts and name not in init_p and name not in call_p:
+            continue   # placed above
+        if in_init and in_call and name in call_starts:
+            target = init_starts   # the method's copy was given by its own name
+        elif in_init and in_call:
             target = init_starts if (in_init.default is in_init.empty and in_call.default is not in_call.empty) \
                 else call_starts
         elif in_init or in_call:
@@ -934,6 +1208,51 @@ def _assign_starts(init, method, starts):
         else:
             continue  # reported as unused
         target[name] = value
+    return init_starts, call_starts
+
+
+def _only_varargs(fn, skip_self=True):
+    """Whether fn declares no named arguments, only *args (and maybe **kwargs)."""
+    try:
+        params = list(inspect.signature(fn).parameters.values())[1 if skip_self else 0:]
+    except (TypeError, ValueError):
+        return False
+    return any(p.kind is p.VAR_POSITIONAL for p in params) \
+        and all(p.kind in (p.VAR_POSITIONAL, p.VAR_KEYWORD) for p in params)
+
+
+def _split_varargs(cls, create, method_name, init_starts, call_starts, data, comments, probe):
+    """When the constructor and the step method both take only *args (SWIG classes such as
+    openturns.Normal(mu, sigma).computePDF(x)), the signatures can't tell which --start values go
+    where: _assign_starts gives them all to the constructor. With --probe, the first values (in
+    --start order) go to the constructor, the rest to the method, trying the constructor with as
+    many as possible first, and the first split where both calls work is kept."""
+    method = getattr(cls, method_name, None)
+    if create or method is None or not _only_varargs(cls.__init__) or not _only_varargs(method) \
+            or len(init_starts) < 1:
+        return init_starts, call_starts
+    names = list(init_starts)
+    if not probe:
+        comments[("inputs", None)] = (f"{cls.__name__}() and {method_name}() both take *args: every --start value "
+                                      f"was given to the constructor; run init --probe to split them")
+        return init_starts, call_starts
+    from fmugen.templates.fmugen_runtime import resolve_constant
+    try:
+        _run_setup(data)
+        values = [resolve_constant(init_starts[n]) for n in names]
+    except Exception:
+        return init_starts, call_starts
+    for k in range(len(names), -1, -1):
+        try:
+            getattr(cls(*values[:k]), method_name)(*values[k:], **{n: resolve_constant(v) for n, v in call_starts.items()})
+        except Exception:
+            continue
+        if k < len(names):
+            comments[("inputs", None)] = (f"{cls.__name__}() and {method_name}() both take *args: the probe worked "
+                                          f"with {', '.join(names[:k]) or 'nothing'} for the constructor and "
+                                          f"{', '.join(names[k:])} for {method_name}()")
+        return ({n: init_starts[n] for n in names[:k]},
+                {**{n: init_starts[n] for n in names[k:]}, **call_starts})
     return init_starts, call_starts
 
 
@@ -968,20 +1287,25 @@ def _arguments(fn, section, data, comments, skip_self=False, allow_time=True, co
     try:
         params = list(inspect.signature(fn).parameters.values())
     except (TypeError, ValueError):  # e.g. some C extensions
+        comments.setdefault(NO_SIGNATURE, []).append(getattr(fn, "__qualname__", repr(fn)))
         comments[(section, None)] = f"cannot inspect the signature of {getattr(fn, '__qualname__', fn)}; " \
                                     "add the variables by hand (to = \"pos:N\" for positional arguments)"
         params = []
     if skip_self and params:
         params = params[1:]
+    params = [_unwrap_descriptor(p) for p in params]
     position = 0
     for p in params:
         if p.kind in (p.VAR_POSITIONAL, p.VAR_KEYWORD):
             continue
         if p.kind is p.POSITIONAL_ONLY and not positional:
             continue
-        if allow_time and p.name in TIME_NAMES and p.name not in starts:
-            time_args[p.name] = TIME_NAMES[p.name]
+        if allow_time and _time_source(p.name) and p.name not in starts:
+            time_args[p.name] = _time_source(p.name)
             continue
+        if allow_time and _time_source(p.name) and isinstance(starts.get(p.name), (int, float)):
+            comments[(section, p.name)] = (f"from --start, so a fixed value; to pass the simulation time instead, "
+                                           f"remove it and add [time] {p.name} = \"{_time_source(p.name)}\"")
         how = _is_datetime(fn, p) if allow_time and p.name not in starts else None
         if how == "name":
             comments.setdefault(DATETIME_BY_NAME, []).append(p.name)
@@ -1013,7 +1337,7 @@ def _arguments(fn, section, data, comments, skip_self=False, allow_time=True, co
         if not has_default or isinstance(default, SCALARS):
             info = _type_info(default, p.annotation)
             if p.name in starts:
-                comments[(section, p.name)] = "start from --start"
+                comments.setdefault((section, p.name), "start from --start")
             elif not has_default:
                 comments[(section, p.name)] = "no default in the code: check the start value"
             elif type(default) is int and static.unwrap_optional(p.annotation) is not int:
@@ -1028,6 +1352,8 @@ def _arguments(fn, section, data, comments, skip_self=False, allow_time=True, co
             variables[p.name] = {"type": "Binary", "start": default.hex()}
         elif arrays and _array_info(default):
             variables[p.name] = _array_info(default, with_start=True)
+        elif p.name in starts and _constant(default):   # --start with a value that isn't an FMI one
+            data["model"].setdefault(constants_key, {})[p.name] = _constant(default)
         else:
             comments[("model", f"{constants_key}.{p.name}")] = _constant(default)
         if len(variables) > before and "dimensions" in variables[p.name]:
@@ -1044,23 +1370,45 @@ def _arguments(fn, section, data, comments, skip_self=False, allow_time=True, co
     extra = [name for name in starts
              if name not in names and "." not in name   # ARG.FIELD: a field of an object argument, not a keyword
              and name not in time_args]
-    if extra and section == "parameters" and any(p.kind is p.VAR_POSITIONAL for p in params) \
-            and all(p.kind in (p.VAR_POSITIONAL, p.VAR_KEYWORD) for p in params):
-        # A constructor that only declares (*args, **kwargs), e.g. StateSpace(A, B, C, D):
-        # the --start values go by position, in the order given.
-        for name in extra:
-            variables[name] = _extra_info(name, starts[name], arrays)
-            variables[name]["to"] = f"pos:{position}"
+    only_varargs = any(p.kind is p.VAR_POSITIONAL for p in params) \
+        and all(p.kind in (p.VAR_POSITIONAL, p.VAR_KEYWORD) for p in params)
+    # by position: for a constructor, for computed constants, and when there's no **kwargs to take them
+    by_position = only_varargs and (section == "parameters" or not any(p.kind is p.VAR_KEYWORD for p in params)
+                                    or any(isinstance(starts[n], dict) and "call" in starts[n] for n in extra))
+    for name in extra:
+        computed = isinstance(starts[name], dict) and "call" in starts[name]   # call:...: a constant
+        if by_position:
+            # A callable that only declares (*args, **kwargs), e.g. StateSpace(A, B, C, D):
+            # the --start values go by position, in the order given. Constants are named "0", "1", ...
+            if computed:
+                data["model"].setdefault(constants_key, {})[str(position)] = dict(starts[name])
+                comments[("model", f"{constants_key}.{position}")] = f"--start {name}, passed by position to *args"
+                comments.setdefault(POSITIONAL_STARTS, {})[name] = position
+            else:
+                variables[name] = _extra_info(name, starts[name], arrays)
+                variables[name]["to"] = f"pos:{position}"
+                comments[(section, name)] = "start from --start, passed by position to *args: check the order"
             position += 1
-            comments[(section, name)] = "start from --start, passed by position to *args: check the order"
-    elif any(p.kind is p.VAR_KEYWORD for p in params):  # **kwargs: --start values become keyword arguments
-        for name in extra:
-            variables[name] = _extra_info(name, starts[name], arrays)
-            comments[(section, name)] = "start from --start (passed through **kwargs)"
+        elif any(p.kind is p.VAR_KEYWORD for p in params):  # **kwargs: --start values become keyword arguments
+            if computed:
+                data["model"].setdefault(constants_key, {})[name] = dict(starts[name])
+            else:
+                variables[name] = _extra_info(name, starts[name], arrays)
+                comments[(section, name)] = "start from --start (passed through **kwargs)"
     if time_args and allow_time:
         data["time"] = time_args
     if not variables:
         data.pop(section)
+
+
+def _unwrap_descriptor(p):
+    """A default that is a descriptor (astropy's Parameter(default=3.04, ...) in FlatLambdaCDM's
+    signature) stands for the class's own handling of the argument: its `default` is the value."""
+    default = p.default
+    if p.default is p.empty or callable(default) \
+            or not hasattr(type(default), "__get__") or not hasattr(default, "default"):
+        return p
+    return p.replace(default=default.default)
 
 
 def _extra_info(name, value, arrays):
@@ -1108,7 +1456,7 @@ def _split_items(p, value, variables, section, comments, arrays):
             flat = flatten(list(item))
             if all(isinstance(x, int) and not isinstance(x, bool) for x in flat):   # e.g. atomic numbers, indices
                 info.update(type="Int32", start=flat)
-        info["to"] = f"arg:{p.name}[{key}]"
+        info["to"] = f"{'init' if section == 'parameters' else 'arg'}:{p.name}[{key}]"
         converter = _converter(hints[i]) if i < len(hints) else None
         if converter == "numpy":
             info["numpy"] = True
@@ -1174,7 +1522,7 @@ def _split_fields(fn, p, variables, section, comments, starts, arrays):
         info = _array_info(value, with_start=True) if value is not None and not isinstance(value, SCALARS)             else _type_info(value, static.unwrap_optional(hint))
         if isinstance(info.get("start"), int) and not isinstance(info["start"], bool)                 and static.unwrap_optional(hint) is float:
             info["start"] = float(info["start"])
-        info["to"] = f"arg:{p.name}.{field}"
+        info["to"] = f"{'init' if section == 'parameters' else 'arg'}:{p.name}.{field}"   # a constructor's
         found[f"{p.name}_{field}"] = info
         if value is None:
             comments[(section, f"{p.name}_{field}")] = f"field {field!r} of {p.name} ({cls.__name__}); no default: check the start value"
@@ -1218,15 +1566,19 @@ def _constant(value):
     return None
 
 
-def _probe_args(data, sections, fn=None):
-    """(positional args, keyword args) for a probe call from the inferred start values."""
+def _probe_args(data, sections, fn=None, constants_key=None):
+    """(positional args, keyword args) for a probe call from the inferred start values (and the
+    positional constants of `constants_key`)."""
     values = _probe_kwargs(data, sections)
-    positional = sorted(
+    positional = [
         (int(info["to"].split(":")[1]), name)
         for section in sections for name, info in data.get(section, {}).items()
         if str(info.get("to", "")).startswith("pos:")
-    )
-    args = [values.pop(name) for _, name in positional]
+    ]
+    by_position = {i: values.pop(name) for i, name in positional}
+    if constants_key:
+        by_position.update(_probe_constants(data, constants_key, positional=True))
+    args = [by_position[i] for i in sorted(by_position)]
     from fmugen.templates.fmugen_runtime import assemble_items
     targets = {name: str(info["to"]).partition(":")[2] for section in sections
                for name, info in data.get(section, {}).items()
@@ -1265,7 +1617,7 @@ def _time_kwargs(time_args):
         if isinstance(source, dict):   # { source = ..., epoch = ... }: a date-time
             kwargs[arg] = datetime.datetime.fromisoformat(source["epoch"])
         else:
-            kwargs[arg] = PROBE_STEP_SIZE if source == "step_size" else 0.0
+            kwargs[arg] = {"step_size": PROBE_STEP_SIZE, "end_time": PROBE_STEP_SIZE}.get(source, 0.0)
     return kwargs
 
 
@@ -1314,6 +1666,9 @@ def _outputs_from_return(result, data, comments, default_name, is_class, arrays=
     """Outputs from a probe result. Returns the names of the parts it looked at (dict keys,
     tuple positions y0, y1, ...), also those left out because they aren't FMI values."""
     outputs = data.setdefault("outputs", {})
+    wrapped = any(info.get("convert") == "numpy:atleast_1d" for info in data.get("inputs", {}).values())
+    if wrapped and getattr(result, "size", None) == 1 and hasattr(result, "reshape"):
+        result = result.reshape(())[()]   # numbers passed as one-element arrays: a number comes back as one
     if isinstance(result, Mapping):
         items = [(str(k), v, f"return:{k}") for k, v in result.items()]
     elif _table_children(result) is not None:   # pandas Series / one-row DataFrame, xarray Dataset
@@ -1326,12 +1681,17 @@ def _outputs_from_return(result, data, comments, default_name, is_class, arrays=
         items = [(f"{default_name}{i}", v, f"return:{i}") for i, v in enumerate(result)]
     elif _fmi_value(result) or (result is not None and _misfit(result)):
         items = [(default_name, result, "return")]
-    elif result is not None and hasattr(result, "__dict__"):
-        items = [(k, v, f"return:{k}") for k, v in vars(result).items() if not k.startswith("_")]
+    elif result is not None and (hasattr(result, "__dict__") or _public_properties(result)):
+        # an object: its public attributes and properties, e.g. uncertainties' nominal_value, std_dev
+        public = {k: v for k, v in getattr(result, "__dict__", {}).items() if not k.startswith("_")}
+        public.update({k: v for k, v in _public_properties(result).items() if k not in public})
+        items = [(k, v, f"return:{k}") for k, v in public.items()]
     else:
         items = []
     looked_at = {name for name, _, _ in items}
     items = [leaf for name, value, source in items for leaf in _nested(name, value, source, arrays)]
+    # keys that aren't names (radioactivedecay's "N-14"): a valid name, the real key kept in `from`
+    items = [(_valid_name(name), value, source) for name, value, source in items]
     taken = {n for section in ("parameters", "inputs", "states") for n in data.get(section, {})}
     for name, value, source in items:
         if name in taken:  # e.g. an object that echoes its inputs as attributes
@@ -1399,6 +1759,40 @@ def _table_children(value):
     except Exception:
         return None
     return [(k, v) for k, v in pairs if isinstance(k, str)]
+
+
+def _public_properties(obj):
+    """{name: value} of the public properties of obj's class whose value is an FMI value; of
+    properties that are the same object under several names (uncertainties' n and nominal_value),
+    only the longest name."""
+    by_property = {}
+    for name in dir(type(obj)):
+        # static lookup: getattr on the class runs descriptors, which can fail (SQLAlchemy hybrid properties)
+        prop = inspect.getattr_static(type(obj), name, None)
+        if isinstance(prop, property) and not name.startswith("_") \
+                and len(name) > len(by_property.get(id(prop), "")):
+            by_property[id(prop)] = name
+    values = {}
+    for name in sorted(by_property.values()):
+        try:
+            value = getattr(obj, name)
+        except Exception:
+            continue
+        if _fmi_value(value):
+            values[name] = value
+    return values
+
+
+def _valid_name(name):
+    """A dotted variable name for a result key: other characters become "_" ("N-14" -> "N_14"), and a
+    part that starts with a digit or is a keyword gets a leading "_"."""
+    parts = []
+    for part in str(name).split("."):
+        part = re.sub(r"\W", "_", part) or "_"
+        if part[0].isdigit() or keyword.iskeyword(part):
+            part = f"_{part}"
+        parts.append(part)
+    return ".".join(parts)
 
 
 def _dotted_name(name):
@@ -1484,6 +1878,8 @@ def _scalar_of(value):
     else the value itself."""
     if hasattr(value, "magnitude") and hasattr(value, "units"):
         value = value.magnitude
+    elif hasattr(value, "unit") and hasattr(value, "to_value"):   # an astropy Quantity
+        value = value.value
     # numpy scalars (np.float32, ...) also have ndim 0, but are handled as they are, keeping their type
     if getattr(value, "ndim", None) == 0 and hasattr(value, "item") and type(value).__name__ not in NUMPY_SCALARS:
         try:
@@ -1504,11 +1900,20 @@ def _number_like(value):
     """Decimal, Fraction, numpy.float16, ... : anything that converts to a float or an int and isn't an array."""
     if getattr(value, "ndim", 0) or isinstance(value, (str, bytes, complex)):
         return False
-    return hasattr(type(value), "__float__") or hasattr(type(value), "__index__")
+    if not (hasattr(type(value), "__float__") or hasattr(type(value), "__index__")):
+        return False
+    try:   # uncertainties' AffineScalarFunc has __float__, but it raises
+        float(value)
+    except Exception:
+        return False
+    return True
 
 
 def _unit_of(value):
     """The unit of a pint quantity, written compactly ("m/s"); None for anything else or dimensionless."""
+    if hasattr(value, "unit") and hasattr(value, "to_value"):   # an astropy Quantity
+        unit = value.unit.to_string() if hasattr(value.unit, "to_string") else str(value.unit)
+        return unit or None
     units = getattr(value, "units", None)
     if units is None or not hasattr(value, "magnitude"):
         return None
@@ -1566,11 +1971,11 @@ def _shape(value):
 
 
 def _same(a, b):
-    if hasattr(a, "tolist"):
-        a = a.tolist()
-    if hasattr(b, "tolist"):
-        b = b.tolist()
     try:
+        if hasattr(a, "tolist"):
+            a = a.tolist()
+        if hasattr(b, "tolist"):
+            b = b.tolist()
         return a == b or (isinstance(a, float) and isinstance(b, float) and math.isnan(a) and math.isnan(b))
     except Exception:
         return False
@@ -1613,6 +2018,8 @@ def render_toml(data, comments=None):
             lines.append(_with_comment(f"{_key(key)} = {_value(value)}", comments.get(("model", key))))
     if "save_state" not in data["model"] and ("model", "#save_state") in comments:
         lines.append(f"# {comments[('model', '#save_state')]}")
+    if ("model", "#requirements") in comments:
+        lines.append(f"# {comments[('model', '#requirements')]}")
     for table in ("constants", "call_constants"):
         real = data["model"].get(table, {})
         examples = [
