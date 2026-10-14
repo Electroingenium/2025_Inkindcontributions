@@ -1,11 +1,11 @@
-# fmugen review: open items, fixed items and feature ideas
+# fmugen review: open items and feature ideas
 
 This file combines two reviews of the whole repository:
 
 | Review | Branch | Scope |
 |---|---|---|
 | 2026-10-05, status updated 2026-10-06 | `tomas` @ `30d827b` … `8aa4903` | All first-party source, the UniFMU integration, tests, docs, examples, the Docker demo, packaging and repo hygiene, with a focus on **portability, installability and how wide a range of models fmugen handles**. Checked by reading the code, running the tests, building the wheel and probing model shapes with `fmugen init`. |
-| 2026-10-14 | `dev` @ `e3276ac` … | All of `src/fmugen` again (CLI, config, XML writer, composite, distribute, runtime, adapters, launcher), the inference code (`interface.py`, `static.py`) and the Docker demo, looking for bugs, gaps and features. Most of what it found is fixed (§4). |
+| 2026-10-14 | `dev` @ `e3276ac` … | All of `src/fmugen` again (CLI, config, XML writer, composite, distribute, runtime, adapters, launcher), the inference code (`interface.py`, `static.py`) and the Docker demo, looking for bugs, gaps and features. |
 
 - **[verified]** means the finding was reproduced (UniFMU 0.14.0, the project's uv environment, Windows).
 - **[code]** means it was found by reading the code.
@@ -43,16 +43,15 @@ What still stands between fmugen and an open-source release is **distribution**,
 Already supported, each checked with published models ([docs/tested-models.md](docs/tested-models.md) and its later rounds): functions and classes; attributes, properties and setter methods; positional-only arguments of C extensions; `setup` calls; `kind = "function"`; arrays and numpy (FMI 3 arrays, FMI 2 one scalar per element); enums; clocks; factories (`[model] create`, a function entry with `call`); computed constants (`{ call = … }`); converted inputs (`convert = "torch:tensor"`, `"pint"`); tuple, dict and dataclass/pydantic/attrs arguments; NamedTuple, nested dict/object, pandas and xarray results; anything with `__float__`; module globals; data files with `[model] cwd`; composite FMUs; Hugging Face weights bundled with `--hf-weights`.
 
 Still missing:
-- **Generators** (`yield`-based models, driven with `next()`/`send()`). `build` refuses them with a hint, because no published generator model was found to design the inputs (what `send()` gets) against; simpy models already work through a factory calling `env.run(until=…)`. Async models (`async def step`) are supported (§4).
+- **Generators** (`yield`-based models, driven with `next()`/`send()`). `build` refuses them with a hint, because no published generator model was found to design the inputs (what `send()` gets) against; simpy models already work through a factory calling `env.run(until=…)`. Async models (`async def step`) are supported.
 - **Other model formats:** Jupyter notebooks (`.ipynb` entry), scikit-learn (`kind = "sklearn"` calling `predict` with the inputs as features) and standalone ONNX files. Six published PyTorch and ONNX Runtime networks already work unmodified.
-- **Not reproduced:** the 2026-10-14 review said `init` could add a `.venv`, `venv`, `env`, `build` or `dist` folder inside the config folder to `sources`. Packages in a project's virtual environment are under `site-packages`, which `_local_sources` already skips, and a module imported from `build/` or `env/` is code the model runs, so nothing was changed.
 - **Inference:** a `state` dict passed in and returned (`def step(u, state): …; return y, state`) isn't recognised as a state; it needs `to = "arg:state[key]"` / `next = "return:1.key"` by hand.
 
 ### 2.4 Smaller code items
 - **modelDescription:** FMI 3 terminals and icons aren't supported (low priority).
 
 ### 2.5 Tests and quality
-- **No test from an installed wheel.** That is how the first review found a wheel that couldn't build anything (§4).
+- **No test from an installed wheel.** That is how the first review found a wheel that couldn't build anything.
 - **FMPy is the only importer used.** Add [fmusim from the Reference FMUs](https://github.com/modelica/Reference-FMUs) and, optionally, OMSimulator: importers call functions in different orders.
 - **The published-model tests are manual.** An opt-in `pytest -m pypi` suite built from the 46 configs in `docker/models/r3/*/fmugen.toml` would keep the promise that fmugen works on real published models checked.
 - **Property-based tests** (Hypothesis) for `render_toml` → `load_config` round trips and for `coerce` / `reshape` / `flatten`.
@@ -89,49 +88,7 @@ Ordered by value for users.
 
 ---
 
-## 4. Fixed
-
-### Review of 2026-10-05/06
-| Item | What was done |
-|---|---|
-| The wheel had no UniFMU boilerplate, so `pip install` gave a tool that couldn't build anything [verified] | `fmugen build` runs `unifmu generate` and requires UniFMU 0.14.0 (on `PATH` or `FMUGEN_UNIFMU`; other versions are refused) |
-| Placeholder package metadata, and dependencies fmugen never imported (PySide6, plotly, FMPy, …) | The package is `fmugen`, with real metadata; its dependencies are what UniFMU's backend imports (`protobuf==5.27.3`, `pyzmq`) plus `cloudpickle` |
-| Which Python ran the FMU was unclear | The FMU runs with the environment fmugen is installed in (the model's). `--vendor` (wheels installed offline on first run; needs Python) and `--compile pyinstaller\|nuitka` (no Python, no sources, one OS) make FMUs for other machines. `--distributed` runs the model on another host |
-| `build` and `init` ran the model, which is unsafe for hardware or network models | Neither does by default: `init` reads the source code, and only calls the model with `--probe` |
-| Inference gaps: NamedTuple returns, nested dicts and objects, factories and tensors, number-like values (0-d arrays, `Decimal`, pint), lists in FMI 2, pandas/xarray results, dataclass/pydantic/attrs arguments, `Optional` annotations, composite models, data files, int outputs, `Boolean` strings, very large arrays (O(n²)), module globals, models that can't be pickled | All closed, each checked with a published model where one was found (see §2.4 for what's supported) |
-| `init` crashed after importing `transformers` | Import cleanup reads `__dict__`, which doesn't trigger lazy imports |
-| Builds weren't reproducible | The GUID is a hash of the FMU's files, `generationDateAndTime` follows `SOURCE_DATE_EPOCH`, and zip entries have fixed order, dates and modes |
-| `.idea/` was tracked; `tools/unifmu.exe` (23 MB) was in the history of `tomas` | Untracked; removed from `tomas` with `git filter-branch` |
-
-### Review of 2026-10-14
-| Item | What was done |
-|---|---|
-| **The GUID changed on every build** [verified]: the hash included `modelDescription.xml`, whose `generationDateAndTime` is the build time unless `SOURCE_DATE_EPOCH` is set | The hash leaves the date out; a test builds twice without `SOURCE_DATE_EPOCH` |
-| **Tunable parameters passed by position were silently ignored** after initialization [verified with simple_pid] | Refused without `attr`; tuning an attribute the object doesn't have is an error status. A test changes a tunable parameter between steps for every binding kind (`init`, `initpos`, `attr`, `call`, `arg`) |
-| **Function models were called with `dt = 0` at initialization** when `[experiment]` had no `step_size` | No init call in that case (`init_call = true` still forces it); the extra init call of function models is documented |
-| **Composite parts could share helper modules** (two `utils.py` run as one) | Refused: every part's local modules are compared |
-| **Composite connections didn't check types** | Checked at build time (integers and Booleans may feed floats, integers feed integers, enumerations need the same items) |
-| **Constants changed in place weren't reset or restored** | Value constants are copied, saved with the FMU state and put back on reset; `{ call = … }` constants stay shared (documented) |
-| Smaller: FMI 3 interval/shift fractions could overflow uint64; `fmi3DoStep` reported `t + h` as the last successful time after a failed step; FMI 3 ignored the importer's `logging_on`; the `--capture-output` file grew for the whole run; a failed build deleted the previous output; relative file paths were taken for Hugging Face repo ids; three lines had lost their line breaks | All fixed, with tests |
-| **Model files named like a standard library module** (`json.py`, `queue.py`) broke the backend | Refused by `init` and `build` |
-| **`spec_version` in `interface.json` was never checked** | The runtime refuses another version, also for each part of a composite |
-| **The quick test suite took 5.5–11 min** | Builds generate UniFMU's template once per process and hard-link its binaries (a new copy of `unifmu.dll` took ~0.55 s to open while the virus scanner checked it): a folder build takes 0.34 s instead of 1.9 s. `packages_distributions()` (0.8 s per `init`) is cached. Tests that run FMUs through UniFMU are marked `fmu`: `pytest -m "not slow and not fmu"` takes about a minute, `-m "not slow"` about 2 min |
-| No `fmugen.__version__`; the package docstring said FMI 2 only | Added, from the installed package's metadata; the docstring says FMI 2.0 or 3.0 |
-| Docker demo was FMI 2 only, on Python 3.11 | It handles FMI 3 too, and its image is on Python 3.13 |
-| **A model couldn't reject a step** (`discard` was never returned) | `[model] discard_on = ["module:Exception", …]`: those exceptions, and warnings in the list, make `doStep` return `discard` with the step undone (FMU state saved before each step); a composite undoes every part. Checked through UniFMU with iapws' `_TSat_P` above the critical pressure |
-| **`start_time`, `stop_time` and `tolerance` couldn't reach the model** | New `[time]` sources |
-| **No way to run an ODE right-hand side** `f(t, y)` | `[model] integrate = "euler" \| "rk4" \| "scipy:<method>"` (with `substeps`; states have `der`; the importer's tolerance is scipy's `rtol`; a failed solve is a discard). dysts' `Lorenz.rhs`, unmodified, matches a tight `solve_ivp` reference within 1e-6 (FMI 3, DOP853) and 3e-8 (FMI 2, RK4) over 20 steps through UniFMU |
-| **Async models** | An `async def` step method, constructor or `terminate` is run on one event loop kept for the run; generators are refused with a hint (§2.3) |
-| **Composites couldn't be compiled, or have parts with clocks, structural parameters or `[events]`** | `--compile` freezes every part (the pvlib irradiance → cell temperature → DC power composite compiled with PyInstaller gives results identical to pvlib); parts' clocks become `<part>.<clock>`, configuration mode reaches the parts with structural parameters, and clocked or resizable variables can't be connected |
-| **Inference:** only `x_prev` was a state name; a file that only re-exported its model gave "found: none"; `--probe` had no time limit | `x_old`, `x_last`, `prev_x`, `last_x`, `old_x` (fed back from `x_next`, `next_x`, `x_new`, `new_x`, `x`); `__all__` is the fallback; `--probe-timeout SECONDS` (no limit by default) |
-| **CLI:** an exception from the model's code printed a raw traceback | A one-line `fmugen: error: <type>: <message>` (exit code 1); `--debug` shows the traceback |
-| **Config:** FMI 2 refused `Float32`/`Int64`; the description was the whole first docstring line; `start = 1` for a Boolean didn't suggest `true`; `min`/`max` weren't checked | FMI 2 maps them to `Real`/`Integer` (with a note on the 32-bit range); the first line, cut at 200 characters; the error says `use true`; `min <= max` and `start` in range are checked at build time |
-| **Runtime:** no warning when `doStep`'s time didn't match the FMU's; `SetDebugLogging` ignored its categories; reset didn't call the model's `terminate`; the docs didn't say FMU states must come from a trusted source | All fixed, with tests; docs/fmi.md warns that a serialized state is a pickle |
-| **modelDescription:** units without `BaseUnit`; no `displayUnit`, `relativeQuantity`, `unbounded`, `reinit` or annotations | SI `<BaseUnit>` for recognised units (with prefixes and Modelica-style products, `W/(m2.K)`); per-variable `extra = { … }` attributes, with `<DisplayUnit>` and its conversion; `[model] annotations` (`<VendorAnnotations>` in FMI 2, `<Annotations>` in FMI 3). Validated by FMPy for both versions |
-
----
-
-## 5. What is already good (keep it)
+## 4. What is already good (keep it)
 
 - **The user's code is never changed.** Every adaptation (positional-only arguments, setters, `kind = "function"`, setup calls, converters) is done in the config.
 - **One engine and two thin adapters,** so FMI 2 and FMI 3 behaviour can't drift apart.
