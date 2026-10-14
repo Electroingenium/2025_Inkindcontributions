@@ -363,7 +363,7 @@ Before `fmugen build`:
 - [ ] **Entry and step method.** For a class, is `call` the method that advances the model by one step?
 - [ ] **Start values.** Every variable `# no default in the code` has a value the model accepts.
 - [ ] **Integer vs Real.** Every `# Integer because the default is an int` is fixed if the quantity is real.
-- [ ] **States.** If the model takes its previous result as an argument under a name other than `x_prev`, add a `[states]` entry by hand (see [below](#add-a-state-init-didnt-detect)).
+- [ ] **States.** If the model takes its previous result as an argument under a name `init` doesn't recognise (`x_prev`, `x_old`, `last_x`, … — see [models.md](models.md#state-fed-back-between-steps)), add a `[states]` entry by hand (see [below](#add-a-state-init-didnt-detect)).
 - [ ] **Outputs.** Delete the ones you don't need, rename `y`, `y0`, `y1` to meaningful names, and resolve every commented line (uncomment or delete).
 - [ ] **Units and descriptions.** Add them; `init` never does.
 - [ ] **Tunable parameters.** Add `variability = "tunable"` where it makes sense.
@@ -408,7 +408,7 @@ A model that takes its own previous result (Madgwick's `updateIMU(q, gyr, acc)` 
 q = { dimensions = [4], start = [1.0, 0.0, 0.0, 0.0], next = "return" }
 ```
 
-`init` only detects `x_prev` → `x_next` / `x` naming.
+`init` only detects previous-value names such as `x_prev`, `x_old` or `last_x`, fed back from `x_next`, `x_new` or `x`.
 
 ### Expose a fixed argument as a parameter, or hide one
 

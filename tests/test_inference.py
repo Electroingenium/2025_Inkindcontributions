@@ -611,6 +611,54 @@ def test_outputs_are_read_from_the_object_the_step_returns(tmp_path):
     assert data["outputs"] == {"density": {"from": "return:density"}}   # not the original object's raising ones
 
 
+@pytest.mark.parametrize("previous, following", [("x_old", "x_new"), ("last_x", "next_x"), ("prev_x", "x"),
+                                                 ("x_last", "x_next")])
+def test_state_naming_conventions(tmp_path, previous, following):
+    (tmp_path / "m.py").write_text(f"def step(u: float = 1.0, {previous}: float = 0.0):\n"
+                                   f"    return {{'{following}': {previous} + u}}\n")
+    data, _ = infer(tmp_path / "m.py", probe=False)
+    assert data["states"] == {previous: {"start": 0.0, "next": f"return:{following}"}}
+
+
+def test_a_file_that_only_re_exports_its_model(tmp_path):
+    (tmp_path / "plant_core.py").write_text("def model(x: float = 1.0):\n    return {'y': 2 * x}\n\n"
+                                            "def helper():\n    pass\n")
+    (tmp_path / "plant.py").write_text("from plant_core import model, helper\n__all__ = ['model']\n")
+    data, _ = infer(tmp_path / "plant.py", probe=False)
+    assert data["model"]["entry"] == "plant.py:model"
+    assert data["model"]["sources"] == ["plant_core.py"]
+
+
+def test_sources_skip_virtual_environments_and_build_folders(tmp_path):
+    from fmugen.interface import _local_sources
+    for folder in (".venv/lib", "build/lib", "helpers"):
+        (tmp_path / folder).mkdir(parents=True)
+    (tmp_path / ".venv" / "pyvenv.cfg").write_text("")
+    (tmp_path / "m.py").write_text("")
+    modules = {}
+    for name, rel in (("venv_mod", ".venv/lib/venv_mod.py"), ("built_mod", "build/lib/built_mod.py"),
+                      ("helper_mod", "helpers/helper_mod.py")):
+        (tmp_path / rel).write_text("")
+        modules[name] = type(sys)(name)
+        modules[name].__file__ = str(tmp_path / rel)
+    original = dict(sys.modules)
+    sys.modules.update(modules)
+    try:
+        assert _local_sources((tmp_path / "m.py").resolve(), tmp_path.resolve()) == ["helpers"]
+    finally:
+        sys.modules.clear()
+        sys.modules.update(original)
+
+
+def test_probe_timeout_stops_the_process(tmp_path):
+    import subprocess
+    (tmp_path / "slow.py").write_text("import time\n\ndef slow(x: float = 1.0):\n    time.sleep(60)\n"
+                                      "    return {'y': x}\n")
+    result = subprocess.run([sys.executable, "-m", "fmugen", "init", str(tmp_path / "slow.py"), "--probe",
+                             "--probe-timeout", "2"], capture_output=True, text=True, timeout=50)
+    assert result.returncode == 2 and "did not finish in 2 s" in result.stderr
+
+
 def test_model_files_named_like_standard_library_modules_are_refused(tmp_path):
     from fmugen.__main__ import build, init
     from fmugen.config import InterfaceError

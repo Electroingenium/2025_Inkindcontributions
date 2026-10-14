@@ -52,9 +52,7 @@ class Model:
             self.log("an output clock ticked, but the importer does not use event mode; the tick is dropped",
                      Fmi3Status.warning, "logStatusWarning")
             event_needed = False
-            for name, clock in self.engine.clocks.items():
-                if clock["causality"] == "output":
-                    self.engine.clock_active[name] = False
+            self.engine.drop_output_ticks()
         early_return = False  # a Python step runs to completion
         # the step failed: the FMU is still at the start of the step
         last_successful_time = current_communication_point + (
@@ -246,8 +244,7 @@ class Model:
     # ================= Logging =================
 
     def fmi3SetDebugLogging(self, categories, logging_on):
-        self.engine.logging_on = bool(logging_on)
-        return Fmi3Status.ok
+        return self.engine.set_debug_logging(logging_on, categories or ())
 
     def log(self, message, status, category = "logEvents"):
         # Removing the line below will break logging.

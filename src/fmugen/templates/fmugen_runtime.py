@@ -9,6 +9,7 @@ The user's code is never modified. The FMI-version-specific adapters translate
 FMI calls into the methods of `Engine`.
 """
 import ast
+import asyncio
 import builtins
 import contextlib
 import copy
@@ -27,6 +28,7 @@ import tempfile
 import traceback
 import types
 import typing
+import warnings
 from collections.abc import Mapping
 from fractions import Fraction
 from pathlib import Path
@@ -64,11 +66,16 @@ class Status:
     fatal = 4
 
 
+class StepRejected(Exception):
+    """A step the FMU can't complete ([model] integrate: the solver failed); doStep returns discard."""
+
+
 class Engine:
     def __init__(self, resources_dir, log, info_category="logAll"):
         """`log(message, status, category)` forwards a message to the importer."""
         self.resources_dir = Path(resources_dir)
-        self.log = log
+        self._send_log = log
+        self.log_categories = None   # fmi2/3SetDebugLogging: None = every category
         self.info_category = info_category
         self.interface = json.loads((self.resources_dir / "interface.json").read_text())
         self._output, self._position = _capture_output(self.interface.get("capture_output", False)), 0
@@ -104,6 +111,11 @@ class Engine:
             # [model] globals: module-level state, put back to its import-time value on reset
             self.globals = [split_global(ref) for ref in self.interface.get("globals", [])]
             self.global_starts = copy.deepcopy(self._read_globals())
+            # [model] discard_on: exceptions and warnings that make doStep return discard (the step is undone)
+            self.discard_on = tuple(resolve_reference(ref) for ref in self.interface.get("discard_on", []))
+        if self.interface.get("integrate"):   # a failed solve rejects the step
+            self.discard_on += (StepRejected,)
+        self._loop = None   # the event loop of an async model, kept for the whole run
         self.is_class = self.interface["entry"]["kind"] == "class"
         self.reset()
         self._forward_output()   # e.g. warnings printed while the model was imported
@@ -111,6 +123,10 @@ class Engine:
     # ================= life cycle =================
 
     def reset(self):
+        method = self.interface["entry"].get("terminate")
+        if method and getattr(self, "obj", None) is not None and self.mode != "terminated":
+            # release what the model holds (serial ports, files) now, not when it is garbage collected
+            self.run("terminate (reset)", lambda: self._await(getattr(self.obj, method)()))
         if getattr(self, "global_starts", None):
             self._write_globals(copy.deepcopy(self.global_starts))
         if getattr(self, "constants", None) is not None:   # constants the model may have changed in place
@@ -156,8 +172,8 @@ class Engine:
                 kwargs = keyword_constants(self.constants)
                 kwargs.update(self._bound("init"))
                 create = self.interface["entry"].get("create")
-                self.obj = (getattr(self.entry, create) if create else self.entry)(
-                    *self._positional(kind="initpos"), **kwargs)
+                self.obj = self._await((getattr(self.entry, create) if create else self.entry)(
+                    *self._positional(kind="initpos"), **kwargs))
                 self._run_setup(after_construction=True)
                 self._apply_attributes(clock=None)
                 for name in self.clocks:
@@ -183,11 +199,21 @@ class Engine:
         fixed = self.experiment.get("step_size") if self.experiment.get("fixed_step") else None
         if fixed is not None and not math.isclose(step_size, fixed, rel_tol=1e-9, abs_tol=1e-12):
             return self.error(f"this FMU only supports a communication step size of {fixed}, got {step_size}"), False
+        if not math.isclose(current_time, self.time, rel_tol=1e-9, abs_tol=1e-9):
+            # the importer skipped or repeated time without restoring a saved FMU state
+            self.log(f"doStep at time {current_time}, but the FMU is at time {self.time} (no FMU state was "
+                     "restored): the model continues from its current state", Status.warning, "logStatusWarning")
+        # [model] discard_on: the state before the step, to undo a step the model rejects
+        saved = self.serialize()[1] if self.discard_on and self.interface.get("save_state", True) else None
 
         ticked = []
 
         def advance():
-            if self.interface["entry"].get("step", True):
+            if self.interface.get("integrate"):   # the model returns derivatives: integrate, then read outputs
+                self._integrate(current_time, step_size)
+                result, have_result = self._call(current_time + step_size, step_size), True
+                self._read_results(result, have_result=True, update_states=False, missing_ok=False)
+            elif self.interface["entry"].get("step", True):
                 result, have_result = self._call(current_time, step_size), True
                 self._read_results(result, have_result=True, update_states=True, missing_ok=False)
             else:  # [model] call = false: only clocks run code
@@ -196,7 +222,11 @@ class Engine:
             ticked.extend(self._check_output_clocks(result, have_result=have_result))
             self._check_events(result, have_result=have_result)
 
-        status = self.run("doStep", advance)
+        status = self.run("doStep", advance, discard=self.discard_on)
+        if status == Status.discard:
+            if saved:
+                self.deserialize(saved)
+            return status, False
         if status == Status.ok:
             self.time = current_time + step_size
         return status, bool(ticked)
@@ -205,7 +235,7 @@ class Engine:
         method = self.interface["entry"].get("terminate")
         status = Status.ok
         if method and self.obj is not None:
-            status = self.run("terminate", lambda: getattr(self.obj, method)())
+            status = self.run("terminate", lambda: self._await(getattr(self.obj, method)()))
         self.mode = "terminated"
         return status
 
@@ -390,6 +420,13 @@ class Engine:
 
     # ================= clocks =================
 
+    def drop_output_ticks(self):
+        """Forget output clock ticks the importer won't read (it doesn't use event mode)."""
+        for name, clock in self.clocks.items():
+            if clock["causality"] == "output":
+                self.clock_active[name] = False
+        return Status.ok
+
     def set_clocks(self, references, values):
         for r, value in zip(references, values):
             clock = self.clock_by_reference.get(r)
@@ -555,15 +592,43 @@ class Engine:
         self.log(message, Status.error, "logStatusError")
         return Status.error
 
-    def run(self, what, fn):
+    def run(self, what, fn, discard=()):
+        """Run model code. An exception is an error, or a discard when it (or a warning raised as
+        one) is an instance of a class in `discard`."""
         try:
-            with self._forward_logs(), self._in_model_dir():
+            with self._forward_logs(), self._in_model_dir(), warnings.catch_warnings():
+                for cls in discard:
+                    if issubclass(cls, Warning):
+                        warnings.simplefilter("error", cls)
                 fn()
         except Exception as e:
             self._forward_output()
+            if discard and isinstance(e, discard):
+                self.log(f"{what} discarded: {e!r}", Status.discard, "logStatusDiscard")
+                return Status.discard
             return self.error(f"{what} failed: {e!r}\n{traceback.format_exc()}")
         self._forward_output()
         return Status.ok
+
+    def log(self, message, status, category):
+        """Send a message to the importer. Errors always go; other messages only in the categories
+        the importer chose with fmi2/3SetDebugLogging (all when it named none)."""
+        if status >= Status.error or self.log_categories is None or category in self.log_categories:
+            self._send_log(message, status, category)
+
+    def set_debug_logging(self, logging_on, categories=()):
+        self.logging_on = bool(logging_on)
+        self.log_categories = set(categories) or None
+        return Status.ok
+
+    def _await(self, value):
+        """The result of an async model's coroutine (async def step), run on one event loop kept for
+        the whole run, so objects bound to that loop keep working; any other value as it is."""
+        if not inspect.isawaitable(value):
+            return value
+        if self._loop is None:
+            self._loop = asyncio.new_event_loop()
+        return self._loop.run_until_complete(_as_coroutine(value))
 
     @contextlib.contextmanager
     def _in_model_dir(self):
@@ -771,7 +836,8 @@ class Engine:
             kwargs.update(self._bound("arg"))
         else:
             kwargs = self._bound("arg", clock=clock)
-        sources = {"time": time, "step_size": step_size, "end_time": time + step_size}
+        sources = {"time": time, "step_size": step_size, "end_time": time + step_size,
+                   "start_time": self.start_time, "stop_time": self.stop_time, "tolerance": self.tolerance}
         epochs = self.interface.get("time_epochs", {})
         for arg, source in self.interface.get("time_args", {}).items():
             if clock is None or arg in self.clocks[clock].get("time_args", ()):
@@ -779,7 +845,60 @@ class Engine:
                 if arg in epochs:   # a date-time: the epoch plus the FMU time in seconds
                     kwargs[arg] = datetime.datetime.fromisoformat(epochs[arg]) + datetime.timedelta(seconds=kwargs[arg])
         self._apply_attributes(clock=clock)
-        return self._target(clock)(*self._positional(clock), **kwargs)
+        return self._await(self._target(clock)(*self._positional(clock), **kwargs))
+
+    def _integrate(self, time, step_size):
+        """[model] integrate: advance the states from `time` over the step, with the model as the
+        right-hand side: called with the states (and inputs) at each stage, it returns their derivatives."""
+        states = [v for v in self.variables if "der" in v]
+        sizes = [self.size(v) or 1 for v in states]
+
+        def load(y):
+            i = 0
+            for v, n in zip(states, sizes):
+                self.values[v["name"]] = [float(x) for x in y[i:i + n]] if v.get("dimensions") else float(y[i])
+                i += n
+
+        def rhs(t, y):
+            load(y)
+            result = self._call(t, step_size)
+            derivatives = []
+            for v, n in zip(states, sizes):
+                found, value = self._source_value(v["der"], result, True)
+                value = plain_number(value)
+                flat = flatten(value.tolist() if hasattr(value, "tolist") else value)
+                if len(flat) != n:
+                    raise ValueError(f"the derivative of {v['name']} has {len(flat)} values, expected {n}")
+                derivatives += [float(x) for x in flat]
+            return derivatives
+
+        y = [float(x) for v in states for x in (self.values[v["name"]] if v.get("dimensions")
+                                                 else [self.values[v["name"]]])]
+        method, substeps = self.interface["integrate"]["method"], self.interface["integrate"]["substeps"]
+        if method.startswith("scipy:"):
+            from scipy.integrate import solve_ivp
+            options = {"rtol": self.tolerance} if self.tolerance else {}
+            solution = solve_ivp(lambda t, x: rhs(t, list(x)), (time, time + step_size), y,
+                                 method=method.partition(":")[2], **options)
+            if not solution.success:
+                raise StepRejected(f"solve_ivp ({method}) failed: {solution.message}")
+            y = [float(x) for x in solution.y[:, -1]]
+        else:
+            h, t = step_size / substeps, time
+            for _ in range(substeps):
+                if method == "euler":
+                    y = [a + h * d for a, d in zip(y, rhs(t, y))]
+                else:   # classic Runge-Kutta, 4th order
+                    k1 = rhs(t, y)
+                    k2 = rhs(t + h / 2, [a + h / 2 * k for a, k in zip(y, k1)])
+                    k3 = rhs(t + h / 2, [a + h / 2 * k for a, k in zip(y, k2)])
+                    k4 = rhs(t + h, [a + h * k for a, k in zip(y, k3)])
+                    y = [a + h / 6 * (p + 2 * q + 2 * r + s) for a, p, q, r, s in zip(y, k1, k2, k3, k4)]
+                t += h
+            if not all(math.isfinite(x) for x in y):
+                raise StepRejected(f"the states are not finite after the step ({method}): try a smaller step "
+                                   "or more substeps")
+        load(y)
 
     def _target(self, clock):
         if clock is None:
@@ -870,7 +989,9 @@ class CompositeEngine:
             v["valueReference"] + k: (v, k) for v in self.variables if v.get("dimensions")
             for k in range(math.prod(v["dimensions"]))}
         self.connections = [(tuple(c["from"]), tuple(c["to"])) for c in self.interface["connections"]]
-        self.clocks, self.clock_active = {}, {}
+        # the parts' clocks, <part>.<clock>: each reference is passed on to its part
+        self.clocks = {c["name"]: c for c in self.interface.get("clocks", [])}
+        self.clock_by_reference = {c["valueReference"]: c for c in self.clocks.values()}
         self.time = self.interface.get("experiment", {}).get("start_time", 0.0)
 
     # ---- helpers ----
@@ -883,6 +1004,9 @@ class CompositeEngine:
     def logging_on(self, on):
         for engine in self.parts.values():
             engine.logging_on = on
+
+    def set_debug_logging(self, logging_on, categories=()):
+        return self._all("set_debug_logging", logging_on, categories)
 
     @property
     def terminate_requested(self):
@@ -941,12 +1065,20 @@ class CompositeEngine:
         return status
 
     def do_step(self, current_time, step_size):
+        # a part that discards its step undoes the whole step: the parts before it are put back too
+        saved = None
+        if any(e.discard_on for e in self.parts.values()) and self.interface.get("can_get_and_set_state", True):
+            saved = self.serialize()[1]
         status, ticked = Status.ok, False
         for name, engine in self.parts.items():
             status = max(status, self._feed(name))
             if status < Status.error:
                 part_status, part_ticked = engine.do_step(current_time, step_size)
                 status, ticked = max(status, part_status), ticked or part_ticked
+            if status == Status.discard:
+                if saved:
+                    self.deserialize(saved)
+                return status, False
             if status >= Status.error:
                 return status, ticked
         self.time = current_time + step_size
@@ -955,11 +1087,21 @@ class CompositeEngine:
     def terminate(self):
         return self._all("terminate")
 
+    def _configurable(self):
+        """The parts with structural parameters (only they have a configuration mode)."""
+        return [e for e in self.parts.values() if any(v["causality"] == "structuralParameter" for v in e.variables)]
+
     def enter_configuration_mode(self):
-        return self.error("a composite FMU has no structural parameters")
+        parts = self._configurable()
+        if not parts:
+            return self.error("this FMU has no structural parameters")
+        return max(e.enter_configuration_mode() for e in parts)
 
     def exit_configuration_mode(self):
-        return self.error("a composite FMU has no structural parameters")
+        parts = self._configurable()
+        if not parts:
+            return self.error("this FMU has no structural parameters")
+        return max(e.exit_configuration_mode() for e in parts)
 
     def enter_event_mode(self):
         return self._all("enter_event_mode")
@@ -975,7 +1117,10 @@ class CompositeEngine:
     # ---- values ----
 
     def size(self, var):
-        return math.prod(var["dimensions"]) if var.get("dimensions") else None
+        if not var.get("dimensions"):
+            return None
+        engine, local, _ = self._target(var["valueReference"])
+        return engine.size(engine.by_reference[local])   # its part knows the structural parameters
 
     def get_values(self, references):
         values = []
@@ -1006,28 +1151,62 @@ class CompositeEngine:
                 return status
         return Status.ok
 
-    # ---- clocks: a composite FMU has none, so every reference is unknown ----
+    # ---- clocks: each one belongs to a part ----
 
-    def _first(self):
-        return next(iter(self.parts.values()))
+    def _clock(self, r):
+        """(part engine, the clock's reference in that part) for one of the FMU's clock references."""
+        clock = self.clock_by_reference.get(r)
+        return (self.parts[clock["part"]], clock["local"]) if clock else (None, None)
+
+    def _clock_values(self, method, references, columns=1):
+        """Call a part's get method (returning status and `columns` lists) for each clock reference."""
+        lists = [[] for _ in range(columns)]
+        for r in references:
+            engine, local = self._clock(r)
+            if engine is None:
+                return (self.error(f"value reference {r} is not a clock"), *([] for _ in lists))
+            status, *values = getattr(engine, method)([local])
+            if status != Status.ok:
+                return (status, *([] for _ in lists))
+            for target, part_values in zip(lists, values):
+                target.extend(part_values)
+        return (Status.ok, *lists)
+
+    def _clock_set(self, method, references, values):
+        for r, value in zip(references, values):
+            engine, local = self._clock(r)
+            if engine is None:
+                return self.error(f"value reference {r} is not a clock")
+            status = getattr(engine, method)([local], [value])
+            if status != Status.ok:
+                return status
+        return Status.ok
+
+    @property
+    def clock_active(self):
+        return {name: self.parts[c["part"]].clock_active[c["name"].partition(".")[2]]
+                for name, c in self.clocks.items()}
+
+    def drop_output_ticks(self):
+        return self._all("drop_output_ticks")
 
     def set_clocks(self, references, values):
-        return self._first().set_clocks(references, values)
+        return self._clock_set("set_clocks", references, values)
 
     def get_clocks(self, references):
-        return self._first().get_clocks(references)
+        return self._clock_values("get_clocks", references)
 
     def get_intervals(self, references):
-        return self._first().get_intervals(references)
+        return self._clock_values("get_intervals", references, columns=2)
 
     def set_intervals(self, references, intervals):
-        return self._first().set_intervals(references, intervals)
+        return self._clock_set("set_intervals", references, intervals)
 
     def get_shifts(self, references):
-        return self._first().get_shifts(references)
+        return self._clock_values("get_shifts", references)
 
     def set_shifts(self, references, shifts):
-        return self._first().set_shifts(references, shifts)
+        return self._clock_set("set_shifts", references, shifts)
 
     # ---- state ----
 
@@ -1070,6 +1249,10 @@ class _ForwardingHandler(logging.Handler):
 
 
 # ================= helpers =================
+
+async def _as_coroutine(awaitable):
+    return await awaitable
+
 
 def _clock_of(var):
     clocks = var.get("clocks")

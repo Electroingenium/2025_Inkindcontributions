@@ -13,6 +13,7 @@ works where it was built. Two ways to ship it elsewhere:
 """
 import ast
 import importlib.util
+import json
 import os
 import re
 import shutil
@@ -158,9 +159,14 @@ def compile_fmu(compiler, resources, interface, work, requirements=()):
                              f"pip install {compiler} (or pip install fmugen[{compiler}])")
     resources, work = Path(resources), Path(work)
     work.mkdir(parents=True, exist_ok=True)
-    paths = [resources, *(resources / p for p in interface["sys_path"])]
-    modules = _modules(interface)
-    data = [(resources / "interface.json", ".")] + _model_data(resources, interface)
+    models = _models(resources, interface)
+    paths = [resources, *(folder / p for folder, model in models for p in model["sys_path"])]
+    modules = sorted({m for _, model in models for m in _modules(model)})
+    data = [(resources / "interface.json", ".")]
+    for folder, model in models:
+        if folder != resources:   # a part of a composite FMU reads its interface.json from parts/<name>/
+            data.append((folder / "interface.json", folder.relative_to(resources).as_posix()))
+        data += _model_data(folder, model)
     if (resources / "endpoint.toml").exists():   # a distributed FMU's private side reads it next to main
         data.append((resources / "endpoint.toml", "."))
     local = {"model", "fmugen_runtime"}
@@ -206,12 +212,31 @@ def compile_fmu(compiler, resources, interface, work, requirements=()):
                else f"it exited normally, but {built} wasn't made")
         raise InterfaceError(f"--compile {compiler} failed ({why}):\n" + "\n".join(lines)[-4000:])
 
-    for item in resources.iterdir():
-        if item.name == MODEL_DIR and interface.get("cwd"):
-            _remove_code(item)   # the model reads its data files from here ([model] cwd)
-        elif item.name not in KEEP_AFTER_COMPILE:
-            shutil.rmtree(item) if item.is_dir() else item.unlink()
+    keep = {folder / MODEL_DIR for folder, model in models if model.get("cwd")}
+    _remove_compiled(resources, keep, top=True)
     shutil.move(str(built), str(resources / EXE_DIR))
+
+
+def _models(resources, interface):
+    """[(folder, interface)] of the models in the FMU: itself, or the parts of a composite FMU."""
+    if not interface.get("composite"):
+        return [(resources, interface)]
+    return [(resources / p["dir"], json.loads((resources / p["dir"] / "interface.json").read_text()))
+            for p in interface["parts"]]
+
+
+def _remove_compiled(folder, keep, top=False):
+    """Remove what is now inside the executable, except the folders the models read data files
+    from ([model] cwd), without their code, and the folders leading to them."""
+    for item in folder.iterdir():
+        if item in keep:
+            _remove_code(item)
+        elif top and item.name in KEEP_AFTER_COMPILE:
+            continue
+        elif item.is_dir() and any(k.is_relative_to(item) for k in keep):
+            _remove_compiled(item, keep)
+        else:
+            shutil.rmtree(item) if item.is_dir() else item.unlink()
 
 
 def _is_package(name):

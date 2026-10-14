@@ -52,11 +52,7 @@ class Composite:
                 part_path = part_path / "fmugen.toml"
             if not part_path.is_file():
                 raise InterfaceError(f"[composite] parts.{name}: {rel!r} is not a fmugen.toml")
-            config = load_config(part_path)
-            for key in ("clocks", "structural_parameters", "events"):
-                if config.data.get(key):
-                    raise InterfaceError(f"[composite] parts.{name}: [{key}] is not supported inside a composite FMU")
-            self.parts[name] = config
+            self.parts[name] = load_config(part_path)
         self.connections = [_connection(text) for text in table.get("connections", [])]
         owners = {}
         for name, config in self.parts.items():
@@ -130,6 +126,13 @@ def combine(composite, interfaces, version, model_name=None, author=None):
             raise InterfaceError(f"[composite] connection: {src}.{src_var} is an input, not a result")
         if (dst, dst_var) in fed:
             raise InterfaceError(f"[composite] connection: {dst}.{dst_var} is fed twice")
+        for end, var in ((f"{src}.{src_var}", source), (f"{dst}.{dst_var}", target)):
+            if var.get("clocks"):
+                raise InterfaceError(f"[composite] connection: {end} is a clocked variable; only variables "
+                                     "that have a value at every step can be connected")
+            if any(isinstance(d, str) for d in var.get("dimensions", ())):
+                raise InterfaceError(f"[composite] connection: {end} is an array sized by a structural "
+                                     "parameter; only fixed-size arrays can be connected")
         if element_count(source) != element_count(target):
             raise InterfaceError(f"[composite] connection: {src}.{src_var} and {dst}.{dst_var} have different sizes")
         why = _type_mismatch(source, target, interfaces[src], interfaces[dst])
@@ -150,6 +153,10 @@ def combine(composite, interfaces, version, model_name=None, author=None):
                 new["declared_type"] = f"{part}.{var['declared_type']}"
             if "depends_on" in var:
                 new["depends_on"] = [f"{part}.{d}" for d in var["depends_on"] if (part, d) not in fed]
+            if var.get("clocks"):
+                new["clocks"] = [f"{part}.{c}" for c in var["clocks"]]
+            if var.get("dimensions"):   # a structural parameter sizing it is one of the FMU's variables too
+                new["dimensions"] = [f"{part}.{d}" if isinstance(d, str) else d for d in var["dimensions"]]
             variables.append(new)
     if version == 3:
         variables.append({"name": "time", "causality": "independent", "variability": "continuous",
@@ -158,6 +165,12 @@ def combine(composite, interfaces, version, model_name=None, author=None):
     for var in variables:
         var["valueReference"] = vr
         vr += element_count(var) if version == 2 else 1
+    # the parts' clocks, named <part>.<clock>, after the variables (FMI 3 only: a part's config refuses
+    # clocks for FMI 2)
+    clocks = [dict(clock, name=f"{part}.{clock['name']}", part=part, local=clock["valueReference"])
+              for part, interface in interfaces.items() for clock in interface.get("clocks", [])]
+    for vr, clock in enumerate(clocks, start=vr):
+        clock["valueReference"] = vr
 
     experiment = dict(composite.experiment)
     fixed = {i.get("experiment", {}).get("step_size") for i in interfaces.values()
@@ -178,9 +191,9 @@ def combine(composite, interfaces, version, model_name=None, author=None):
         "variables": variables,
         "type_definitions": type_definitions,
         "experiment": experiment,
-        "clocks": [],
+        "clocks": clocks,
         "events": {},
-        "has_event_mode": False,
+        "has_event_mode": any(i.get("has_event_mode") for i in interfaces.values()),
         "can_get_and_set_state": all(i.get("can_get_and_set_state", True) for i in interfaces.values()),
         "capture_output": any(i.get("capture_output") for i in interfaces.values()),
     }

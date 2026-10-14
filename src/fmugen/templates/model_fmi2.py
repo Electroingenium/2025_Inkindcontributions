@@ -31,8 +31,7 @@ class Model:
         return status
 
     def fmi2SetDebugLogging(self, categories, logging_on):
-        self.engine.logging_on = bool(logging_on)
-        return Fmi2Status.ok
+        return self.engine.set_debug_logging(logging_on, categories or ())
 
     def fmi2EnterInitializationMode(self):
         return self.engine.enter_initialization_mode()

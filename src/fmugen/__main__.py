@@ -350,8 +350,6 @@ def build(target, output, model_name=None, author=None, output_format="fmu", cal
 
     composite_path = is_composite(target)
     if composite_path:
-        if compiler:
-            raise InterfaceError("--compile does not support composite FMUs yet; use --vendor")
         composite = Composite(composite_path)
         version = fmi_version or composite.fmi_version
         configs, base_dir = composite.parts, composite.path.parent
@@ -584,7 +582,14 @@ def main(argv=None):
     b.add_argument("--private-output", metavar="PATH",
                    help="with --distributed: the private folder (default: <output stem>_private next to -o)")
 
+    for p in (i, b):
+        p.add_argument("--probe-timeout", type=float, metavar="SECONDS",
+                       help="with --probe: stop if the model's probe call takes longer (default: 600)")
+        p.add_argument("--debug", action="store_true",
+                       help="show the full traceback of an unexpected error (default: a one-line message)")
     args = parser.parse_args(argv)
+    if args.probe and args.probe_timeout:
+        args.probe = args.probe_timeout   # a number: the probe's time limit
     try:
         if args.command == "init":
             output, _data = init(args.model, args.output, args.call, args.force, args.fmi,
@@ -599,6 +604,10 @@ def main(argv=None):
                                   args.hf_weights, args.distributed, args.endpoint, args.private_output)
     except (FileExistsError, InterfaceError) as e:
         parser.exit(2, f"fmugen: error: {e}\n")
+    except Exception as e:   # e.g. the model's own code failing while it is imported
+        if args.debug:
+            raise
+        parser.exit(1, f"fmugen: error: {type(e).__name__}: {e}\n(run with --debug for the full traceback)\n")
 
     counts = {}
     for v in interface["variables"]:

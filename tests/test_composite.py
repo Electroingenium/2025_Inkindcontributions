@@ -1,5 +1,7 @@
 """Composite FMUs: several fmugen models in one FMU, connected output to input."""
+import importlib.util
 import textwrap
+import zipfile
 
 import pytest
 from fmpy import read_model_description, simulate_fmu
@@ -111,9 +113,20 @@ def test_composite_connection_errors(tmp_path, connections, message):
         build(write_composite(tmp_path, connections), tmp_path / "out", output_format="folder")
 
 
-def test_composite_cannot_be_compiled_yet(tmp_path):
-    with pytest.raises(InterfaceError, match="--compile"):
-        build(write_composite(tmp_path), tmp_path / "out.fmu", compiler="pyinstaller")
+@pytest.mark.slow
+@pytest.mark.fmu
+def test_compiled_composite_has_no_sources_and_simulates(tmp_path):
+    if not importlib.util.find_spec("PyInstaller"):
+        pytest.skip("PyInstaller is not installed")
+    fmu = build(write_composite(tmp_path), tmp_path / "loop.fmu", compiler="pyinstaller")[0]
+    with zipfile.ZipFile(fmu) as z:
+        names = z.namelist()
+    assert not any(n.endswith(".py") for n in names)
+    assert [n for n in names if n.startswith("resources/") and not n.startswith("resources/dist/")
+            and not n.endswith("/")] == ["resources/launch.toml"]
+    result = simulate_fmu(str(fmu), stop_time=5.0, output_interval=1.0, start_values={"valve.setpoint": 3.0},
+                          output=["tank.y"])
+    assert list(result["tank.y"][1:]) == pytest.approx(closed_loop(5, setpoint=3.0))
 
 
 def test_composite_parts_with_modules_of_the_same_name_are_refused(tmp_path):
@@ -136,3 +149,54 @@ def test_composite_connection_types_are_checked(tmp_path, fmi):
     init(tmp_path / "valve" / "valve.py", force=True)
     with pytest.raises(InterfaceError, match="valve.state -> tank.inflow: a String can't be passed to a"):
         build(path, tmp_path / "out", output_format="folder", fmi_version=fmi)
+
+
+def test_composite_of_parts_with_clocks_and_structural_parameters(tmp_path, adapter):
+    from conftest import EXAMPLES
+    (tmp_path / "fmugen.toml").write_text(textwrap.dedent(f"""
+        [composite]
+        fmi_version = 3
+        parts = {{ pid = "{(EXAMPLES / 'sampled_pid').as_posix()}", kf = "{(EXAMPLES / 'kalman').as_posix()}" }}
+    """))
+    out = tmp_path / "fmu"
+    _, interface = build(tmp_path / "fmugen.toml", out, output_format="folder")
+    assert [c["name"] for c in interface["clocks"]] == ["pid.sample", "kf.measurement"]
+    assert interface["has_event_mode"] and interface["experiment"]["step_size"] == 0.1
+    by_name = {v["name"]: v for v in interface["variables"]}
+    assert by_name["kf.x"]["dimensions"] == ["kf.dim_x"] and by_name["kf.z"]["clocks"] == ["kf.measurement"]
+
+    fmu = adapter(out, fmi=3, event_mode_used=True)
+    assert fmu.fmi3EnterConfigurationMode() == OK              # only the Kalman filter has structural parameters
+    assert fmu.set("kf.dim_z", 1) == OK
+    assert fmu.fmi3ExitConfigurationMode() == OK
+    fmu.initialize()                                           # -> event mode
+    assert fmu.fmi3GetIntervalDecimal([fmu.vr["pid.sample"], fmu.vr["kf.measurement"]]) == (OK, [0.1, 0.0], [2, 0])
+    assert fmu.fmi3SetClock([fmu.vr["pid.sample"]], [True]) == OK
+    assert fmu.fmi3UpdateDiscreteStates()[0] == OK, fmu.logs
+    assert fmu.get("pid.output") == pytest.approx(2.0 + 0.5 * 0.1)
+    assert fmu.fmi3GetClock([fmu.vr["pid.sample"], fmu.vr["kf.measurement"]]) == (OK, [True, False])
+    assert fmu.fmi3EnterStepMode() == OK
+    t = 0.0
+    for k in range(9):                                          # an object moving at 1 m/s
+        assert fmu.fmi3DoStep(t, 0.1, False)[0] == OK, fmu.logs
+        t += 0.1
+        if k % 3 == 2:
+            assert fmu.fmi3EnterEventMode() == OK
+            assert fmu.set("kf.z", [t]) == OK
+            assert fmu.fmi3SetClock([fmu.vr["kf.measurement"]], [True]) == OK
+            assert fmu.fmi3UpdateDiscreteStates()[0] == OK, fmu.logs
+            assert fmu.fmi3EnterStepMode() == OK
+    assert fmu.engine.get_values([fmu.vr["kf.x"]])[1][0] == pytest.approx(t, abs=0.2)
+    assert fmu.get("pid.output") == pytest.approx(2.05)        # the PID only runs when its clock ticks
+
+
+def test_clocked_variables_cannot_be_connected(tmp_path):
+    from conftest import EXAMPLES
+    (tmp_path / "fmugen.toml").write_text(textwrap.dedent(f"""
+        [composite]
+        fmi_version = 3
+        parts = {{ pid = "{(EXAMPLES / 'sampled_pid').as_posix()}", kf = "{(EXAMPLES / 'kalman').as_posix()}" }}
+        connections = ["pid.output -> kf.z"]
+    """))
+    with pytest.raises(InterfaceError, match="clocked variable"):
+        build(tmp_path / "fmugen.toml", tmp_path / "out", output_format="folder")

@@ -22,7 +22,9 @@ import keyword
 import math
 import pickle
 import re
+import os
 import sys
+import threading
 import traceback
 import types
 import typing
@@ -97,6 +99,7 @@ def infer_config(target, call=None, config_dir=None, fmi_version=None, starts=No
     default; `setup` (list of "module:function(args)" / "method") is run before the probe.
     `create` names a classmethod that builds the object (e.g. "from_pretrained").
     `probe`: also call the model once (setup, construction, one step); otherwise it is never called.
+    A number is the probe's time limit in seconds (True: PROBE_TIMEOUT).
     `converts` ({argument: "module:function" or "numpy"}) sets how arguments are passed in.
 
     The model is imported (and probed) in config_dir, as it will run inside the FMU with
@@ -112,7 +115,34 @@ def infer_config(target, call=None, config_dir=None, fmi_version=None, starts=No
     if path:
         target = f"{path.resolve()}" + (f":{name}" if name else "")
     with contextlib.chdir(config_dir):
-        return _infer_config(target, call, config_dir, fmi_version, starts, setup, kind, create, probe, converts)
+        if not probe:
+            return _infer_config(target, call, config_dir, fmi_version, starts, setup, kind, create, probe, converts)
+        timeout = PROBE_TIMEOUT if probe is True else float(probe)
+        return _with_timeout(timeout, _infer_config, target, call, config_dir, fmi_version, starts, setup, kind,
+                             create, True, converts)
+
+
+PROBE_TIMEOUT = 600.0   # seconds; a model that downloads weights on first use needs a while
+
+
+def _with_timeout(timeout, fn, *args):
+    """fn(*args), stopping the process if it takes longer than `timeout` seconds. The model runs
+    in this thread, as without a limit (some libraries only work there), and its code can't be
+    interrupted: a watchdog thread prints why and exits instead."""
+    def abort():
+        sys.stderr.write(f"fmugen: error: the probe did not finish in {timeout:g} s: the model may wait for "
+                         "input or a device, or be slow on the start values. Give a larger --probe-timeout, "
+                         "other --start values, or run init without --probe\n")
+        sys.stderr.flush()
+        os._exit(2)
+
+    watchdog = threading.Timer(timeout, abort)
+    watchdog.daemon = True
+    watchdog.start()
+    try:
+        return fn(*args)
+    finally:
+        watchdog.cancel()
 
 
 def _infer_config(target, call, config_dir, fmi_version, starts, setup, kind, create, probe, converts):
@@ -293,11 +323,28 @@ def _local_sources(entry_file, config_dir):
         if not file.is_relative_to(config_dir) or "site-packages" in file.parts or file == entry_file:
             continue
         rel = file.relative_to(config_dir)
+        if _not_model_code(config_dir, rel):
+            continue
         sources.add(rel.parts[0] if len(rel.parts) > 1 else rel.as_posix())
     entry_rel = entry_file.relative_to(config_dir)
     if len(entry_rel.parts) > 1:
         sources.add(entry_rel.parts[0])
     return sorted(sources)
+
+
+# folders inside a project that hold installed packages or build output, not the model's code
+NOT_SOURCES = {".venv", "venv", "env", ".env", "build", "dist", "__pycache__", ".git", ".tox", ".nox",
+               "node_modules", "site-packages"}
+
+
+def _not_model_code(config_dir, rel):
+    """Whether a file (relative to config_dir) is in a virtual environment or build folder."""
+    folder = config_dir
+    for part in rel.parts[:-1]:
+        folder = folder / part
+        if part in NOT_SOURCES or part.endswith(".egg-info") or (folder / "pyvenv.cfg").exists():
+            return True
+    return False
 
 
 def _add_data_files(data, comments, config_dir, entry_file):
@@ -446,6 +493,10 @@ def _pick_entry(module, name):
         and getattr(obj, "__module__", None) == module.__name__
         and not (inspect.isclass(obj) and issubclass(obj, (enum.Enum, BaseException)))
     ]
+    if not own:   # a package's __init__ that only re-exports (from .core import Model): its __all__
+        own = [obj for attr in getattr(module, "__all__", ())
+               if (inspect.isfunction(obj := getattr(module, attr, None)) or inspect.isclass(obj))
+               and not (inspect.isclass(obj) and issubclass(obj, (enum.Enum, BaseException)))]
     if len(own) != 1:
         found = ", ".join(o.__name__ for o in own) or "none"
         raise InterfaceError(
@@ -1803,15 +1854,31 @@ def _dotted_name(name):
     return all(part.isidentifier() for part in name.split("."))
 
 
+STATE_SUFFIXES = ("_prev", "_old", "_last")
+STATE_PREFIXES = ("prev_", "last_", "old_")
+
+
+def _state_base(name):
+    """'x' for an input named like a previous value (x_prev, x_old, x_last, prev_x, last_x, old_x), else None."""
+    for suffix in STATE_SUFFIXES:
+        if name.endswith(suffix) and len(name) > len(suffix):
+            return name[: -len(suffix)]
+    for prefix in STATE_PREFIXES:
+        if name.startswith(prefix) and len(name) > len(prefix):
+            return name[len(prefix):]
+    return None
+
+
 def _detect_states(data, comments, returned, attrs):
-    """An input named x_prev whose next value is returned (a key in `returned`) or stored as an
-    attribute (a name in `attrs`) x_next / x is a state."""
+    """An input named like a previous value (x_prev, x_old, last_x, ...) whose next value is
+    returned (a key in `returned`) or stored as an attribute (a name in `attrs`) as x_next,
+    next_x, x_new, new_x or x is a state."""
     inputs = data.get("inputs", {})
     for name in list(inputs):
-        if not name.endswith("_prev"):
+        base = _state_base(name)
+        if base is None:
             continue
-        base = name[: -len("_prev")]
-        for candidate in (f"{base}_next", base):
+        for candidate in (f"{base}_next", f"next_{base}", f"{base}_new", f"new_{base}", base):
             if candidate in returned:
                 source = f"return:{candidate}"
             elif candidate in attrs:
