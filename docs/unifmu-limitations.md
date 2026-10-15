@@ -13,7 +13,6 @@ Problems that come from [UniFMU](https://github.com/INTO-CPS-Association/unifmu)
 | 7 | [Exact `protobuf==5.27.3` pin](#7-exact-protobuf-5273-pin) | Limitation | None |
 | 8 | [The FMU needs a Python interpreter](#8-the-fmu-needs-a-python-interpreter) | Limitation | `--vendor`, `--compile` |
 | 9 | [Reserved module names](#9-reserved-module-names) | Limitation | None. Rename the model file |
-| 10 | [FMI 3 template declares `fmiVersion="3.0-beta.4"`](#10-fmi-3-template-declares-fmiversion30-beta4) | Bug | fmugen writes its own `modelDescription.xml` |
 | 11 | [Smaller limitations from the README](#11-smaller-limitations-from-the-readme) | Limitation | — |
 | 12 | [FMI 2 log messages are used as printf format strings](#12-fmi-2-log-messages-are-used-as-printf-format-strings) | Bug | The FMI 2 adapter doubles each `%` |
 | 13 | [A backend that exits during a call can abort the importer](#13-a-backend-that-exits-during-a-call-can-abort-the-importer) | Bug | None. Find the backend's error by running it directly |
@@ -100,10 +99,6 @@ The backend also uses `match`, so it needs **Python 3.10 or newer**.
 ## 9. Reserved module names
 
 The backend's own modules live in the FMU's `resources/` folder next to the model: `model`, `backend`, `main`, `abstract_backend` and `schemas` (plus fmugen's `fmugen_runtime`). A model whose entry module has one of these names can't be used; rename the file. See [models.md](models.md).
-
-## 10. FMI 3 template declares `fmiVersion="3.0-beta.4"`
-
-UniFMU 0.14 writes `fmiVersion="3.0-beta.4"` into the FMI 3 template's `modelDescription.xml`, not `3.0`. fmugen replaces that file on every build, so fmugen FMUs aren't affected ([packaging.md](packaging.md#unifmu-version)).
 
 ## 11. Smaller limitations from the README
 
