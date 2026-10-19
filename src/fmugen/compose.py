@@ -18,13 +18,35 @@ from pathlib import Path
 from fmugen.config import FMI_VERSIONS, INT_TYPES, InterfaceError, element_count, load_config
 from fmugen.templates.fmugen_runtime import SPEC_VERSION
 
+#: Keys allowed in ``[composite]``.
 COMPOSITE_KEYS = {"name", "description", "author", "parts", "connections", "fmi_version"}
+#: Tables allowed in a composite config.
 TOP_KEYS = {"composite", "experiment"}
+#: Folder under ``resources/`` holding one subfolder per part.
 PARTS_DIR = "parts"
 
 
 class Composite:
+    """A validated composite config: several fmugen configs (the parts) and their connections.
+
+    :ivar path: the composite fmugen.toml.
+    :ivar data: the ``[composite]`` table.
+    :ivar experiment: the ``[experiment]`` table.
+    :ivar fmi_version: the FMI version of the FMU.
+    :ivar parts: part name -> its :class:`fmugen.config.Config`, in run order.
+    :ivar connections: ``((src part, src variable), (dst part, dst variable))`` pairs.
+    """
     def __init__(self, path):
+        """Read and validate a composite config and load each part's config.
+
+        All parts run in one Python process, which imports a module name only once, so two parts
+        with modules of the same name are refused (one would run the other's code).
+
+        :param path: the composite fmugen.toml.
+        :type path: str or pathlib.Path
+        :raises InterfaceError: unknown keys, fewer than two parts, an invalid part name or path,
+            a malformed connection, or clashing module names.
+        """
         self.path = Path(path)
         data = tomllib.loads(self.path.read_text(encoding="utf-8"))
         unknown = set(data) - TOP_KEYS
@@ -67,6 +89,14 @@ class Composite:
 
 
 def is_composite(target):
+    """Whether a build target is a composite config.
+
+    :param target: a fmugen.toml, a folder containing one, or anything else.
+    :type target: str or pathlib.Path
+    :return: the config path when it has a ``[composite]`` table, else None.
+    :rtype: pathlib.Path or None
+    :raises InterfaceError: the file isn't valid TOML.
+    """
     path = Path(target)
     if path.is_dir():
         path = path / "fmugen.toml"
@@ -80,6 +110,14 @@ def is_composite(target):
 
 
 def _connection(text):
+    """Parse a connection ``"part.output -> part.input"``.
+
+    :param text: the connection.
+    :type text: str
+    :return: ``((source part, variable), (target part, variable))``.
+    :rtype: tuple
+    :raises InterfaceError: a malformed connection.
+    """
     source, arrow, target = (str(text)).partition("->")
     ends = []
     for end in (source.strip(), target.strip()):
@@ -90,12 +128,27 @@ def _connection(text):
     return tuple(ends)
 
 
+#: FMI floating-point types (FMI 2 and FMI 3 names).
 FLOAT_TYPES = ("Real", "Float32", "Float64")
 
 
 def _type_mismatch(source, target, source_interface, target_interface):
-    """Why a value of `source` can't be passed to `target`, or None. Same types, integers and
-    Booleans into floats, and integers into integers (the range is checked when it is set) work."""
+    """Why a value of ``source`` can't be passed to ``target``, or None.
+
+    Same types, integers and Booleans into floats, and integers into integers (the range is
+    checked when it is set) work. Enumerations must have the same items.
+
+    :param source: the source part's variable.
+    :type source: dict
+    :param target: the target part's variable.
+    :type target: dict
+    :param source_interface: the source part's interface (for its type definitions).
+    :type source_interface: dict
+    :param target_interface: the target part's interface.
+    :type target_interface: dict
+    :return: the reason, or None.
+    :rtype: str or None
+    """
     a, b = source["type"], target["type"]
     if a == "Enumeration" or b == "Enumeration":
         if a != b:
@@ -110,7 +163,28 @@ def _type_mismatch(source, target, source_interface, target_interface):
 
 
 def combine(composite, interfaces, version, model_name=None, author=None):
-    """The FMU's interface: the parts' variables not fed by a connection, named <part>.<name>."""
+    """Build the composite FMU's interface from its parts' interfaces.
+
+    Each connection is checked (an output or local into an input, fed once, unclocked, same size,
+    compatible types) and stored as the parts' value references. The FMU's variables are the
+    parts' variables not fed by a connection, named ``<part>.<name>`` and carrying ``part`` and
+    ``local`` (the reference inside the part), which :class:`CompositeEngine` uses to route
+    calls. Clocks follow the variables. Parts with a fixed step must agree on it.
+
+    :param composite: the validated composite config.
+    :type composite: Composite
+    :param interfaces: part name -> its interface spec, in run order.
+    :type interfaces: dict
+    :param version: the FMI version.
+    :type version: int
+    :param model_name: ``--name``, overriding ``[composite] name``.
+    :type model_name: str or None
+    :param author: ``--author``, overriding ``[composite] author``.
+    :type author: str or None
+    :return: the composite interface spec (``composite = true``).
+    :rtype: dict
+    :raises InterfaceError: an invalid connection or conflicting fixed step sizes.
+    """
     by_name = {name: {v["name"]: v for v in interface["variables"]} for name, interface in interfaces.items()}
     connections, fed = [], set()
     for (src, src_var), (dst, dst_var) in composite.connections:

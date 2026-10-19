@@ -18,7 +18,14 @@ from fmugen.distribute import COMPILERS
 
 
 def _parse_converts(items):
-    """["NAME=module:function" | "NAME=numpy", ...] -> {NAME: converter}."""
+    """Parse ``--convert`` options.
+
+    :param items: ``["NAME=module:function" | "NAME=numpy", ...]``.
+    :type items: list[str]
+    :return: ``{NAME: converter}``.
+    :rtype: dict[str, str]
+    :raises InterfaceError: an item of another form.
+    """
     converts = {}
     for item in items:
         name, sep, converter = item.partition("=")
@@ -30,6 +37,18 @@ def _parse_converts(items):
 
 
 def _parse_starts(items):
+    """Parse ``--start NAME=VALUE`` options.
+
+    VALUE is read as a Python literal with :func:`ast.literal_eval` (never executed); ``true`` /
+    ``false`` in any case are Booleans; ``call:module:function(...)`` becomes a call constant;
+    anything else stays a string.
+
+    :param items: the options.
+    :type items: list[str]
+    :return: ``{NAME: value}``; NAME may be dotted (``ARG.FIELD``).
+    :rtype: dict
+    :raises InterfaceError: an item without ``=`` or with an invalid name.
+    """
     import ast
     starts = {}
     for item in items:
@@ -51,6 +70,15 @@ def _parse_starts(items):
 
 
 def main(argv=None):
+    """The ``fmugen`` command: parse arguments and run ``init`` or ``build``.
+
+    Config and interface errors print a one-line message and exit with code 2; other errors exit
+    with code 1 (with the traceback when ``--debug`` is given). A successful build prints a
+    summary of the FMU's variables.
+
+    :param argv: the arguments (default: ``sys.argv[1:]``).
+    :type argv: list[str] or None
+    """
     parser = argparse.ArgumentParser(prog="fmugen", description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="command", required=True)

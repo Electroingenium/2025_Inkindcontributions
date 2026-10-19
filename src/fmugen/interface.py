@@ -36,9 +36,25 @@ from fmugen.probe import (
     _taken, _split_varargs,
 )
 
+#: Step method names tried in order when a class is given without ``--call``.
 CALL_NAMES = ("step", "do_step", "update", "__call__")
 
 def load_module(model_path):
+    """Import a model file by path, as the module named after the file.
+
+    Uses :func:`importlib.util.spec_from_file_location` instead of a plain import so the exact
+    file is loaded even when another module of that name is on the path. The module is put in
+    :data:`sys.modules` before it runs (as a normal import does), so the model's own imports of
+    itself and pickling of its classes work; its folder goes on ``sys.path`` for sibling imports.
+
+    :param model_path: the ``.py`` file.
+    :type model_path: str or pathlib.Path
+    :return: the executed module.
+    :rtype: types.ModuleType
+    :raises InterfaceError: the file is named like a standard library module (registering it
+        would replace the real module in this process too).
+    :raises Exception: whatever the module's top-level code raises.
+    """
     model_path = Path(model_path).resolve()
     if model_path.stem in sys.stdlib_module_names:   # registering it would replace the real module here too
         raise InterfaceError(stdlib_clash([model_path.stem]))
@@ -46,14 +62,26 @@ def load_module(model_path):
         sys.path.insert(0, str(model_path.parent))
     spec = importlib.util.spec_from_file_location(model_path.stem, model_path)
     module = importlib.util.module_from_spec(spec)
+    # registered before it runs, as `import` does: the module's own code (dataclasses, pickling,
+    # `from model import X` in sibling files) looks itself up in sys.modules
     sys.modules[model_path.stem] = module
     spec.loader.exec_module(module)
     return module
 
 
 def import_failure(target, error):
-    """InterfaceError for a model whose top-level code raised while it was imported (a script that
-    solves or plots when imported, a missing data file), naming where it raised."""
+    """An InterfaceError for a model whose top-level code raised while it was imported.
+
+    A script that solves or plots when imported, a missing data file: the message names the
+    innermost line of the model's own code (from the traceback, skipping importlib and fmugen
+    frames) and where the error was raised if that's elsewhere.
+
+    :param target: the model target, for the message.
+    :type target: str
+    :param error: the exception.
+    :type error: BaseException
+    :rtype: InterfaceError
+    """
     frames = traceback.extract_tb(error.__traceback__)
     # the innermost line of the model's own code, and where the error was raised if that's elsewhere
     ours = [f for f in frames if "importlib" not in f.filename and "fmugen" not in Path(f.filename).parts]
@@ -67,7 +95,14 @@ def import_failure(target, error):
 
 
 def parse_target(target):
-    """'path/model.py[:Name]' or 'package.module:Name' -> (path or None, module name or None, Name or None)."""
+    """Split a model target into file, module and name.
+
+    :param target: ``'path/model.py[:Name]'`` or ``'package.module:Name'``.
+    :type target: str or pathlib.Path
+    :return: ``(path or None, module name or None, Name or None)``.
+    :rtype: tuple
+    :raises InterfaceError: a module target without ``:Name``.
+    """
     target = str(target)
     path, sep, name = target.rpartition(":")
     if not sep or not name.isidentifier() or (not path.endswith(".py") and "/" in name):
@@ -81,18 +116,38 @@ def parse_target(target):
 
 def infer_config(target, call=None, config_dir=None, fmi_version=None, starts=None, setup=None, kind=None,
                  create=None, probe=False, converts=None):
-    """Return (config dict, {(section, name): comment}) for a model target.
+    """Infer a config for a model target (``fmugen init``, and ``fmugen build model.py``).
 
     With fmi_version=3, list/tuple/numpy values become array variables and bytes become Binary.
-    `starts` ({argument: value}) gives probe/start values for arguments, e.g. ones without a
-    default; `setup` (list of "module:function(args)" / "method") is run before the probe.
-    `create` names a classmethod that builds the object (e.g. "from_pretrained").
-    `probe`: also call the model once (setup, construction, one step); otherwise it is never called.
-    A number is the probe's time limit in seconds (fmugen exits when it passes); True: no limit.
-    `converts` ({argument: "module:function" or "numpy"}) sets how arguments are passed in.
+    The model is imported (and probed) in ``config_dir``, as it will run inside the FMU with
+    ``[model] cwd``, so files it opens by a relative path are found.
 
-    The model is imported (and probed) in config_dir, as it will run inside the FMU with
-    [model] cwd, so files it opens by a relative path are found.
+    :param target: ``'path/model.py[:Name]'`` or ``'package.module:Name'``.
+    :type target: str
+    :param call: the step method of a class (``--call``); for a function, makes it a factory.
+    :type call: str or None
+    :param config_dir: where the config will be written (default: the model's folder).
+    :type config_dir: str or pathlib.Path or None
+    :param fmi_version: the target FMI version.
+    :type fmi_version: int or None
+    :param starts: ``{argument: value}``: probe/start values for arguments, e.g. ones without a default.
+    :type starts: dict or None
+    :param setup: ``"module:function(args)"`` / ``"method"`` calls run before the probe.
+    :type setup: list[str] or None
+    :param kind: ``"function"`` to call a class like a function.
+    :type kind: str or None
+    :param create: a classmethod that builds the object (e.g. ``"from_pretrained"``).
+    :type create: str or None
+    :param probe: also call the model once (setup, construction, one step); otherwise it is
+        never called. A number is the probe's time limit in seconds (fmugen exits when it
+        passes); True: no limit.
+    :type probe: bool or float
+    :param converts: ``{argument: "module:function" or "numpy"}``: how arguments are passed in.
+    :type converts: dict or None
+    :return: ``(config dict, {(section, name): comment})``.
+    :rtype: tuple[dict, dict]
+    :raises InterfaceError: the model can't be imported, the target is ambiguous, or the options
+        don't fit it.
     """
     path, _module_name, name = parse_target(target)
     config_dir = Path(config_dir or (path.parent if path else ".")).resolve()
@@ -111,10 +166,21 @@ def infer_config(target, call=None, config_dir=None, fmi_version=None, starts=No
 
 
 def _with_timeout(timeout, fn, *args):
-    """fn(*args), stopping the process if it takes longer than `timeout` seconds. The model runs
-    in this thread, as without a limit (some libraries only work there), and its code can't be
-    interrupted: a watchdog thread prints why and exits instead."""
+    """Call ``fn(*args)``, stopping the process if it takes longer than ``timeout`` seconds.
+
+    The model runs in this thread, as without a limit (some libraries only work there), and its
+    code can't be interrupted: a watchdog :class:`threading.Timer` prints why and calls
+    :func:`os._exit` instead (``sys.exit`` would only end the watchdog thread).
+
+    :param timeout: the limit in seconds.
+    :type timeout: float
+    :param fn: the function.
+    :type fn: callable
+    :param args: its arguments.
+    :return: what ``fn`` returned.
+    """
     def abort():
+        """Print why the probe stopped and exit with code 2."""
         sys.stderr.write(f"fmugen: error: the probe did not finish in {timeout:g} s: the model may wait for "
                          "input or a device, or be slow on the start values. Give a larger --probe-timeout, "
                          "other --start values, or run init without --probe\n")
@@ -131,6 +197,36 @@ def _with_timeout(timeout, fn, *args):
 
 
 def _infer_config(target, call, config_dir, fmi_version, starts, setup, kind, create, probe, converts):
+    """The inference itself, inside ``config_dir`` (see :func:`infer_config`).
+
+    Imports the model, picks the entry, infers a function or class model, adds data files,
+    globals and requirements, renames clashing names, adapts the types to the FMI version, and
+    finally checks that every ``--start`` and ``--convert`` name was used.
+
+    :param target: the model target (absolute file path when it's a file).
+    :type target: str
+    :param call: see :func:`infer_config`.
+    :type call: str or None
+    :param config_dir: the config folder.
+    :type config_dir: pathlib.Path
+    :param fmi_version: see :func:`infer_config`.
+    :type fmi_version: int or None
+    :param starts: see :func:`infer_config`.
+    :type starts: dict or None
+    :param setup: see :func:`infer_config`.
+    :type setup: list[str] or None
+    :param kind: see :func:`infer_config`.
+    :type kind: str or None
+    :param create: see :func:`infer_config`.
+    :type create: str or None
+    :param probe: whether to probe.
+    :type probe: bool
+    :param converts: see :func:`infer_config`.
+    :type converts: dict or None
+    :return: ``(config dict, comments)``.
+    :rtype: tuple[dict, dict]
+    :raises InterfaceError: see :func:`infer_config`.
+    """
     arrays = True   # FMI 2 writes arrays as one scalar per element; see _fmi2_types
     starts = dict(starts or {})
     if fmi_version != 3:
@@ -215,13 +311,22 @@ def _infer_config(target, call, config_dir, fmi_version, starts, setup, kind, cr
     return data, comments
 
 
+#: FMI 3 types found by inference -> FMI 2 type (None: the default Real).
 FMI2_TYPES = {"Float32": None, "Float64": None, **{t: "Integer" for t in (
     "Int8", "UInt8", "Int16", "UInt16", "Int32", "UInt32", "Int64", "UInt64")}}
 
 
 def _fmi2_types(data, comments):
-    """FMI 2 has only Real, Integer, Boolean and String: map the FMI 3 types found, and leave out
-    what FMI 2 can't hold (bytes, arrays sized by structural parameters)."""
+    """Adapt an inferred config to FMI 2.
+
+    FMI 2 has only Real, Integer, Boolean and String: map the FMI 3 types found, and leave out
+    what FMI 2 can't hold (bytes, arrays sized by structural parameters).
+
+    :param data: the config being inferred; updated in place.
+    :type data: dict
+    :param comments: ``(section, key) -> text``; updated in place.
+    :type comments: dict
+    """
     for section in ("parameters", "inputs", "states", "outputs", "locals"):
         variables = data.get(section, {})
         for name, info in list(variables.items()):
@@ -240,8 +345,17 @@ def _fmi2_types(data, comments):
 
 
 def _rename_reserved(data, comments, is_class):
-    """FMI 3 reserves `time`: a variable for the model's own `time` (an argument, an output) becomes
-    `model_time`, bound to it with `to` / `from`."""
+    """FMI 3 reserves ``time``: a variable for the model's own ``time`` becomes ``model_time``.
+
+    Bound to the model's name with ``to`` / ``from``.
+
+    :param data: the config being inferred; updated in place.
+    :type data: dict
+    :param comments: ``(section, key) -> text``; updated in place.
+    :type comments: dict
+    :param is_class: whether the model is a class (outputs then come from attributes).
+    :type is_class: bool
+    """
     for section in ("parameters", "inputs", "states", "outputs", "locals"):
         variables = data.get(section, {})
         if "time" not in variables:
@@ -258,9 +372,17 @@ def _rename_reserved(data, comments, is_class):
 
 
 def _rename_duplicates(data, comments):
-    """A constructor argument and a step method argument with the same name (radioactivedecay's
-    Inventory(..., units).decay(..., units)) can't both be called NAME: the method's becomes
-    <method>_NAME, bound to it with `to`."""
+    """Rename step method arguments that have the same name as a constructor argument.
+
+    A constructor argument and a step method argument with the same name (radioactivedecay's
+    ``Inventory(..., units).decay(..., units)``) can't both be called NAME: the method's becomes
+    ``<method>_NAME``, bound to it with ``to``.
+
+    :param data: the config being inferred; updated in place.
+    :type data: dict
+    :param comments: ``(section, key) -> text``; updated in place.
+    :type comments: dict
+    """
     method = data["model"].get("call", "call").strip("_")
     parameters = data.get("parameters", {})
     for section in ("inputs", "states"):
@@ -278,10 +400,19 @@ def _rename_duplicates(data, comments):
 
 
 def _local_sources(entry_file, config_dir):
-    """Files and directories under config_dir that the model imported (besides the entry file).
+    """Files and directories under ``config_dir`` that the model imported (besides the entry file).
 
-    A module inside a subdirectory contributes the whole top-level directory, so packages
-    and flat sibling imports are copied together.
+    Found from :data:`sys.modules` after the import. A module inside a subdirectory contributes
+    the whole top-level directory, so packages and flat sibling imports are copied together.
+    ``__file__`` is read from the module's ``__dict__``, not with getattr: lazy modules import on
+    attribute access.
+
+    :param entry_file: the entry file.
+    :type entry_file: pathlib.Path
+    :param config_dir: the config folder.
+    :type config_dir: pathlib.Path
+    :return: paths relative to ``config_dir`` for ``[model] sources``.
+    :rtype: list[str]
     """
     sources = set()
     for module in list(sys.modules.values()):
@@ -300,9 +431,21 @@ def _local_sources(entry_file, config_dir):
 
 
 def _add_data_files(data, comments, config_dir, entry_file):
-    """Files next to the config that the model opens by a relative path, found as string start
-    values (a file name argument) or string literals in the entry file: copied with `sources`, and
-    `cwd = "."` so the model finds them inside the FMU."""
+    """Add files next to the config that the model opens by a relative path.
+
+    Found as string start values (a file name argument), string constants, or string literals
+    in the entry file (parsed with :func:`ast.parse`): copied with ``sources``, and ``cwd = "."``
+    so the model finds them inside the FMU.
+
+    :param data: the config being inferred; updated in place.
+    :type data: dict
+    :param comments: ``(section, key) -> text``; updated in place.
+    :type comments: dict
+    :param config_dir: the config folder.
+    :type config_dir: pathlib.Path
+    :param entry_file: the entry file, or None for a module target.
+    :type entry_file: pathlib.Path or None
+    """
     texts = [info["start"] for section in ("parameters", "inputs") for info in data.get(section, {}).values()
              if isinstance(info.get("start"), str)]
     texts += [c["python"] for table in ("constants", "call_constants")
@@ -336,15 +479,41 @@ def _add_data_files(data, comments, config_dir, entry_file):
 
 
 def _add_globals(data, comments, entry_module, local_dir=None):
-    """[model] globals: module-level variables holding numbers or arrays that the model's own
-    package rebinds while it runs. They are put back on reset and saved with the FMU state."""
+    """Add ``[model] globals``: module-level variables the model's own package rebinds while it runs.
+
+    Starting from the entry module, follows the modules of the same package (or of the user's
+    project) that it uses, as modules or through their functions and classes, and asks
+    :func:`static.written_globals` which of their globals are rebound. Only numbers, strings and
+    arrays are kept. They are put back on reset and saved with the FMU state.
+
+    :param data: the config being inferred; updated in place.
+    :type data: dict
+    :param comments: ``(section, key) -> text``; updated in place.
+    :type comments: dict
+    :param entry_module: the model's module.
+    :type entry_module: types.ModuleType
+    :param local_dir: the user's project folder (its modules count as the model's own), or None.
+    :type local_dir: pathlib.Path or None
+    """
     top = entry_module.__name__.split(".")[0]
     def local(m):   # a module of the user's project (next to the config), not an installed one
+        """Whether a module is a file of the user's project (next to the config), not an installed one.
+
+        :param m: the module.
+        :type m: types.ModuleType
+        :rtype: bool
+        """
         file = getattr(m, "__dict__", {}).get("__file__")
         return (local_dir is not None and file and Path(file).resolve().is_relative_to(local_dir)
                 and "site-packages" not in Path(file).parts)
 
     def ours(m):
+        """Whether a module belongs to the model: its package, or the user's project.
+
+        :param m: the module.
+        :type m: types.ModuleType
+        :rtype: bool
+        """
         return m.__name__ == top or m.__name__.startswith(top + ".") or local(m)
 
     # the entry module, and the package's modules it uses (as modules, or by their functions and classes)
@@ -368,9 +537,25 @@ def _add_globals(data, comments, entry_module, local_dir=None):
 
 
 def _add_requirements(data, comments, module_name, config_dir, entry_file):
-    """[model] requirements: the installed distributions (pinned to their versions here) that provide
-    the entry's package, the modules the local model files import, and modules named in setup,
-    computed constants, convert and enum. A Docker image or --vendor installs these."""
+    """Add ``[model] requirements``: the installed distributions that the model needs, pinned.
+
+    The distributions (with their versions here) that provide the entry's package, the modules
+    the local model files import (read with :func:`ast.parse`, not by importing), and modules
+    named in setup, computed constants, convert and enum. :func:`importlib.util.find_spec`
+    locates each module without importing it; ``packages_distributions`` maps it to its
+    distribution. A Docker image or ``--vendor`` installs these.
+
+    :param data: the config being inferred; updated in place.
+    :type data: dict
+    :param comments: ``(section, key) -> text``; updated in place.
+    :type comments: dict
+    :param module_name: the entry's module for a module target, else None.
+    :type module_name: str or None
+    :param config_dir: the config folder.
+    :type config_dir: pathlib.Path
+    :param entry_file: the entry file, or None.
+    :type entry_file: pathlib.Path or None
+    """
     import importlib.metadata
     tops = set()
     if module_name:
@@ -425,6 +610,18 @@ def _add_requirements(data, comments, module_name, config_dir, entry_file):
 
 
 def _pick_entry(module, name):
+    """The model's function or class in a module.
+
+    Without a name, the one public function or class defined in the module itself (enums and
+    exceptions don't count); for a package's ``__init__`` that only re-exports, from ``__all__``.
+
+    :param module: the imported module.
+    :type module: types.ModuleType
+    :param name: the name given in the target, or None.
+    :type name: str or None
+    :return: the entry object.
+    :raises InterfaceError: the name doesn't exist, or there isn't exactly one candidate.
+    """
     if name:
         if not hasattr(module, name):
             raise InterfaceError(f"{module.__name__} has no {name!r}")
@@ -452,6 +649,25 @@ def _pick_entry(module, name):
 # ---------------- functions ----------------
 
 def _infer_function(fn, data, comments, arrays=False, starts=None, probe=False, converts=None):
+    """Infer a function model: its arguments are inputs, its return value the outputs.
+
+    Also handles a class with ``kind = "function"``: the new object is the result and its
+    constructor sets the outputs.
+
+    :param fn: the function (or class).
+    :param data: the config being inferred; updated in place.
+    :type data: dict
+    :param comments: ``(section, key) -> text``; updated in place.
+    :type comments: dict
+    :param arrays: whether arrays may be variables (always True here; FMI 2 splits them later).
+    :type arrays: bool
+    :param starts: ``--start`` values.
+    :type starts: dict or None
+    :param probe: whether to call the model once (``--probe``).
+    :type probe: bool
+    :param converts: ``--convert`` options.
+    :type converts: dict or None
+    """
     _arguments(fn, "inputs", data, comments, arrays=arrays, starts=starts)
     _apply_converts(data, converts)
     returned_names, seen = set(), set()
@@ -484,7 +700,34 @@ def _infer_function(fn, data, comments, arrays=False, starts=None, probe=False, 
 
 def _infer_class(cls, call, data, comments, arrays=False, starts=None, create=None, factory=None, probe=False,
                  converts=None):
-    """Infer a class model; with `factory` (a function), the object comes from calling it instead."""
+    """Infer a class model: constructor arguments are parameters, step method arguments inputs.
+
+    Outputs come from what the step method returns and the attributes it sets (and, with
+    ``--probe``, from what changed on the object). With ``factory`` (a function), the object
+    comes from calling it instead; its class is found from the factory's code when possible.
+
+    :param cls: the class, or None for a factory.
+    :type cls: type or None
+    :param call: the step method (``--call``), or None to pick one.
+    :type call: str or None
+    :param data: the config being inferred; updated in place.
+    :type data: dict
+    :param comments: ``(section, key) -> text``; updated in place.
+    :type comments: dict
+    :param arrays: whether arrays may be variables.
+    :type arrays: bool
+    :param starts: ``--start`` values.
+    :type starts: dict or None
+    :param create: a classmethod that builds the object, or None.
+    :type create: str or None
+    :param factory: a factory function, or None.
+    :type factory: callable or None
+    :param probe: whether to probe.
+    :type probe: bool
+    :param converts: ``--convert`` options.
+    :type converts: dict or None
+    :raises InterfaceError: a missing ``create`` or step method.
+    """
     if factory and cls is None:
         cls = static.factory_class(factory)   # from its return annotation; else known only by calling it
     method_name = call or _pick_method(cls)
@@ -561,6 +804,13 @@ def _infer_class(cls, call, data, comments, arrays=False, starts=None, create=No
 
 
 def _pick_method(cls):
+    """The step method of a class: the first of :data:`CALL_NAMES` it has, else its only public method.
+
+    :param cls: the class.
+    :type cls: type
+    :rtype: str
+    :raises InterfaceError: none of these, and not exactly one public method.
+    """
     for name in CALL_NAMES:
         if name == "__call__":
             if any("__call__" in vars(k) for k in cls.__mro__[:-1]):

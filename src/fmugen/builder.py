@@ -28,22 +28,39 @@ from fmugen.arguments import assumptions, guessed_outputs, unfit_outputs
 from fmugen.toml_output import render_toml
 from fmugen.templates.fmugen_runtime import setup_sys_path
 
+#: The installed fmugen package folder.
 PACKAGE_DIR = Path(__file__).resolve().parent
+#: Files copied into every FMU (adapters, runtime, launcher).
 TEMPLATES_DIR = PACKAGE_DIR / "templates"
+#: FMI version -> the adapter copied to ``resources/model.py``.
 ADAPTERS = {2: TEMPLATES_DIR / "model_fmi2.py", 3: TEMPLATES_DIR / "model_fmi3.py"}
+#: The runtime's source package, concatenated into one file per FMU.
 RUNTIME_DIR = TEMPLATES_DIR / "fmugen_runtime"
+#: Runtime modules in dependency order, as concatenated into ``fmugen_runtime.py``.
 RUNTIME_SOURCES = [
     RUNTIME_DIR / "_constants.py",
     RUNTIME_DIR / "_helpers.py",
     RUNTIME_DIR / "_engine.py",
     RUNTIME_DIR / "_composite.py",
 ]
+#: The launcher of vendored FMUs (``--vendor``).
 LAUNCHER = TEMPLATES_DIR / "fmugen_launch.py"
+#: Files never copied into an FMU.
 IGNORE = shutil.ignore_patterns("__pycache__", "*.pyc", "venv", ".venv")
+#: ``--format`` values.
 FORMATS = ("fmu", "folder")
 
 def _concatenate_runtime(destination):
-    """Concatenate the split runtime source files into a single fmugen_runtime.py for the FMU."""
+    """Concatenate the split runtime source files into a single ``fmugen_runtime.py`` for the FMU.
+
+    The runtime is developed as a package (``templates/fmugen_runtime/``) but shipped as one
+    module, so the FMU needs no fmugen install. The modules' imports of each other are removed
+    (their names are all in the one file), later modules lose their module docstring, and
+    duplicate import lines are dropped.
+
+    :param destination: the file to write.
+    :type destination: str or pathlib.Path
+    """
     _INTERNAL_IMPORT = re.compile(
         r"from fmugen\.templates\.fmugen_runtime\._\w+ import\s+"
         r"(?:\(.*?\)|[^\n]+)\n",
@@ -75,22 +92,35 @@ def _concatenate_runtime(destination):
     content = first + "\n" + "\n".join(cleaned_rest)
     Path(destination).write_text(content, encoding="utf-8")
 
+#: Operating systems a ``launch.toml`` has a command for.
 OSES = ("linux", "macos", "windows")
+#: Python command on each OS when the FMU runs elsewhere.
 DEFAULT_PYTHON = {"linux": "python3", "macos": "python3", "windows": "python"}
+#: This machine's OS, in :data:`OSES` names.
 CURRENT_OS = {"win32": "windows", "darwin": "macos"}.get(sys.platform, "linux")
+#: Packages UniFMU's Python backend needs (protobuf pinned to what UniFMU 0.14 generated).
 BACKEND_REQUIREMENTS = ["protobuf==5.27.3", "pyzmq", "cloudpickle"]
+#: Extra packages of a distributed FMU's private side.
 DISTRIBUTED_REQUIREMENTS = ["toml", "coloredlogs", "colorama"]
 
+#: The only UniFMU version fmugen works with.
 UNIFMU_VERSION = "0.14.0"
+#: Environment variable naming the unifmu executable.
 UNIFMU_ENV = "FMUGEN_UNIFMU"
+#: How to install UniFMU, for error messages.
 UNIFMU_INSTALL = (f"install UniFMU {UNIFMU_VERSION} from "
                   "https://github.com/INTO-CPS-Association/unifmu/releases "
                   f"and put it on PATH, or set {UNIFMU_ENV} to the executable")
+#: The unifmu executable whose version was already checked in this process.
 _unifmu_checked = None
 
 
 def find_unifmu():
-    """Return the path of the unifmu executable, after checking it is version UNIFMU_VERSION."""
+    """Return the path of the unifmu executable, after checking it is version :data:`UNIFMU_VERSION`.
+
+    :rtype: str
+    :raises InterfaceError: not found, can't run, or another version.
+    """
     global _unifmu_checked
     exe = os.environ.get(UNIFMU_ENV) or shutil.which("unifmu")
     if not exe:
@@ -108,11 +138,20 @@ def find_unifmu():
     return exe
 
 
+#: Cache: (exe, *args) -> folder of a ``unifmu generate`` run, removed at exit.
 _templates = {}
 
 
 def _template(args, check):
-    """Run `unifmu *args` once per process, in a cached folder, and return that folder."""
+    """Run ``unifmu *args`` once per process, in a cached folder, and return that folder.
+
+    :param args: the unifmu arguments.
+    :type args: list[str]
+    :param check: tells whether the folder holds what the command should have written.
+    :type check: callable
+    :rtype: pathlib.Path
+    :raises InterfaceError: the command failed.
+    """
     exe = find_unifmu()
     key = (exe, *args)
     if key not in _templates:
@@ -127,7 +166,14 @@ def _template(args, check):
 
 
 def _link_or_copy(src, dst):
-    """Hard-link UniFMU binaries when possible (avoids virus scanner rescan), else copy."""
+    """Hard-link UniFMU binaries when possible (avoids a virus scanner rescan), else copy.
+
+    A ``copytree`` copy function.
+
+    :param src: the source file.
+    :param dst: the destination.
+    :return: the destination.
+    """
     if "binaries" in Path(src).parts:
         try:
             os.link(src, dst)
@@ -138,14 +184,30 @@ def _link_or_copy(src, dst):
 
 
 def generate_boilerplate(fmi_version, dest):
-    """Write UniFMU's Python FMU template for `fmi_version` (2 or 3) to `dest`."""
+    """Write UniFMU's Python FMU template for ``fmi_version`` (2 or 3) to ``dest``.
+
+    :param fmi_version: 2 or 3.
+    :type fmi_version: int
+    :param dest: the FMU folder to create.
+    :type dest: pathlib.Path
+    """
     template = _template(["generate", "python", "out", f"fmi{fmi_version}"],
                          lambda folder: (folder / "out" / "resources").is_dir())
     shutil.copytree(template / "out", dest, copy_function=_link_or_copy)
 
 
 def generate_distributed_boilerplate(fmi_version, dest, endpoint):
-    """Write UniFMU's distributed Python template for `fmi_version` into `dest`."""
+    """Write UniFMU's distributed Python template for ``fmi_version`` into ``dest``.
+
+    :param fmi_version: 2 or 3.
+    :type fmi_version: int
+    :param dest: the folder to create.
+    :type dest: pathlib.Path
+    :param endpoint: IP address of the host running the proxy.
+    :type endpoint: str
+    :return: ``(proxy FMU folder, private folder)``.
+    :rtype: tuple[pathlib.Path, pathlib.Path]
+    """
     template = _template(["generate-distributed", "python", "x", f"fmi{fmi_version}", "--endpoint", endpoint],
                          lambda folder: (folder / "x_proxy" / "resources" / "launch.toml").is_file()
                          and (folder / "x_private" / "main.py").is_file())
@@ -155,13 +217,30 @@ def generate_distributed_boilerplate(fmi_version, dest, endpoint):
 
 
 def private_start_command(mode=None):
-    """How to start a distributed FMU's private side from its folder."""
+    """How to start a distributed FMU's private side from its folder.
+
+    :param mode: ``"compile"``, ``"vendor"`` or None.
+    :type mode: str or None
+    :return: the command, with ``PORT`` for the port the proxy logs.
+    :rtype: str
+    """
     if mode == "compile":
         return r".\dist\main\main.exe PORT" if CURRENT_OS == "windows" else "./dist/main/main PORT"
     return f"{DEFAULT_PYTHON[CURRENT_OS]} {'fmugen_launch.py' if mode == 'vendor' else 'main.py'} PORT"
 
 
 def _write_private_readme(private, model_name, endpoint, mode=None):
+    """Write the README of a distributed FMU's private side (how to connect it).
+
+    :param private: the private folder.
+    :type private: pathlib.Path
+    :param model_name: the model's name.
+    :type model_name: str
+    :param endpoint: the proxy's host.
+    :type endpoint: str
+    :param mode: ``"compile"``, ``"vendor"`` or None.
+    :type mode: str or None
+    """
     packages = {None: "\nThe Python running it needs the packages in requirements.txt.\n",
                 "vendor": "\nfmugen_launch.py installs the packages from wheels/ on its first run.\n",
                 "compile": ""}[mode]
@@ -178,7 +257,16 @@ def _write_private_readme(private, model_name, endpoint, mode=None):
 
 
 def _write_launch_toml(resources_dir, mode=None):
-    """How UniFMU starts the backend on each OS."""
+    """Write ``launch.toml``: how UniFMU starts the backend on each OS.
+
+    Normal FMUs run ``main.py`` with this Python here (``python`` / ``python3`` elsewhere);
+    vendored ones run ``fmugen_launch.py``; compiled ones the executable.
+
+    :param resources_dir: the FMU's resources folder.
+    :type resources_dir: pathlib.Path
+    :param mode: ``"compile"``, ``"vendor"`` or None.
+    :type mode: str or None
+    """
     if mode == "compile":
         commands = {system: compiled_launch_command(system) for system in OSES}
     elif mode == "vendor":
@@ -192,12 +280,25 @@ def _write_launch_toml(resources_dir, mode=None):
 
 
 def write_interface(interface, path):
+    """Write an interface spec as indented JSON (``interface.json``).
+
+    :param interface: the spec.
+    :type interface: dict
+    :param path: the file.
+    :type path: str or pathlib.Path
+    """
     Path(path).write_text(json.dumps(interface, indent=2))
 
 
 @contextlib.contextmanager
 def isolated_imports():
-    """Undo sys.path changes and forget modules loaded from the added paths."""
+    """Context manager: undo ``sys.path`` changes and forget modules loaded from the added paths.
+
+    Importing the model (to infer or normalize it) adds its folders to ``sys.path`` and its
+    modules to :data:`sys.modules`. Removing them afterwards lets one process build several
+    models with modules of the same name (composite parts, tests) without getting a stale module.
+    Installed packages the model imported stay loaded.
+    """
     saved_path = list(sys.path)
     saved_modules = set(sys.modules)
     try:
@@ -206,6 +307,8 @@ def isolated_imports():
         added = [Path(p).resolve() for p in sys.path if p and p not in saved_path]
         sys.path[:] = saved_path
         to_forget = []
+        # only modules whose file or package path lies under an added folder: those are the model's,
+        # and a later import of the same name must load the new copy, not this one
         for name in set(sys.modules) - saved_modules:
             attrs = getattr(sys.modules[name], "__dict__", {})
             try:
@@ -219,7 +322,21 @@ def isolated_imports():
 
 
 def resolve_target(target, call=None, fmi_version=None, probe=False):
-    """Return a Config for a fmugen.toml, a directory containing one, or a model file."""
+    """Return a Config for a fmugen.toml, a directory containing one, or a model file.
+
+    A model file's config is inferred in memory (as ``fmugen init`` would).
+
+    :param target: the build target.
+    :type target: str or pathlib.Path
+    :param call: ``--call`` for a model file.
+    :type call: str or None
+    :param fmi_version: ``--fmi``.
+    :type fmi_version: int or None
+    :param probe: ``--probe`` for a model file.
+    :type probe: bool or float
+    :rtype: Config
+    :raises InterfaceError: a missing fmugen.toml or an invalid config.
+    """
     path = Path(target)
     if path.is_dir():
         path = path / "fmugen.toml"
@@ -234,6 +351,13 @@ def resolve_target(target, call=None, fmi_version=None, probe=False):
 
 
 def _copy_sources(config, model_dir):
+    """Copy the entry file and ``[model] sources`` into the FMU's model folder.
+
+    :param config: the config.
+    :type config: Config
+    :param model_dir: ``resources/fmugen_model``.
+    :type model_dir: pathlib.Path
+    """
     for src, rel in config.source_files():
         dest = model_dir / rel
         dest.parent.mkdir(parents=True, exist_ok=True)
@@ -244,7 +368,28 @@ def _copy_sources(config, model_dir):
 
 
 def _prepare(config, resources, version, model_name, author, capture_output):
-    """Copy a model's code into `resources`, import it and write its interface.json."""
+    """Copy a model's code into ``resources``, import it and write its interface.json.
+
+    The model is imported from the copy, as the FMU will import it (same module name, same
+    ``sys.path``, inside ``[model] cwd``), so a build fails exactly where the FMU would.
+    Notes from :func:`normalize` are printed.
+
+    :param config: the config.
+    :type config: Config
+    :param resources: the FMU's resources folder (or a part's folder).
+    :type resources: pathlib.Path
+    :param version: the FMI version.
+    :type version: int
+    :param model_name: ``--name``.
+    :type model_name: str or None
+    :param author: ``--author``.
+    :type author: str or None
+    :param capture_output: ``--capture-output``.
+    :type capture_output: bool
+    :return: the interface spec.
+    :rtype: dict
+    :raises InterfaceError: the model can't be imported or doesn't fit its config.
+    """
     config.check_module_names()
     resources.mkdir(parents=True, exist_ok=True)
     _copy_sources(config, resources / MODEL_DIR)
@@ -271,7 +416,15 @@ def _prepare(config, resources, version, model_name, author, capture_output):
 
 
 def _flat(interface, resources):
-    """The parts' variables and constants together (for --hf-weights), for a composite FMU."""
+    """The parts' variables and constants together (for ``--hf-weights``), for a composite FMU.
+
+    :param interface: the FMU's interface.
+    :type interface: dict
+    :param resources: the FMU's resources folder.
+    :type resources: pathlib.Path
+    :return: the interface itself for a single model.
+    :rtype: dict
+    """
     if not interface.get("composite"):
         return interface
     parts = [json.loads((resources / p["dir"] / "interface.json").read_text()) for p in interface["parts"]]
@@ -282,7 +435,16 @@ def _flat(interface, resources):
 
 
 def _write_zip(fmu_dir, output):
-    """Zip fmu_dir reproducibly."""
+    """Zip ``fmu_dir`` reproducibly into an .fmu archive.
+
+    Files in sorted order with a fixed date (``SOURCE_DATE_EPOCH`` when set), and Unix
+    permissions set explicitly (executable for binaries) so the archive is the same on every OS.
+
+    :param fmu_dir: the FMU folder.
+    :type fmu_dir: pathlib.Path
+    :param output: the archive to write.
+    :type output: pathlib.Path
+    """
     date_time = build_time().timetuple()[:6] if "SOURCE_DATE_EPOCH" in os.environ else (1980, 1, 1, 0, 0, 0)
     date_time = max(date_time, (1980, 1, 1, 0, 0, 0))
     with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as zipf:
@@ -300,7 +462,15 @@ def _write_zip(fmu_dir, output):
 
 
 def _replace(output, write):
-    """Call write(path) on a new path next to `output`, then put it in place atomically."""
+    """Call ``write(path)`` on a new path next to ``output``, then put it in place atomically.
+
+    A failed build leaves the previous FMU untouched.
+
+    :param output: the file or folder to replace.
+    :type output: pathlib.Path
+    :param write: writes the new output to the path it is given.
+    :type write: callable
+    """
     new = output.with_name(f".{output.name}.new")
     old = output.with_name(f".{output.name}.old")
     for leftover in (new, old):
@@ -324,7 +494,54 @@ def _replace(output, write):
 def build(target, output, model_name=None, author=None, output_format="fmu", call=None, fmi_version=None,
           vendor=False, platforms=(), python_versions=(), compiler=None, capture_output=False, probe=False,
           hf_weights=None, distributed=False, endpoint=None, private_output=None):
-    """Build an FMU."""
+    """Build an FMU (``fmugen build``).
+
+    Steps: resolve the target (config, folder, model file or composite); generate UniFMU's
+    template; copy the adapter and the concatenated runtime; write ``requirements.txt``; copy,
+    import and normalize each model (:func:`_prepare`) and write ``interface.json`` and
+    ``modelDescription.xml``; optionally bundle Hugging Face models, vendor wheels or compile;
+    write ``launch.toml``; stamp the GUID; zip or copy into place.
+
+    :param target: fmugen.toml, a folder containing one, ``model.py[:Name]`` or a composite config.
+    :type target: str or pathlib.Path
+    :param output: the output path, used exactly as given.
+    :type output: str or pathlib.Path
+    :param model_name: ``--name``.
+    :type model_name: str or None
+    :param author: ``--author``.
+    :type author: str or None
+    :param output_format: ``"fmu"`` (zipped) or ``"folder"``.
+    :type output_format: str
+    :param call: ``--call`` for a model file.
+    :type call: str or None
+    :param fmi_version: ``--fmi``.
+    :type fmi_version: int or None
+    :param vendor: ``--vendor``: put wheels of every requirement into the FMU.
+    :type vendor: bool
+    :param platforms: ``--platform`` tags to vendor wheels for.
+    :type platforms: tuple or list
+    :param python_versions: ``--python-version`` values to vendor wheels for.
+    :type python_versions: tuple or list
+    :param compiler: ``--compile`` (a key of ``COMPILERS``), or None.
+    :type compiler: str or None
+    :param capture_output: ``--capture-output``.
+    :type capture_output: bool
+    :param probe: ``--probe`` for a model file.
+    :type probe: bool or float
+    :param hf_weights: ``--hf-weights``; None means on with ``--vendor`` and ``--compile``.
+    :type hf_weights: bool or None
+    :param distributed: ``--distributed``: a proxy FMU plus a private folder.
+    :type distributed: bool
+    :param endpoint: ``--endpoint`` (default 127.0.0.1).
+    :type endpoint: str or None
+    :param private_output: ``--private-output``.
+    :type private_output: str or pathlib.Path or None
+    :return: ``(output path, interface)``; for a distributed FMU the interface also has
+        ``private_output`` and ``private_start``.
+    :rtype: tuple
+    :raises InterfaceError: invalid options or config.
+    :raises FileExistsError: the output path has the wrong kind (file vs folder).
+    """
     if (endpoint or private_output) and not distributed:
         raise InterfaceError("--endpoint and --private-output only apply with --distributed")
     if vendor and compiler:
@@ -422,12 +639,42 @@ def build(target, output, model_name=None, author=None, output_format="fmu", cal
     return output, interface
 
 
+#: Warning and config note when init finds no outputs.
 NO_OUTPUTS = "no outputs found: add [outputs] by hand (e.g. attributes or properties of the model object)"
 
 
 def init(target, output=None, call=None, force=False, fmi_version=None, starts=None, setup=None, kind=None,
          create=None, probe=False, converts=None):
-    """Write the inferred config to `output` (default: fmugen.toml next to the model; "-": stdout)."""
+    """Write the inferred config for a model (``fmugen init``).
+
+    Warnings about assumptions are printed to stderr.
+
+    :param target: ``model.py[:Name]`` or ``package.module:Name``.
+    :type target: str
+    :param output: the config path (default: fmugen.toml next to the model); ``"-"`` prints it.
+    :type output: str or None
+    :param call: ``--call``.
+    :type call: str or None
+    :param force: overwrite an existing config.
+    :type force: bool
+    :param fmi_version: ``--fmi``.
+    :type fmi_version: int or None
+    :param starts: ``--start`` values.
+    :type starts: dict or None
+    :param setup: ``--setup`` calls.
+    :type setup: list[str] or None
+    :param kind: ``--kind``.
+    :type kind: str or None
+    :param create: ``--create``.
+    :type create: str or None
+    :param probe: ``--probe`` (a number: its timeout).
+    :type probe: bool or float
+    :param converts: ``--convert`` options.
+    :type converts: dict or None
+    :return: ``(written path or None when printed, config dict)``.
+    :rtype: tuple
+    :raises FileExistsError: the config exists and ``force`` is false.
+    """
     model_path, _, _ = parse_target(target)
     default_dir = model_path.parent if model_path else Path.cwd()
     to_stdout = output == "-"
@@ -450,6 +697,16 @@ def init(target, output=None, call=None, force=False, fmi_version=None, starts=N
 
 
 def _init_warnings(data, comments, probe):
+    """All warnings ``fmugen init`` prints: assumptions, missing outputs, guessed types, outputs left out.
+
+    :param data: the inferred config.
+    :type data: dict
+    :param comments: the comments; a note is added when there are no outputs.
+    :type comments: dict
+    :param probe: whether the model was probed (changes the advice).
+    :type probe: bool
+    :rtype: list[str]
+    """
     warnings = assumptions(comments)
     outputs = data.get("outputs", {})
     if not outputs:
@@ -470,4 +727,10 @@ def _init_warnings(data, comments, probe):
 
 
 def _names(names):
+    """Up to eight names joined with commas, then how many more.
+
+    :param names: the names.
+    :type names: list[str]
+    :rtype: str
+    """
     return ", ".join(names[:8]) + (f" and {len(names) - 8} more" if len(names) > 8 else "")

@@ -12,12 +12,26 @@ try:
 except ImportError:  # imported from the fmugen package (build probe, tests)
     from fmugen.templates.fmugen_runtime import Status, fraction, make_engine
 
-# Frozen with PyInstaller (fmugen build --compile), data files are in sys._MEIPASS;
-# with Nuitka, next to the compiled modules, as in a normal FMU.
+#: The FMU's resources folder. Frozen with PyInstaller (fmugen build --compile), data files
+#: are in sys._MEIPASS; with Nuitka, next to the compiled modules, as in a normal FMU.
 RESOURCES_DIR = Path(getattr(sys, "_MEIPASS", None) or Path(__file__).resolve().parent)
 
 
 class Model:
+    """The FMI 3 co-simulation model that UniFMU's Python backend drives.
+
+    UniFMU's ``backend.py`` creates one ``Model`` per ``fmi3InstantiateCoSimulation`` and calls
+    the method named after each FMI function. Every method forwards to the fmugen engine
+    (``make_engine``: an ``Engine`` or ``CompositeEngine``) and returns an FMI 3 status, plus the
+    output arguments of that FMI function as a tuple. Unlike FMI 2, FMI 3 has arrays, clocks,
+    event mode and configuration mode; the setup data arrives with
+    ``fmi3EnterInitializationMode``.
+
+    :ivar instance_name: the importer's name for this instance.
+    :ivar instantiation_token: the token from ``modelDescription.xml`` (the GUID).
+    :ivar event_mode_used: whether the importer uses event mode (clocks, events).
+    :ivar engine: the runtime engine that runs the user's model.
+    """
     def __init__(
             self,
             instance_name,
@@ -31,6 +45,32 @@ class Model:
             _log_callback,
             resources_dir=None,
     ) -> None:
+        """``fmi3InstantiateCoSimulation``: create the engine, which imports the user's model.
+
+        :param instance_name: the instance's name.
+        :type instance_name: str
+        :param instantiation_token: the token from ``modelDescription.xml``.
+        :type instantiation_token: str
+        :param resource_path: the importer's resources path; unused (UniFMU runs this file from it).
+        :type resource_path: str
+        :param visible: whether interaction with the user is allowed; unused.
+        :type visible: bool
+        :param logging_on: whether non-error messages are sent (sets ``engine.logging_on``).
+        :type logging_on: bool
+        :param event_mode_used: whether the importer will use event mode; without it, initialization
+            ends in step mode and output clock ticks are dropped.
+        :type event_mode_used: bool
+        :param early_return_allowed: whether doStep may return early; unused (a Python step runs to
+            completion).
+        :type early_return_allowed: bool
+        :param required_intermediate_variables: unused (no intermediate update callback).
+        :type required_intermediate_variables: list[int]
+        :param _log_callback: UniFMU's ``callback(status, category, message)`` to the importer's logger.
+        :type _log_callback: callable
+        :param resources_dir: the FMU's resources folder (tests and the build probe); default
+            :data:`RESOURCES_DIR`.
+        :type resources_dir: str or pathlib.Path or None
+        """
         self.instance_name = instance_name
         self.instantiation_token = instantiation_token
         self.event_mode_used = event_mode_used
@@ -47,6 +87,18 @@ class Model:
             communication_step_size: float,
             no_set_fmu_state_prior_to_current_point: bool,
     ):
+        """``fmi3DoStep``: advance one communication step (:meth:`Engine.do_step`).
+
+        If an output clock ticked but the importer doesn't use event mode, the tick is dropped with a
+        warning (it could never be read).
+
+        :param current_communication_point: time at the start of the step.
+        :param communication_step_size: step size.
+        :param no_set_fmu_state_prior_to_current_point: the importer's promise not to roll back; unused.
+        :return: ``(status, event_handling_needed, terminate_simulation, early_return,
+            last_successful_time)``; on a failed step the last successful time is the start of the step.
+        :rtype: tuple
+        """
         status, event_needed = self.engine.do_step(current_communication_point, communication_step_size)
         if event_needed and not self.event_mode_used:
             self.log("an output clock ticked, but the importer does not use event mode; the tick is dropped",
@@ -66,6 +118,14 @@ class Model:
         )
 
     def fmi3UpdateDiscreteStates(self):
+        """``fmi3UpdateDiscreteStates``: run active input clocks (:meth:`Engine.update_discrete_states`).
+
+        :return: ``(status, discrete_states_need_update, terminate_simulation,
+            nominals_continuous_states_changed, values_continuous_states_changed,
+            next_event_time_defined, next_event_time)``; one call always settles the event, and there
+            are no continuous states in co-simulation.
+        :rtype: tuple
+        """
         status, terminate, next_event_time = self.engine.update_discrete_states()
         return (
             status,
@@ -87,96 +147,282 @@ class Model:
             stop_time_defined: bool,
             stop_time: float
     ):
+        """``fmi3EnterInitializationMode``: store the setup data, then enter initialization mode.
+
+        FMI 3 has no ``SetupExperiment``; its data comes here (:meth:`Engine.setup_experiment`).
+
+        :param tolerance_defined: whether ``tolerance`` is valid.
+        :param tolerance: relative tolerance.
+        :param start_time: simulation start.
+        :param stop_time_defined: whether ``stop_time`` is valid.
+        :param stop_time: simulation end.
+        :return: the FMI status (``Fmi3Status``).
+        :rtype: int
+        """
         self.engine.setup_experiment(
             start_time, stop_time if stop_time_defined else None, tolerance if tolerance_defined else None
         )
         return self.engine.enter_initialization_mode()
 
     def fmi3ExitInitializationMode(self):
+        """``fmi3ExitInitializationMode``: construct and initialize the model.
+
+        Ends in event mode when the importer uses it, else in step mode
+        (:meth:`Engine.exit_initialization_mode`).
+        :return: the FMI status (``Fmi3Status``).
+        :rtype: int
+        """
         return self.engine.exit_initialization_mode(next_mode="event" if self.event_mode_used else "step")
 
     def fmi3EnterEventMode(self):
+        """``fmi3EnterEventMode``: :meth:`Engine.enter_event_mode`.
+
+        :return: the FMI status (``Fmi3Status``).
+        :rtype: int
+        """
         return self.engine.enter_event_mode()
 
     def fmi3EnterStepMode(self):
+        """``fmi3EnterStepMode``: :meth:`Engine.enter_step_mode`.
+
+        :return: the FMI status (``Fmi3Status``).
+        :rtype: int
+        """
         return self.engine.enter_step_mode()
 
     def fmi3EnterConfigurationMode(self):
+        """``fmi3EnterConfigurationMode``: structural parameters can be set (:meth:`Engine.enter_configuration_mode`).
+
+        :return: the FMI status (``Fmi3Status``).
+        :rtype: int
+        """
         return self.engine.enter_configuration_mode()
 
     def fmi3ExitConfigurationMode(self):
+        """``fmi3ExitConfigurationMode``: :meth:`Engine.exit_configuration_mode`.
+
+        :return: the FMI status (``Fmi3Status``).
+        :rtype: int
+        """
         return self.engine.exit_configuration_mode()
 
     def fmi3Terminate(self):
+        """``fmi3Terminate``: calls the model's terminate method (:meth:`Engine.terminate`).
+
+        :return: the FMI status (``Fmi3Status``).
+        :rtype: int
+        """
         return self.engine.terminate()
 
     def fmi3Reset(self):
+        """``fmi3Reset``: back to the instantiated state (:meth:`Engine.reset`).
+
+        :return: the FMI status (``Fmi3Status``).
+        :rtype: int
+        """
         return self.engine.reset()
 
     # ================= Serialization =================
 
     def fmi3SerializeFmuState(self):
+        """``fmi3GetFMUState`` + ``fmi3SerializeFMUState`` (UniFMU combines them): :meth:`Engine.serialize`.
+
+        :return: ``(status, state bytes)``.
+        :rtype: tuple[int, bytes]
+        """
         return self.engine.serialize()
 
     def fmi3DeserializeFmuState(self, bytes: bytes):
+        """``fmi3DeserializeFMUState`` + ``fmi3SetFMUState``: :meth:`Engine.deserialize`.
+
+        :param bytes: bytes from :meth:`fmi3SerializeFmuState`.
+        :return: the FMI status (``Fmi3Status``).
+        :rtype: int
+        """
         return self.engine.deserialize(bytes)
 
     # ================= Getters =================
 
     def fmi3GetFloat32(self, value_references):
+        """``fmi3GetFloat32``: current values, arrays flattened (:meth:`Engine.get_values`).
+
+        :param value_references: value references.
+        :type value_references: list[int]
+        :return: ``(status, values)``.
+        :rtype: tuple[int, list]
+        """
         return self.engine.get_values(value_references)
 
     def fmi3GetFloat64(self, value_references):
+        """``fmi3GetFloat64``: current values, arrays flattened (:meth:`Engine.get_values`).
+
+        :param value_references: value references.
+        :type value_references: list[int]
+        :return: ``(status, values)``.
+        :rtype: tuple[int, list]
+        """
         return self.engine.get_values(value_references)
 
     def fmi3GetInt8(self, value_references):
+        """``fmi3GetInt8``: current values, arrays flattened (:meth:`Engine.get_values`).
+
+        :param value_references: value references.
+        :type value_references: list[int]
+        :return: ``(status, values)``.
+        :rtype: tuple[int, list]
+        """
         return self.engine.get_values(value_references)
 
     def fmi3GetUInt8(self, value_references):
+        """``fmi3GetUInt8``: current values, arrays flattened (:meth:`Engine.get_values`).
+
+        :param value_references: value references.
+        :type value_references: list[int]
+        :return: ``(status, values)``.
+        :rtype: tuple[int, list]
+        """
         return self.engine.get_values(value_references)
 
     def fmi3GetInt16(self, value_references):
+        """``fmi3GetInt16``: current values, arrays flattened (:meth:`Engine.get_values`).
+
+        :param value_references: value references.
+        :type value_references: list[int]
+        :return: ``(status, values)``.
+        :rtype: tuple[int, list]
+        """
         return self.engine.get_values(value_references)
 
     def fmi3GetUInt16(self, value_references):
+        """``fmi3GetUInt16``: current values, arrays flattened (:meth:`Engine.get_values`).
+
+        :param value_references: value references.
+        :type value_references: list[int]
+        :return: ``(status, values)``.
+        :rtype: tuple[int, list]
+        """
         return self.engine.get_values(value_references)
 
     def fmi3GetInt32(self, value_references):
+        """``fmi3GetInt32``: current values, arrays flattened (:meth:`Engine.get_values`).
+
+        :param value_references: value references.
+        :type value_references: list[int]
+        :return: ``(status, values)``.
+        :rtype: tuple[int, list]
+        """
         return self.engine.get_values(value_references)
 
     def fmi3GetUInt32(self, value_references):
+        """``fmi3GetUInt32``: current values, arrays flattened (:meth:`Engine.get_values`).
+
+        :param value_references: value references.
+        :type value_references: list[int]
+        :return: ``(status, values)``.
+        :rtype: tuple[int, list]
+        """
         return self.engine.get_values(value_references)
 
     def fmi3GetInt64(self, value_references):
+        """``fmi3GetInt64``: current values, arrays flattened (:meth:`Engine.get_values`).
+
+        :param value_references: value references.
+        :type value_references: list[int]
+        :return: ``(status, values)``.
+        :rtype: tuple[int, list]
+        """
         return self.engine.get_values(value_references)
 
     def fmi3GetUInt64(self, value_references):
+        """``fmi3GetUInt64``: current values, arrays flattened (:meth:`Engine.get_values`).
+
+        :param value_references: value references.
+        :type value_references: list[int]
+        :return: ``(status, values)``.
+        :rtype: tuple[int, list]
+        """
         return self.engine.get_values(value_references)
 
     def fmi3GetBoolean(self, value_references):
+        """``fmi3GetBoolean``: current values, arrays flattened (:meth:`Engine.get_values`).
+
+        :param value_references: value references.
+        :type value_references: list[int]
+        :return: ``(status, values)``.
+        :rtype: tuple[int, list]
+        """
         return self.engine.get_values(value_references)
 
     def fmi3GetString(self, value_references):
+        """``fmi3GetString``: current values, arrays flattened (:meth:`Engine.get_values`).
+
+        :param value_references: value references.
+        :type value_references: list[int]
+        :return: ``(status, values)``.
+        :rtype: tuple[int, list]
+        """
         return self.engine.get_values(value_references)
 
     def fmi3GetBinary(self, value_references):
+        """``fmi3GetBinary``: current values, arrays flattened (:meth:`Engine.get_values`).
+
+        :param value_references: value references.
+        :type value_references: list[int]
+        :return: ``(status, values)``.
+        :rtype: tuple[int, list]
+        """
         return self.engine.get_values(value_references)
 
     def fmi3GetClock(self, value_references):
+        """``fmi3GetClock``: whether clocks tick; reading an output clock resets it (:meth:`Engine.get_clocks`).
+
+        :param value_references: value references.
+        :type value_references: list[int]
+        :return: ``(status, list of bool)``.
+        :rtype: tuple
+        """
         return self.engine.get_clocks(value_references)
 
     def fmi3GetIntervalDecimal(self, value_references):
+        """``fmi3GetIntervalDecimal``: clock intervals in seconds (:meth:`Engine.get_intervals`).
+
+        :param value_references: value references.
+        :type value_references: list[int]
+        :return: ``(status, intervals, qualifiers)``.
+        :rtype: tuple
+        """
         return self.engine.get_intervals(value_references)
 
     def fmi3GetIntervalFraction(self, value_references):
+        """``fmi3GetIntervalFraction``: clock intervals as uint64 counter/resolution (:func:`fraction`).
+
+        :param value_references: value references.
+        :type value_references: list[int]
+        :return: ``(status, counters, resolutions, qualifiers)``.
+        :rtype: tuple
+        """
         status, intervals, qualifiers = self.engine.get_intervals(value_references)
         counters, resolutions = zip(*[fraction(i) for i in intervals]) if intervals else ((), ())
         return status, list(counters), list(resolutions), qualifiers
 
     def fmi3GetShiftDecimal(self, value_references):
+        """``fmi3GetShiftDecimal``: clock shifts in seconds (:meth:`Engine.get_shifts`).
+
+        :param value_references: value references.
+        :type value_references: list[int]
+        :return: ``(status, shifts)``.
+        :rtype: tuple
+        """
         return self.engine.get_shifts(value_references)
 
     def fmi3GetShiftFraction(self, value_references):
+        """``fmi3GetShiftFraction``: clock shifts as uint64 counter/resolution (:func:`fraction`).
+
+        :param value_references: value references.
+        :type value_references: list[int]
+        :return: ``(status, counters, resolutions)``.
+        :rtype: tuple
+        """
         status, shifts = self.engine.get_shifts(value_references)
         counters, resolutions = zip(*[fraction(s) for s in shifts]) if shifts else ((), ())
         return status, list(counters), list(resolutions)
@@ -184,59 +430,219 @@ class Model:
     # ================= Setters =================
 
     def fmi3SetFloat32(self, value_references, values):
+        """``fmi3SetFloat32``: set inputs and parameters (:meth:`Engine.set_values`).
+
+        :param value_references: value references.
+        :type value_references: list[int]
+        :param values: the values, arrays flattened.
+        :type values: list
+        :return: the FMI status (``Fmi3Status``).
+        :rtype: int
+        """
         return self.engine.set_values(value_references, values)
 
     def fmi3SetFloat64(self, value_references, values):
+        """``fmi3SetFloat64``: set inputs and parameters (:meth:`Engine.set_values`).
+
+        :param value_references: value references.
+        :type value_references: list[int]
+        :param values: the values, arrays flattened.
+        :type values: list
+        :return: the FMI status (``Fmi3Status``).
+        :rtype: int
+        """
         return self.engine.set_values(value_references, values)
 
     def fmi3SetInt8(self, value_references, values):
+        """``fmi3SetInt8``: set inputs and parameters (:meth:`Engine.set_values`).
+
+        :param value_references: value references.
+        :type value_references: list[int]
+        :param values: the values, arrays flattened.
+        :type values: list
+        :return: the FMI status (``Fmi3Status``).
+        :rtype: int
+        """
         return self.engine.set_values(value_references, values)
 
     def fmi3SetUInt8(self, value_references, values):
+        """``fmi3SetUInt8``: set inputs and parameters (:meth:`Engine.set_values`).
+
+        :param value_references: value references.
+        :type value_references: list[int]
+        :param values: the values, arrays flattened.
+        :type values: list
+        :return: the FMI status (``Fmi3Status``).
+        :rtype: int
+        """
         return self.engine.set_values(value_references, values)
 
     def fmi3SetInt16(self, value_references, values):
+        """``fmi3SetInt16``: set inputs and parameters (:meth:`Engine.set_values`).
+
+        :param value_references: value references.
+        :type value_references: list[int]
+        :param values: the values, arrays flattened.
+        :type values: list
+        :return: the FMI status (``Fmi3Status``).
+        :rtype: int
+        """
         return self.engine.set_values(value_references, values)
 
     def fmi3SetUInt16(self, value_references, values):
+        """``fmi3SetUInt16``: set inputs and parameters (:meth:`Engine.set_values`).
+
+        :param value_references: value references.
+        :type value_references: list[int]
+        :param values: the values, arrays flattened.
+        :type values: list
+        :return: the FMI status (``Fmi3Status``).
+        :rtype: int
+        """
         return self.engine.set_values(value_references, values)
 
     def fmi3SetInt32(self, value_references, values):
+        """``fmi3SetInt32``: set inputs and parameters (:meth:`Engine.set_values`).
+
+        :param value_references: value references.
+        :type value_references: list[int]
+        :param values: the values, arrays flattened.
+        :type values: list
+        :return: the FMI status (``Fmi3Status``).
+        :rtype: int
+        """
         return self.engine.set_values(value_references, values)
 
     def fmi3SetUInt32(self, value_references, values):
+        """``fmi3SetUInt32``: set inputs and parameters (:meth:`Engine.set_values`).
+
+        :param value_references: value references.
+        :type value_references: list[int]
+        :param values: the values, arrays flattened.
+        :type values: list
+        :return: the FMI status (``Fmi3Status``).
+        :rtype: int
+        """
         return self.engine.set_values(value_references, values)
 
     def fmi3SetInt64(self, value_references, values):
+        """``fmi3SetInt64``: set inputs and parameters (:meth:`Engine.set_values`).
+
+        :param value_references: value references.
+        :type value_references: list[int]
+        :param values: the values, arrays flattened.
+        :type values: list
+        :return: the FMI status (``Fmi3Status``).
+        :rtype: int
+        """
         return self.engine.set_values(value_references, values)
 
     def fmi3SetUInt64(self, value_references, values):
+        """``fmi3SetUInt64``: set inputs and parameters (:meth:`Engine.set_values`).
+
+        :param value_references: value references.
+        :type value_references: list[int]
+        :param values: the values, arrays flattened.
+        :type values: list
+        :return: the FMI status (``Fmi3Status``).
+        :rtype: int
+        """
         return self.engine.set_values(value_references, values)
 
     def fmi3SetBoolean(self, value_references, values):
+        """``fmi3SetBoolean``: set inputs and parameters (:meth:`Engine.set_values`).
+
+        :param value_references: value references.
+        :type value_references: list[int]
+        :param values: the values, arrays flattened.
+        :type values: list
+        :return: the FMI status (``Fmi3Status``).
+        :rtype: int
+        """
         return self.engine.set_values(value_references, values)
 
     def fmi3SetString(self, value_references, values):
+        """``fmi3SetString``: set inputs and parameters (:meth:`Engine.set_values`).
+
+        :param value_references: value references.
+        :type value_references: list[int]
+        :param values: the values, arrays flattened.
+        :type values: list
+        :return: the FMI status (``Fmi3Status``).
+        :rtype: int
+        """
         return self.engine.set_values(value_references, values)
 
     def fmi3SetBinary(self, value_references, value_sizes, values):
+        """``fmi3SetBinary``: set inputs and parameters (:meth:`Engine.set_values`).
+
+        :param value_references: value references.
+        :type value_references: list[int]
+        :param value_sizes: byte length of each value; unused (Python bytes know their length).
+        :param values: the values, arrays flattened.
+        :type values: list
+        :return: the FMI status (``Fmi3Status``).
+        :rtype: int
+        """
         return self.engine.set_values(value_references, values)
 
     def fmi3SetClock(self, value_references, values):
+        """``fmi3SetClock``: activate input clocks (:meth:`Engine.set_clocks`).
+
+        :param value_references: value references.
+        :type value_references: list[int]
+        :param values: one bool per clock.
+        :return: the FMI status (``Fmi3Status``).
+        :rtype: int
+        """
         return self.engine.set_clocks(value_references, values)
 
     def fmi3SetIntervalDecimal(self, value_references, intervals):
+        """``fmi3SetIntervalDecimal``: set clock intervals (:meth:`Engine.set_intervals`).
+
+        :param value_references: value references.
+        :type value_references: list[int]
+        :param intervals: intervals in seconds.
+        :return: the FMI status (``Fmi3Status``).
+        :rtype: int
+        """
         return self.engine.set_intervals(value_references, intervals)
 
     def fmi3SetIntervalFraction(self, value_references, counters, resolutions):
+        """``fmi3SetIntervalFraction``: set clock intervals given as counter/resolution.
+
+        :param value_references: value references.
+        :type value_references: list[int]
+        :param counters: numerators.
+        :param resolutions: denominators.
+        :return: the FMI status (``Fmi3Status``).
+        :rtype: int
+        """
         return self.engine.set_intervals(
             value_references, [float(c) / float(r) for c, r in zip(counters, resolutions)]
         )
 
     def fmi3SetShiftDecimal(self, value_references, shifts):
+        """``fmi3SetShiftDecimal``: set clock shifts (:meth:`Engine.set_shifts`).
+
+        :param value_references: value references.
+        :type value_references: list[int]
+        :param shifts: shifts in seconds.
+        :return: the FMI status (``Fmi3Status``).
+        :rtype: int
+        """
         return self.engine.set_shifts(value_references, shifts)
 
     def fmi3SetShiftFraction(self, value_references, counters, resolutions):
+        """``fmi3SetShiftFraction``: set clock shifts given as counter/resolution.
+
+        :param value_references: value references.
+        :type value_references: list[int]
+        :param counters: numerators.
+        :param resolutions: denominators.
+        :return: the FMI status (``Fmi3Status``).
+        :rtype: int
+        """
         return self.engine.set_shifts(
             value_references, [float(c) / float(r) for c, r in zip(counters, resolutions)]
         )
@@ -244,24 +650,37 @@ class Model:
     # ================= Logging =================
 
     def fmi3SetDebugLogging(self, categories, logging_on):
+        """``fmi3SetDebugLogging``: choose which messages reach the importer.
+
+        :param categories: log categories to send; empty means all.
+        :type categories: list[str] or None
+        :param logging_on: whether non-error messages are sent.
+        :type logging_on: bool
+        :return: the FMI status (``Fmi3Status``).
+        :rtype: int
+        """
         return self.engine.set_debug_logging(logging_on, categories or ())
 
     def log(self, message, status, category = "logEvents"):
         # Removing the line below will break logging.
+        """Send a message to the importer through UniFMU.
+
+        :param message: the text.
+        :type message: str
+        :param status: the FMI status of the message.
+        :type status: int
+        :param category: the FMI log category.
+        :type category: str
+        """
         self._log_callback(status, category, message)
 
 
 class Fmi3Status(Status):
-    """
-    Represents the status of an FMI3 FMU or the results of function calls.
+    """FMI 3 status codes, as UniFMU's FMI 3 backend expects them (FMI 3 section 2.2.3).
 
-    Values:
-        * ok: all well
-        * warning: an issue has arisen, but the computation can continue.
-        * discard: an operation has resulted in invalid output, which must be discarded
-        * error: an error has ocurred for this specific FMU instance.
-        * fatal: an fatal error has ocurred which has corrupted ALL FMU instances.
-
-    Notes:
-        FMI section 2.2.3
+    :cvar ok: all well.
+    :cvar warning: an issue has arisen, but the computation can continue.
+    :cvar discard: an operation has resulted in invalid output, which must be discarded.
+    :cvar error: an error has occurred for this specific FMU instance.
+    :cvar fatal: a fatal error has occurred which has corrupted ALL FMU instances.
     """

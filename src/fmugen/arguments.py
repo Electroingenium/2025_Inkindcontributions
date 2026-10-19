@@ -14,19 +14,34 @@ from fmugen import static
 from fmugen.config import InterfaceError
 from fmugen.toml_output import _key, _value
 
+#: Argument names (lower case, without ``_``) taken as ``[time]`` arguments, and their source.
 TIME_NAMES = {"t": "time", "time": "time", "currenttime": "time", "tcurrent": "time", "tnow": "time",
               "dt": "step_size", "h": "step_size", "stepsize": "step_size", "timestep": "step_size",
               "until": "end_time", "endtime": "end_time", "tend": "end_time", "tnext": "end_time"}
 
 
 def _time_source(name):
-    """The [time] source for an argument named like a time (currentTime, step_size, until), or None."""
+    """The ``[time]`` source for an argument named like a time (currentTime, step_size, until), or None.
+
+    :param name: the argument name.
+    :type name: str
+    :rtype: str or None
+    """
     return TIME_NAMES.get(name.lower().replace("_", ""))
 
+#: Python types that are FMI scalar values.
 SCALARS = (bool, int, float, str)
 
 def _dotted_names(text):
-    """Dotted names (numpy.linspace) in a Python expression, or [] if it doesn't parse."""
+    """Dotted names (numpy.linspace) in a Python expression, or ``[]`` if it doesn't parse.
+
+    Parsed with :func:`ast.parse` only, never evaluated; used to find the packages a
+    ``call:`` start needs.
+
+    :param text: the expression.
+    :type text: str
+    :rtype: list[str]
+    """
     try:
         tree = ast.parse(text.rstrip().removesuffix(")") or "0", mode="eval")
     except SyntaxError:
@@ -41,6 +56,15 @@ NO_SIGNATURE = ("init", "no signature")   # comments key (not rendered): callabl
 
 
 def _start_error(comments, name, message):
+    """Record why a ``--start`` value can't be used (reported by init).
+
+    :param comments: ``(section, key) -> text`` for :func:`render_toml`, plus internal ``("init", ...)`` keys.
+    :type comments: dict
+    :param name: the ``--start`` name.
+    :type name: str
+    :param message: the reason.
+    :type message: str
+    """
     comments.setdefault(START_ERRORS, {})[name] = message
 
 
@@ -48,12 +72,25 @@ GUESSED = ("init", "guessed")   # comments key (not rendered): outputs typed Rea
 
 
 def _guessed(comments, name):
-    """An output whose type the code doesn't show: written as Real, which may be wrong."""
+    """Record an output whose type the code doesn't show: written as Real, which may be wrong.
+
+    :param comments: ``(section, key) -> text`` for :func:`render_toml`, plus internal ``("init", ...)`` keys.
+    :type comments: dict
+    :param name: the output.
+    :type name: str
+    """
     comments.setdefault(GUESSED, []).append(name)
 
 
 def guessed_outputs(data, comments):
-    """Outputs still in the config whose type is a guess (see _guessed)."""
+    """Outputs still in the config whose type is a guess (see :func:`_guessed`).
+
+    :param data: the config being inferred; updated in place.
+    :type data: dict
+    :param comments: ``(section, key) -> text`` for :func:`render_toml`, plus internal ``("init", ...)`` keys.
+    :type comments: dict
+    :rtype: list[str]
+    """
     return [n for n in comments.get(GUESSED, []) if n in data.get("outputs", {})
             and not {"type", "dimensions", "enum"} & set(data["outputs"][n])]
 
@@ -63,7 +100,19 @@ PROBED = ("init", "probed")   # comments key (not rendered): the probe's step ca
 
 
 def _unfit(comments, section, name, why, lines):
-    """An output (or local) the probe showed can't work as it is: written commented out, with why."""
+    """Write an output (or local) the probe showed can't work as it is commented out, with why.
+
+    :param comments: ``(section, key) -> text`` for :func:`render_toml`, plus internal ``("init", ...)`` keys.
+    :type comments: dict
+    :param section: the config section.
+    :type section: str
+    :param name: the variable.
+    :type name: str
+    :param why: the reason, shown above it.
+    :type why: str
+    :param lines: the commented-out TOML lines.
+    :type lines: list[str]
+    """
     comments[(section, f"#{name}#why")] = f"{name}: {why}"
     for i, line in enumerate(lines):
         comments[(section, f"#{name}#{i}")] = line
@@ -71,13 +120,18 @@ def _unfit(comments, section, name, why, lines):
 
 
 def unfit_outputs(comments):
-    """{name: why} for outputs init left commented out because the probe showed they'd fail."""
+    """``{name: why}`` for outputs init left commented out because the probe showed they'd fail.
+
+    :param comments: ``(section, key) -> text`` for :func:`render_toml`, plus internal ``("init", ...)`` keys.
+    :type comments: dict
+    :rtype: dict
+    """
     return dict(comments.get(UNFIT, {}))
 
 
-# Comments on a variable that record an assumption the user should check: (text in the comment,
-# what `fmugen init` prints after the variable names). Read from the final comments, so a guess the
-# probe later confirmed or replaced isn't reported.
+#: Comments on a variable that record an assumption the user should check: (text in the comment,
+#: what `fmugen init` prints after the variable names). Read from the final comments, so a guess the
+#: probe later confirmed or replaced isn't reported.
 ASSUMPTIONS = (
     ("no default in the code", "no default in the code: the start value is made up, check it"),
     ("no default: check the start value", "no default in the code: the start value is made up, check it"),
@@ -99,14 +153,22 @@ ASSUMPTIONS = (
     ("(type unknown): uncomment", "properties of unknown type left commented out: uncomment the numbers"),
     ("need --fmi 3", "left out: bytes and resizable arrays need --fmi 3"),
 )
-# Section notes (and [model] comments) that are warnings as they are.
+#: Section notes (and [model] comments) that are warnings as they are.
 NOTE_WARNINGS = ("probe call failed", "probe construction failed", "outputs could not be read",
                  "cannot inspect the signature", "is known only by running it", "skipped ",
                  "can't be pickled", "both take *args", "results that can be None")
 
 
 def assumptions(comments):
-    """Warnings for what init assumed and only wrote as comments in the config (see ASSUMPTIONS)."""
+    """Warnings for what init assumed and only wrote as comments in the config (see :data:`ASSUMPTIONS`).
+
+    Variables with the same assumption are grouped into one line.
+
+    :param comments: ``(section, key) -> text`` for :func:`render_toml`, plus internal ``("init", ...)`` keys.
+    :type comments: dict
+    :return: the warning lines printed by ``fmugen init``.
+    :rtype: list[str]
+    """
     grouped, notes = {}, []
     for key, text in comments.items():
         if key[0] == "init" or not isinstance(text, str):
@@ -135,8 +197,13 @@ def assumptions(comments):
 
 
 def _misfit(value):
-    """Why a value seen in the probe can't be read into an FMI variable, or None if it can (or isn't
-    one of these cases)."""
+    """Why a value seen in the probe can't be read into an FMI variable, or None.
+
+    Covers None (type unknown) and complex numbers (FMI has none).
+
+    :param value: the probe value.
+    :rtype: str or None
+    """
     value = _scalar_of(value)
     if value is None:
         return "None in the probe, so its type is unknown; a None at run time fails the step"
@@ -146,8 +213,24 @@ def _misfit(value):
 
 
 def _unfit_value(comments, section, name, value, source, arrays=True):
-    """Comment out `name` (read from `source`: "return", "return:key" or "attr:name") if its probe value
-    is None or complex. Returns True if it did."""
+    """Comment out ``name`` if its probe value is None or complex.
+
+    A complex value is offered as two outputs, its real and imaginary parts.
+
+    :param comments: ``(section, key) -> text`` for :func:`render_toml`, plus internal ``("init", ...)`` keys.
+    :type comments: dict
+    :param section: the config section.
+    :type section: str
+    :param name: the variable.
+    :type name: str
+    :param value: the probe value.
+    :param source: where it is read from: ``"return"``, ``"return:key"`` or ``"attr:name"``.
+    :type source: str
+    :param arrays: whether arrays and bytes may be FMU variables (FMI 3).
+    :type arrays: bool
+    :return: True if it did.
+    :rtype: bool
+    """
     why = _misfit(value)
     if why is None:
         return False
@@ -165,7 +248,13 @@ def _unfit_value(comments, section, name, value, source, arrays=True):
 
 
 def _apply_converts(data, converts):
-    """--convert NAME=module:function (or NAME=numpy): how an argument is passed to the model."""
+    """Apply ``--convert NAME=module:function`` (or ``NAME=numpy``): how an argument is passed to the model.
+
+    :param data: the config being inferred; updated in place.
+    :type data: dict
+    :param converts: ``{NAME: converter}``, or None.
+    :type converts: dict or None
+    """
     for name, converter in (converts or {}).items():
         for section in ("parameters", "inputs", "states"):
             info = data.get(section, {}).get(name)
@@ -179,14 +268,28 @@ def _apply_converts(data, converts):
 
 
 def _assign_starts(init, method, starts):
-    """Split --start values between constructor and step method arguments.
+    """Split ``--start`` values between constructor and step method arguments.
 
     A name goes to the argument that has no default (it needs a value); on a tie, to the
-    step method. Names neither declares go to whichever accepts **kwargs (method first).
-    For a name both declare, <method>_NAME (the variable name init gives the method's one)
+    step method. Names neither declares go to whichever accepts ``**kwargs`` (method first).
+    For a name both declare, ``<method>_NAME`` (the variable name init gives the method's one)
     goes to the method, and then NAME to the constructor: x0 and calculate_optimal_actuation_x0.
+
+    :param init: the constructor (or factory), or None.
+    :type init: callable or None
+    :param method: the step method, or None.
+    :type method: callable or None
+    :param starts: the ``--start`` values.
+    :type starts: dict
+    :return: ``(constructor starts, method starts)``; names nobody takes are left out.
+    :rtype: tuple[dict, dict]
     """
     def params(fn):
+        """The parameters of ``fn`` from :func:`inspect.signature`, or ``{}`` without one.
+
+        :param fn: a callable, or None.
+        :rtype: collections.abc.Mapping
+        """
         try:
             return inspect.signature(fn).parameters if fn is not None else {}
         except (TypeError, ValueError):
@@ -223,7 +326,13 @@ def _assign_starts(init, method, starts):
 
 
 def _only_varargs(fn, skip_self=True):
-    """Whether fn declares no named arguments, only *args (and maybe **kwargs)."""
+    """Whether ``fn`` declares no named arguments, only ``*args`` (and maybe ``**kwargs``).
+
+    :param fn: the callable.
+    :param skip_self: ignore the first parameter (an unbound method's self).
+    :type skip_self: bool
+    :rtype: bool
+    """
     try:
         params = list(inspect.signature(fn).parameters.values())[1 if skip_self else 0:]
     except (TypeError, ValueError):
@@ -236,10 +345,37 @@ def _only_varargs(fn, skip_self=True):
 
 def _arguments(fn, section, data, comments, skip_self=False, allow_time=True, constants_key="constants",
                arrays=False, starts=None, positional=True):
-    """Sort the arguments of fn into variables of `section` and time arguments.
+    """Sort the arguments of ``fn`` into variables of ``section`` and time arguments.
 
-    Arguments whose default is not an FMI value (None, tuples, objects) keep their code
-    default; they are listed as commented-out constants so the user can override them.
+    Reads the signature with :func:`inspect.signature`. Each parameter becomes, in order of
+    precedence: a ``[time]`` argument (named like a time, or a date-time), a call constant
+    (``--start NAME=call:...``), item or field variables (tuple/dict starts, dataclass-like
+    objects), or a variable typed from its default, ``--start`` value or annotation.
+    Positional-only parameters get ``to = "pos:N"``. Arguments whose default is not an FMI value
+    (None, tuples, objects) keep their code default; they are listed as commented-out constants
+    so the user can override them. ``--start`` values for ``*args`` / ``**kwargs`` become
+    positional or keyword variables.
+
+    :param fn: the function, constructor or step method.
+    :param section: the config section to fill (``parameters`` or ``inputs``).
+    :type section: str
+    :param data: the config being inferred; updated in place.
+    :type data: dict
+    :param comments: ``(section, key) -> text`` for :func:`render_toml`, plus internal ``("init", ...)`` keys.
+    :type comments: dict
+    :param skip_self: drop the first parameter (self).
+    :type skip_self: bool
+    :param allow_time: whether arguments may become ``[time]`` arguments (not for constructors).
+    :type allow_time: bool
+    :param constants_key: ``"constants"`` or ``"call_constants"``.
+    :type constants_key: str
+    :param arrays: whether arrays and bytes may be FMU variables (FMI 3).
+    :type arrays: bool
+    :param starts: ``--start`` values for these arguments.
+    :type starts: dict or None
+    :param positional: whether positional-only parameters are included.
+    :type positional: bool
+    :raises InterfaceError: an array ``--start`` for FMI 2, or an unusable value for ``*args``.
     """
     variables = data.setdefault(section, {})
     time_args = data.get("time", {})
@@ -362,8 +498,15 @@ def _arguments(fn, section, data, comments, skip_self=False, allow_time=True, co
 
 
 def _unwrap_descriptor(p):
-    """A default that is a descriptor (astropy's Parameter(default=3.04, ...) in FlatLambdaCDM's
-    signature) stands for the class's own handling of the argument: its `default` is the value."""
+    """Replace a descriptor default by the value it stands for.
+
+    A default that is a descriptor (astropy's ``Parameter(default=3.04, ...)`` in FlatLambdaCDM's
+    signature) stands for the class's own handling of the argument: its ``default`` is the value.
+
+    :param p: a signature parameter.
+    :type p: inspect.Parameter
+    :rtype: inspect.Parameter
+    """
     default = p.default
     if p.default is p.empty or callable(default) \
             or not hasattr(type(default), "__get__") or not hasattr(default, "default"):
@@ -372,7 +515,16 @@ def _unwrap_descriptor(p):
 
 
 def _extra_info(name, value, arrays):
-    """The variable for a --start value that no declared argument takes (*args, **kwargs)."""
+    """The variable for a ``--start`` value that no declared argument takes (``*args``, ``**kwargs``).
+
+    :param name: the ``--start`` name.
+    :type name: str
+    :param value: its value.
+    :param arrays: whether arrays and bytes may be FMU variables (FMI 3).
+    :type arrays: bool
+    :rtype: dict
+    :raises InterfaceError: not an FMI value.
+    """
     if isinstance(value, SCALARS):
         return _type_info(value)
     if arrays and _array_info(value):
@@ -380,12 +532,18 @@ def _extra_info(name, value, arrays):
     raise InterfaceError(f"--start {name}: {value!r} is not an FMI value")
 
 
+#: Annotation text -> how an array argument of that type is passed (``convert``, or ``numpy``).
 ARRAY_CONVERTERS = {"torch.Tensor": "torch:tensor", "ndarray": "numpy", "jax.Array": "jax.numpy:asarray",
                     "tf.Tensor": "tensorflow:constant"}
 
 
 def _converter(annotation):
-    """How an array argument must be passed, from its annotation: "numpy", "module:function", or None."""
+    """How an array argument must be passed, from its annotation.
+
+    :param annotation: the parameter's annotation (or ``inspect.Parameter.empty``).
+    :return: ``"numpy"``, ``"module:function"``, or None.
+    :rtype: str or None
+    """
     if annotation is inspect.Parameter.empty:
         return None
     text = annotation if isinstance(annotation, str) else repr(annotation)
@@ -393,8 +551,25 @@ def _converter(annotation):
 
 
 def _split_items(p, value, variables, section, comments, arrays):
-    """A tuple of arrays (or a dict) passed as one argument becomes one variable per item,
-    bound with to = "arg:NAME[i]" / "arg:NAME[key]". Returns whether it was split."""
+    """Make one variable per item of a tuple (of arrays) or dict ``--start`` value.
+
+    Bound with ``to = "arg:NAME[i]"`` / ``"arg:NAME[key]"`` (``init:`` for parameters); the
+    runtime puts the argument back together (:func:`assemble_items`).
+
+    :param p: the parameter.
+    :type p: inspect.Parameter
+    :param value: its ``--start`` value.
+    :param variables: the section's variables; updated in place.
+    :type variables: dict
+    :param section: the config section (``parameters`` or ``inputs``).
+    :type section: str
+    :param comments: ``(section, key) -> text`` for :func:`render_toml`, plus internal ``("init", ...)`` keys.
+    :type comments: dict
+    :param arrays: whether arrays and bytes may be FMU variables (FMI 3).
+    :type arrays: bool
+    :return: whether it was split.
+    :rtype: bool
+    """
     import typing
     if isinstance(value, tuple) and len(value) > 1 and not (arrays and _array_info(value)):
         keys = list(range(len(value)))
@@ -428,7 +603,15 @@ def _split_items(p, value, variables, section, comments, arrays):
 
 
 def _object_fields(cls):
-    """[(field, type hint, default or empty)] of a dataclass, pydantic model or attrs class, else None."""
+    """The fields of a dataclass, pydantic model, attrs class or namedtuple.
+
+    Field types come from :func:`typing.get_type_hints` (resolving string annotations);
+    default factories are called to get a default.
+
+    :param cls: the class.
+    :return: ``[(field, type hint, default or inspect.Parameter.empty)]``, else None.
+    :rtype: list[tuple] or None
+    """
     if not isinstance(cls, type):
         return None
     try:
@@ -456,9 +639,29 @@ def _object_fields(cls):
 
 
 def _split_fields(fn, p, variables, section, comments, starts, arrays):
-    """An argument that is a dataclass / pydantic / attrs object (by its default or its annotation)
-    becomes one variable per field, NAME_FIELD, bound with to = "arg:NAME.FIELD". Fields that aren't
-    FMI values keep the default's value; without a default, they must have their own default."""
+    """Make one variable per field of an object argument.
+
+    An argument that is a dataclass / pydantic / attrs object (by its default or its annotation)
+    becomes one variable per field, NAME_FIELD, bound with ``to = "arg:NAME.FIELD"``. Fields that
+    aren't FMI values keep the default's value; without a default, they must have their own
+    default.
+
+    :param fn: the function (for its type hints).
+    :param p: the parameter.
+    :type p: inspect.Parameter
+    :param variables: the section's variables; updated in place.
+    :type variables: dict
+    :param section: the config section (``parameters`` or ``inputs``).
+    :type section: str
+    :param comments: ``(section, key) -> text`` for :func:`render_toml`, plus internal ``("init", ...)`` keys.
+    :type comments: dict
+    :param starts: ``--start`` values (``NAME.FIELD`` ones give field starts).
+    :type starts: dict
+    :param arrays: whether arrays and bytes may be FMU variables (FMI 3).
+    :type arrays: bool
+    :return: whether it was split.
+    :rtype: bool
+    """
     if p.default is None:
         return False   # None means "not given" to the model: it stays a constant, as for any argument
     default = None if p.default is p.empty else p.default
@@ -501,6 +704,15 @@ def _split_fields(fn, p, variables, section, comments, starts, arrays):
 
 
 def _type_info(value, annotation=inspect.Parameter.empty):
+    """The ``start`` of a scalar variable from its default and annotation.
+
+    Without a default, the annotation's zero (float by default); an int default for a float
+    annotation becomes a float.
+
+    :param value: the default, or None.
+    :param annotation: the parameter's annotation.
+    :rtype: dict
+    """
     annotation = static.unwrap_optional(annotation)
     if value is None:
         hint = {float: 0.0, int: 0, bool: False, str: ""}.get(annotation, 0.0)
@@ -513,7 +725,14 @@ def _type_info(value, annotation=inspect.Parameter.empty):
 
 
 def _constant(value):
-    """How a non-FMI default would be written as a constant (for a commented-out example)."""
+    """How a non-FMI default would be written as a constant (for a commented-out example).
+
+    ``{python = repr}`` when :func:`ast.literal_eval` gives the value back, else
+    ``{ref = "module:qualname"}`` for a named object.
+
+    :param value: the default.
+    :rtype: dict or None
+    """
     text = repr(value)
     try:
         if ast.literal_eval(text) == value:
@@ -525,12 +744,20 @@ def _constant(value):
         return {"ref": f"{module}:{qualname}"}
     return None
 
+#: Argument names taken as date-times when they aren't annotated.
 DATETIME_NAMES = ("when", "date", "datetime", "dateandtime", "date_time", "timestamp", "utc_time")
 
 
 def _is_datetime(fn, p):
-    """Whether an argument takes a date-time: "annotation" (datetime, Optional[datetime]), "name" (an
-    unannotated argument named like one, without a non-None default), or None."""
+    """Whether an argument takes a date-time.
+
+    :param fn: the function (for its type hints).
+    :param p: the parameter.
+    :type p: inspect.Parameter
+    :return: ``"annotation"`` (datetime, Optional[datetime]), ``"name"`` (an unannotated argument
+        named like one, without a non-None default), or None.
+    :rtype: str or None
+    """
     try:
         hint = typing.get_type_hints(fn).get(p.name, p.annotation)
     except Exception:
@@ -548,7 +775,18 @@ def _is_datetime(fn, p):
 
 
 def _typed(info, value, arrays=False):
-    """Type of an output seen in the probe; ints become Real (a probe often just returns 0)."""
+    """Add the type (and unit, dimensions) of an output seen in the probe.
+
+    Ints become Real (a probe often just returns 0); ``numpy`` / ``convert`` are dropped, since
+    they only matter for values passed into the model.
+
+    :param info: the variable's table; updated and returned.
+    :type info: dict
+    :param value: the probe value.
+    :param arrays: whether arrays and bytes may be FMU variables (FMI 3).
+    :type arrays: bool
+    :rtype: dict
+    """
     if _unit_of(value):
         info["unit"] = _unit_of(value)
     value = _scalar_of(value)
@@ -566,8 +804,14 @@ def _typed(info, value, arrays=False):
     return info
 
 def _valid_name(name):
-    """A dotted variable name for a result key: other characters become "_" ("N-14" -> "N_14"), and a
-    part that starts with a digit or is a keyword gets a leading "_"."""
+    """A dotted variable name for a result key.
+
+    Other characters become ``_`` (``"N-14"`` -> ``"N_14"``), and a part that starts with a digit
+    or is a keyword gets a leading ``_``.
+
+    :param name: the key.
+    :rtype: str
+    """
     parts = []
     for part in str(name).split("."):
         part = re.sub(r"\W", "_", part) or "_"
@@ -578,14 +822,27 @@ def _valid_name(name):
 
 
 def _dotted_name(name):
+    """Whether every dot-separated part of ``name`` is an identifier.
+
+    :param name: the name.
+    :type name: str
+    :rtype: bool
+    """
     return all(part.isidentifier() for part in name.split("."))
 
+#: Suffixes of input names that mean a previous value (x_prev): candidates for states.
 STATE_SUFFIXES = ("_prev", "_old", "_last")
+#: Prefixes of input names that mean a previous value (prev_x).
 STATE_PREFIXES = ("prev_", "last_", "old_")
 
 
 def _state_base(name):
-    """'x' for an input named like a previous value (x_prev, x_old, x_last, prev_x, last_x, old_x), else None."""
+    """'x' for an input named like a previous value (x_prev, x_old, x_last, prev_x, last_x, old_x), else None.
+
+    :param name: the input name.
+    :type name: str
+    :rtype: str or None
+    """
     for suffix in STATE_SUFFIXES:
         if name.endswith(suffix) and len(name) > len(suffix):
             return name[: -len(suffix)]
@@ -594,16 +851,22 @@ def _state_base(name):
             return name[len(prefix):]
     return None
 
+#: numpy scalar type names, kept as they are (not unwrapped with .item()).
 NUMPY_SCALARS = ("float64", "float32", "int64", "int32", "int16", "int8", "uint64", "uint32", "uint16",
                  "uint8", "bool_")
+#: numpy/torch dtype name -> FMI type of an array's elements.
 NUMPY_TYPES = {"float32": "Float32", "float64": "Real", "int8": "Int8", "uint8": "UInt8", "int16": "Int16",
                "uint16": "UInt16", "int32": "Int32", "uint32": "UInt32", "int64": "Int64", "uint64": "UInt64",
                "bool": "Boolean"}
 
 
 def _scalar_of(value):
-    """The scalar inside a 0-dimensional array or tensor (numpy, torch, ...) or a pint quantity,
-    else the value itself."""
+    """The scalar inside a 0-dimensional array or tensor (numpy, torch, ...) or a quantity, else the value itself.
+
+    numpy scalars (np.float32, ...) also have ndim 0, but are kept as they are, keeping their type.
+
+    :param value: the value.
+    """
     if hasattr(value, "magnitude") and hasattr(value, "units"):
         value = value.magnitude
     elif hasattr(value, "unit") and hasattr(value, "to_value"):   # an astropy Quantity
@@ -618,6 +881,13 @@ def _scalar_of(value):
 
 
 def _fmi_value(value, arrays=False):
+    """Whether a value can be an FMI variable.
+
+    :param value: the value.
+    :param arrays: whether arrays and bytes may be FMU variables (FMI 3).
+    :type arrays: bool
+    :rtype: bool
+    """
     value = _scalar_of(value)
     if isinstance(value, (*SCALARS, enum.Enum)) or type(value).__name__ in NUMPY_SCALARS or _number_like(value):
         return True
@@ -625,7 +895,11 @@ def _fmi_value(value, arrays=False):
 
 
 def _number_like(value):
-    """Decimal, Fraction, numpy.float16, ... : anything that converts to a float or an int and isn't an array."""
+    """Decimal, Fraction, numpy.float16, ...: anything that converts to a float or an int and isn't an array.
+
+    :param value: the value.
+    :rtype: bool
+    """
     if getattr(value, "ndim", 0) or isinstance(value, (str, bytes, complex)):
         return False
     if not (hasattr(type(value), "__float__") or hasattr(type(value), "__index__")):
@@ -638,7 +912,12 @@ def _number_like(value):
 
 
 def _unit_of(value):
-    """The unit of a pint quantity, written compactly ("m/s"); None for anything else or dimensionless."""
+    """The unit of a pint or astropy quantity, written compactly ("m/s").
+
+    :param value: the value.
+    :return: the unit, or None for anything else or dimensionless.
+    :rtype: str or None
+    """
     if hasattr(value, "unit") and hasattr(value, "to_value"):   # an astropy Quantity
         unit = value.unit.to_string() if hasattr(value.unit, "to_string") else str(value.unit)
         return unit or None
@@ -652,7 +931,14 @@ def _unit_of(value):
 
 
 def _array_info(value, with_start=False):
-    """{dimensions, type?, numpy?, start?} for a rectangular list/tuple/numpy array of numbers, else None."""
+    """The array keys of a variable for a rectangular list/tuple/numpy array/tensor of numbers.
+
+    :param value: the value.
+    :param with_start: also give the flattened ``start``.
+    :type with_start: bool
+    :return: ``{dimensions, type?, numpy? / convert?, start?}``, else None (also for empty arrays).
+    :rtype: dict or None
+    """
     if hasattr(value, "shape") and hasattr(value, "tolist") and getattr(value, "ndim", 0) > 0:
         from fmugen.templates.fmugen_runtime import flatten
         shape, flat = [int(n) for n in value.shape], flatten(value.tolist())
@@ -690,6 +976,12 @@ def _array_info(value, with_start=False):
 
 
 def _shape(value):
+    """The shape of nested lists/tuples.
+
+    :param value: the value.
+    :return: the dimensions (``[]`` for a scalar), or None when not rectangular.
+    :rtype: list[int] or None
+    """
     if not isinstance(value, (list, tuple)):
         return []
     shapes = [_shape(item) for item in value]
@@ -699,6 +991,12 @@ def _shape(value):
 
 
 def _same(a, b):
+    """Whether two probe values are equal (arrays compared as lists, NaN equal to NaN).
+
+    :param a: one value.
+    :param b: the other.
+    :rtype: bool
+    """
     try:
         if hasattr(a, "tolist"):
             a = a.tolist()
@@ -710,6 +1008,12 @@ def _same(a, b):
 
 
 def _type_name(value):
+    """The config type name of a Python scalar.
+
+    :param value: the value.
+    :return: ``"Boolean"``, ``"Integer"``, ``"String"`` or ``"Real"``.
+    :rtype: str
+    """
     if isinstance(value, bool):
         return "Boolean"
     if isinstance(value, int):

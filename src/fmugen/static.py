@@ -13,14 +13,26 @@ import textwrap
 import types
 import typing
 
+#: Python type -> FMI type, for annotations and values that are plain scalars.
 PRIMITIVE_TYPES = {float: "Real", int: "Integer", bool: "Boolean", str: "String"}
+#: Substrings of an annotation's repr that mean an array (size unknown statically).
 ARRAY_ANNOTATIONS = ("ndarray", "Tensor", "jax.Array", "tf.Tensor", "list[", "List[", "Sequence[", "numpy")
+#: How far to follow self.method() calls when collecting assigned attributes.
 MAX_DEPTH = 6   # how far to follow self.method() calls
 
 
 @dataclasses.dataclass
 class Returned:
-    """What a function or method returns, as far as the code tells."""
+    """What a function or method returns, as far as the code tells.
+
+    :ivar names: output names, in order.
+    :ivar sources: name -> ``"return"`` / ``"return:<key>"`` (the ``from`` binding).
+    :ivar types: name -> FMI type, when known.
+    :ivar array: the whole result is an array (size unknown).
+    :ivar unknown: why the result couldn't be read, if it couldn't.
+    :ivar may_be_none: some return statements return None (simpy's Environment.run).
+    :ivar nullable: names whose value may be None (database columns).
+    """
     names: list = dataclasses.field(default_factory=list)   # output names, in order
     sources: dict = dataclasses.field(default_factory=dict)  # name -> "return" / "return:<key>"
     types: dict = dataclasses.field(default_factory=dict)    # name -> FMI type (when known)
@@ -31,7 +43,15 @@ class Returned:
 
 
 def function_node(fn):
-    """The ast.FunctionDef of fn, or None when there's no Python source (C extensions, builtins)."""
+    """The ``ast.FunctionDef`` of ``fn``, parsed from its source.
+
+    :func:`inspect.unwrap` removes decorators (functools.wraps) so the real function's source
+    is read; :func:`inspect.getsource` gives the text, dedented so a method parses on its own.
+
+    :param fn: a function, method, classmethod or staticmethod.
+    :return: the function node, or None when there's no Python source (C extensions, builtins).
+    :rtype: ast.FunctionDef or ast.AsyncFunctionDef or None
+    """
     fn = inspect.unwrap(getattr(fn, "__func__", fn))
     try:
         source = textwrap.dedent(inspect.getsource(fn))
@@ -43,10 +63,24 @@ def function_node(fn):
 
 
 def _own_nodes(node):
-    """All nodes inside a function body, not entering nested functions, classes or lambdas."""
+    """All nodes inside a function body, in source order, not entering nested functions, classes or lambdas.
+
+    Unlike :func:`ast.walk` (breadth-first, enters everything), this keeps a nested function's
+    ``return`` from being taken as the outer function's.
+
+    :param node: a function node.
+    :type node: ast.FunctionDef
+    :return: the nodes.
+    :rtype: collections.abc.Iterator[ast.AST]
+    """
     nested = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)
 
     def walk(items):   # in source order
+        """Depth-first walk that skips nested scopes.
+
+        :param items: the nodes to walk.
+        :type items: collections.abc.Iterable[ast.AST]
+        """
         for item in items:
             if not isinstance(item, nested):
                 yield item
@@ -55,19 +89,31 @@ def _own_nodes(node):
     yield from walk(node.body)
 
 
+#: Function/method names whose call obviously builds an array or sequence.
 ARRAY_CALLS = {"array", "asarray", "zeros", "ones", "empty", "full", "arange", "linspace", "eye", "tensor",
                "zeros_like", "ones_like", "empty_like", "full_like", "roll", "stack", "concatenate", "list", "tuple"}
+#: Function names whose call obviously gives a number.
 NUMBER_CALLS = {"float", "int", "abs", "round", "sqrt", "exp", "log", "log10", "log2", "sin", "cos", "tan",
                 "asin", "acos", "atan", "atan2", "sinh", "cosh", "tanh", "pow", "hypot", "floor", "ceil", "radians",
                 "degrees", "isclose"}
+#: Function/class names whose call gives something that is not an FMI value.
 OTHER_CALLS = {"dict", "set", "frozenset", "deque", "defaultdict", "OrderedDict", "Counter", "open", "Lock",
                "RLock", "Thread", "Queue", "Event", "object"}
 
 
 def _literal_type(node, namespace=None):
-    """What an assigned/returned expression obviously is: "Boolean", "String", "Real" (arithmetic, a
-    number literal, math functions), "array", "other" (not an FMI value: dicts, sets, objects), or None
-    (not obvious from the code)."""
+    """What an assigned or returned expression obviously is.
+
+    Only the expression's form is looked at (literals, arithmetic, comparisons, calls of
+    well-known names); nothing is evaluated.
+
+    :param node: the expression.
+    :type node: ast.expr
+    :param namespace: the function's globals, to recognise calls of classes (objects).
+    :type namespace: dict or None
+    :return: ``"Boolean"``, ``"String"``, ``"Real"``, ``"array"``, ``"other"`` (not an FMI value) or None (not obvious); ``"none"`` for a None literal.
+    :rtype: str or None
+    """
     if isinstance(node, ast.Constant):
         if isinstance(node.value, bool):
             return "Boolean"
@@ -104,15 +150,29 @@ def _literal_type(node, namespace=None):
 
 
 def _hint_type(hint):
+    """The FMI type of a scalar annotation (``Optional`` unwrapped), or None.
+
+    :param hint: an annotation.
+    :rtype: str or None
+    """
     return PRIMITIVE_TYPES.get(unwrap_optional(hint))
 
 
+#: Type names in string annotations (``"Optional[float]"``) -> the type.
 OPTIONAL_NAMES = {"float": float, "int": int, "bool": bool, "str": str}
 
 
 def written_globals(module):
-    """Names of module-level variables that a function of `module` rebinds (`global X; X = ...`):
-    state kept outside the model object, e.g. pythermalcomfort's PRE_SHIV."""
+    """Names of module-level variables that a function of ``module`` rebinds (``global X; X = ...``).
+
+    State kept outside the model object, e.g. pythermalcomfort's PRE_SHIV, which must be saved
+    with the FMU state (``[model] globals``). Found by parsing the module's source.
+
+    :param module: the model's module.
+    :type module: types.ModuleType
+    :return: the names, in order of first appearance.
+    :rtype: list[str]
+    """
     try:
         tree = ast.parse(inspect.getsource(module))
     except (OSError, TypeError, SyntaxError, UnicodeDecodeError):
@@ -130,7 +190,15 @@ def written_globals(module):
 
 
 def unwrap_optional(hint):
-    """X for Optional[X] / X | None / Union[X, None] (also written as strings), else hint unchanged."""
+    """X for ``Optional[X]`` / ``X | None`` / ``Union[X, None]`` (also written as strings), else the hint unchanged.
+
+    :func:`typing.get_origin` is ``Union`` for ``Optional[X]`` and ``types.UnionType`` for
+    ``X | None``, so both are checked. String annotations (unresolved forward references) are
+    matched as text.
+
+    :param hint: an annotation.
+    :return: the unwrapped annotation.
+    """
     if isinstance(hint, str):
         text = hint.replace(" ", "").replace("typing.", "")
         if text.startswith("Optional[") and text.endswith("]"):
@@ -145,11 +213,21 @@ def unwrap_optional(hint):
 
 
 def _is_array_hint(hint):
+    """Whether an annotation names an array type (numpy, torch, lists, ...), by its repr.
+
+    :param hint: an annotation, or None.
+    :rtype: bool
+    """
     return hint is not None and any(a in repr(hint) for a in ARRAY_ANNOTATIONS)
 
 
 def _fields_of(hint):
-    """Field names and types of a NamedTuple, TypedDict or dataclass type, else None."""
+    """Field names and types of a NamedTuple, TypedDict or dataclass type.
+
+    :param hint: a return annotation.
+    :return: ``(names, {name: FMI type})``, or None for other types.
+    :rtype: tuple or None
+    """
     if not isinstance(hint, type):
         return None
     if issubclass(hint, tuple) and hasattr(hint, "_fields"):
@@ -166,8 +244,14 @@ def _fields_of(hint):
 
 
 def _table_columns(hint):
-    """(names, {name: type}, nullable names) of the typed columns of a SQLAlchemy model class
-    (mendeleev's Element), else None."""
+    """The typed columns of a SQLAlchemy model class (mendeleev's Element).
+
+    Read from the class's ``__table__.columns``; columns without a Python type are skipped.
+
+    :param hint: a return annotation.
+    :return: ``(names, {name: type}, nullable names)``, or None.
+    :rtype: tuple or None
+    """
     columns = getattr(getattr(hint, "__table__", None), "columns", None) if isinstance(hint, type) else None
     if columns is None:
         return None
@@ -188,8 +272,22 @@ def _table_columns(hint):
 
 
 def returned(fn, namespace=None, attributes=None):
-    """What fn returns: dict keys, tuple positions, NamedTuple/dataclass fields, or a single value.
-    `attributes` ({attr: kind}, for a method) gives the kind of a returned self.attr."""
+    """What ``fn`` returns: dict keys, tuple positions, NamedTuple/dataclass fields, or a single value.
+
+    First the return annotation (:func:`typing.get_type_hints`, which resolves string
+    annotations); without a usable one, the function's source is parsed and its ``return``
+    statements read: a dict literal (or a local dict filled key by key) gives its keys, a tuple
+    its positions, a call of a NamedTuple/dataclass its fields. Local variables assigned in the
+    body give the kinds of returned names.
+
+    :param fn: the function or step method.
+    :param namespace: globals to resolve names in (default: the function's ``__globals__``).
+    :type namespace: dict or None
+    :param attributes: ``{attr: kind}`` for a method, giving the kind of a returned ``self.attr``.
+    :type attributes: dict or None
+    :return: what was found.
+    :rtype: Returned
+    """
     try:
         hint = typing.get_type_hints(inspect.unwrap(getattr(fn, "__func__", fn))).get("return")
     except Exception:
@@ -231,6 +329,13 @@ def returned(fn, namespace=None, attributes=None):
     local_kinds = {name: _merge(kinds) for name, kinds in found.items()}
 
     def kind(value):   # an argument returned as it is takes that argument's type ("arg:<name>")
+        """The kind of a returned expression; an argument returned as it is gives ``"arg:<name>"``.
+
+        :param value: the expression.
+        :type value: ast.expr
+        :return: ``"Boolean"``, ``"String"``, ``"Real"``, ``"array"``, ``"other"`` (not an FMI value) or None (not obvious), or ``"arg:<name>"``.
+        :rtype: str or None
+        """
         if isinstance(value, ast.Name) and value.id in arg_names:
             return f"arg:{value.id}"
         if isinstance(value, ast.Name) and value.id in local_kinds:
@@ -278,7 +383,20 @@ def returned(fn, namespace=None, attributes=None):
 
 
 def _dict_leaves(node, kind, prefix="", depth=0):
-    """{name: type} for a dict literal, with dict literals inside it named with dots: {"zone": {"T": t}} -> zone.T"""
+    """``{name: type}`` for a dict literal, with dict literals inside it named with dots.
+
+    ``{"zone": {"T": t}}`` -> ``zone.T`` (up to three levels).
+
+    :param node: the dict literal.
+    :type node: ast.Dict
+    :param kind: gives the kind of a value expression.
+    :type kind: callable
+    :param prefix: dotted prefix of the enclosing keys.
+    :type prefix: str
+    :param depth: nesting level.
+    :type depth: int
+    :rtype: dict
+    """
     leaves = {}
     for key, value in zip(_str_keys(node), node.values):
         if isinstance(value, ast.Dict) and _str_keys(value) and depth < 3:
@@ -289,12 +407,25 @@ def _dict_leaves(node, kind, prefix="", depth=0):
 
 
 def _str_keys(node):
+    """The keys of a dict literal, if all are identifier strings.
+
+    :param node: the dict literal.
+    :type node: ast.Dict
+    :return: the keys, or ``[]``.
+    :rtype: list[str]
+    """
     keys = [k.value for k in node.keys if isinstance(k, ast.Constant) and isinstance(k.value, str)]
     return keys if len(keys) == len(node.keys) and all(k.isidentifier() for k in keys) else []
 
 
 def _local_dicts(node):
-    """{variable: [keys]} for `v = {...}` / `v = dict()` plus `v["k"] = ...` in the function."""
+    """Local dicts and their keys: ``v = {...}`` / ``v = dict()`` plus ``v["k"] = ...`` in the function.
+
+    :param node: the function node.
+    :type node: ast.FunctionDef
+    :return: ``{variable: [keys]}`` (only those with keys).
+    :rtype: dict
+    """
     dicts = {}
     for item in _own_nodes(node):
         if isinstance(item, ast.Assign) and len(item.targets) == 1 and isinstance(item.targets[0], ast.Name):
@@ -316,7 +447,17 @@ def _local_dicts(node):
 
 
 def _resolve(node, namespace):
-    """The object a Name / dotted Attribute refers to in namespace, or None (no import, no call)."""
+    """The object a Name / dotted Attribute refers to in a namespace, or None.
+
+    Uses :func:`inspect.getattr_static`, so no property, ``__getattr__`` or import runs: reading
+    the code must never execute it.
+
+    :param node: the expression.
+    :type node: ast.expr
+    :param namespace: the globals.
+    :type namespace: dict
+    :return: the object, or None.
+    """
     parts = []
     while isinstance(node, ast.Attribute):
         parts.insert(0, node.attr)
@@ -332,23 +473,39 @@ def _resolve(node, namespace):
 
 
 def _installed_packages():
-    """Top-level import names of the installed distributions."""
+    """Top-level import names of the installed distributions.
+
+    :rtype: set[str]
+    """
     return set(packages_distributions())
 
 
+#: (folders holding distributions, their modification times) -> packages_distributions().
 _DISTRIBUTIONS = {}   # (folders holding distributions, their modification times) -> packages_distributions()
 
 
 def packages_distributions():
-    """importlib.metadata.packages_distributions(), cached: it reads the file list of every installed
-    distribution (~1 s with a few hundred packages). The key is the sys.path folders that hold
-    distributions (*.dist-info, *.egg-info) and their modification times: installing or removing a
-    package changes its folder's time. Folders of model code (which init adds to sys.path) don't count."""
+    """:func:`importlib.metadata.packages_distributions`, cached.
+
+    It reads the file list of every installed distribution (about 1 s with a few hundred
+    packages). The key is the sys.path folders that hold distributions (``*.dist-info``,
+    ``*.egg-info``) and their modification times: installing or removing a package changes its
+    folder's time. Folders of model code (which init adds to sys.path) don't count.
+
+    :return: top-level module name -> distribution names.
+    :rtype: dict[str, list[str]]
+    """
     import importlib.metadata
     import os
     import sys
 
     def holding(path):
+        """The modification time of a sys.path folder that holds distributions, else None.
+
+        :param path: a sys.path entry (``""`` is the current folder).
+        :type path: str
+        :rtype: int or None
+        """
         try:
             with os.scandir(path or ".") as entries:
                 if any(e.name.endswith((".dist-info", ".egg-info")) for e in entries):
@@ -364,17 +521,30 @@ def packages_distributions():
 
 
 def foreign_class(klass, cls):
-    """Whether klass, a base of the model class cls, comes from an installed library other than the
-    model's own package (GEKKO for `class Plant(GEKKO)`): what its code sets on self is the
-    library's state, not the model's results. A base in the user's own files is not foreign, and
-    for a model class from an installed library (a library built on another), no base is."""
+    """Whether ``klass``, a base of the model class ``cls``, comes from another installed library.
+
+    GEKKO for ``class Plant(GEKKO)``: what its code sets on self is the library's state, not the
+    model's results. A base in the user's own files is not foreign, and for a model class from
+    an installed library (a library built on another), no base is.
+
+    :param klass: a class in ``cls.__mro__``.
+    :type klass: type
+    :param cls: the model class.
+    :type cls: type
+    :rtype: bool
+    """
     package, own = klass.__module__.split(".")[0], cls.__module__.split(".")[0]
     installed = _installed_packages()
     return package != own and package in installed and own not in installed
 
 
 def foreign_attributes(cls):
-    """Attributes that the code of cls's foreign bases (see foreign_class) sets on self."""
+    """Attributes that the code of ``cls``'s foreign bases (see :func:`foreign_class`) sets on self.
+
+    :param cls: the model class.
+    :type cls: type
+    :rtype: set[str]
+    """
     names = set()
     for klass in cls.__mro__[1:]:
         if klass is object or not foreign_class(klass, cls):
@@ -386,15 +556,42 @@ def foreign_attributes(cls):
 
 
 def assigned_attributes(cls, method_name, depth=MAX_DEPTH, raw=False):
-    """{attribute: kind} that method_name sets on self, following self.other() calls. The kind is
-    "Boolean", "String", "Real", "array", "other" (not an FMI value) or None (not obvious).
-    Methods of a foreign base (see foreign_class) aren't followed: what they set is the library's."""
+    """The attributes ``method_name`` sets on self, with their kinds, following self.other() calls.
+
+    Methods of a foreign base (see :func:`foreign_class`) aren't followed: what they set is the
+    library's. Methods are found with :func:`inspect.getattr_static` so no descriptor runs.
+
+    :param cls: the model class.
+    :type cls: type
+    :param method_name: the method to start from.
+    :type method_name: str
+    :param depth: how many levels of self.method() calls to follow.
+    :type depth: int
+    :param raw: return every assignment's kind (including ``("ref", attr)`` for copies of other
+        attributes) instead of one merged kind per attribute.
+    :type raw: bool
+    :return: ``{attribute: kind}``; kinds are ``"Boolean"``, ``"String"``, ``"Real"``, ``"array"``, ``"other"`` (not an FMI value) or None (not obvious).
+    :rtype: dict
+    """
     kinds, seen = {}, set()
 
     def defined_in(name):
+        """The class in ``cls.__mro__`` that defines ``name``.
+
+        :param name: a method name.
+        :type name: str
+        :rtype: type or None
+        """
         return next((klass for klass in cls.__mro__ if name in vars(klass)), None)
 
     def visit(name, level):
+        """Collect the self-attribute assignments of one method, then visit the methods it calls on self.
+
+        :param name: the method name.
+        :type name: str
+        :param level: the current call depth.
+        :type level: int
+        """
         if name in seen or level > depth:
             return
         seen.add(name)
@@ -435,11 +632,19 @@ def assigned_attributes(cls, method_name, depth=MAX_DEPTH, raw=False):
     return {attr: _merge([k for k in found if not isinstance(k, tuple)]) for attr, found in kinds.items()}
 
 
+#: Methods that return a copy of an attribute (self.x.copy()): the copy has the attribute's kind.
 COPY_METHODS = {"copy", "clone", "detach", "astype", "reshape", "flatten", "ravel", "tolist", "cpu", "numpy"}
 
 
 def _attribute_ref(node, self_name):
-    """The attribute name if node is self.y, self.y.copy() (and similar) or np.copy(self.y), else None."""
+    """The attribute name if ``node`` is self.y, self.y.copy() (and similar) or np.copy(self.y).
+
+    :param node: an assigned value.
+    :type node: ast.expr
+    :param self_name: the method's first parameter name.
+    :type self_name: str
+    :rtype: str or None
+    """
     if isinstance(node, ast.Call):
         if isinstance(node.func, ast.Attribute) and node.func.attr in COPY_METHODS:
             node = node.func.value
@@ -451,11 +656,29 @@ def _attribute_ref(node, self_name):
 
 
 def class_attributes(cls, method_name):
-    """({attr: kind} set by the step method, {attr: kind} set by __init__), with assignments copied
-    from other attributes (self.x_prior = self.x.copy()) taking that attribute's kind."""
+    """The attributes set by the step method and by ``__init__``, with their kinds.
+
+    Assignments copied from other attributes (``self.x_prior = self.x.copy()``) take that
+    attribute's kind.
+
+    :param cls: the model class.
+    :type cls: type
+    :param method_name: the step method.
+    :type method_name: str
+    :return: ``({attr: kind} of the step method, {attr: kind} of __init__)``.
+    :rtype: tuple[dict, dict]
+    """
     step, init = assigned_attributes(cls, method_name, raw=True), assigned_attributes(cls, "__init__", raw=True)
 
     def kind(attr, seen=()):
+        """The merged kind of an attribute, following copies of other attributes.
+
+        :param attr: the attribute.
+        :type attr: str
+        :param seen: attributes already followed (stops cycles).
+        :type seen: tuple
+        :rtype: str or None
+        """
         found = []
         for k in step.get(attr, []) + init.get(attr, []):
             if isinstance(k, tuple):
@@ -468,7 +691,12 @@ def class_attributes(cls, method_name):
 
 
 def _merge(found):
-    """One kind from all assignments: not-FMI and array win; None placeholders are ignored."""
+    """One kind from all assignments of a name: not-FMI and array win; None placeholders are ignored.
+
+    :param found: the kinds.
+    :type found: list
+    :rtype: str or None
+    """
     for kind in ("other", "array"):
         if kind in found:
             return kind
@@ -477,7 +705,14 @@ def _merge(found):
 
 
 def init_copies(cls):
-    """Constructor arguments the constructor stores unchanged as attributes (self.x = x)."""
+    """Constructor arguments the constructor stores unchanged as attributes (``self.x = x``).
+
+    Those parameters can be tuned through the attribute of the same name.
+
+    :param cls: the model class.
+    :type cls: type
+    :rtype: set[str]
+    """
     node = function_node(inspect.getattr_static(cls, "__init__", None))
     if node is None or not node.args.args:
         return set()
@@ -493,7 +728,13 @@ def init_copies(cls):
 
 
 def own_properties(cls):
-    """{name: FMI type or None} of public properties defined in the model's own package (not read)."""
+    """Public properties defined in the model's own package, with their FMI types (not read).
+
+    :param cls: the model class.
+    :type cls: type
+    :return: ``{name: FMI type or None}``; array-typed properties are left out.
+    :rtype: dict
+    """
     package = cls.__module__.split(".")[0]
     found = {}
     for klass in cls.__mro__:
@@ -511,9 +752,18 @@ def own_properties(cls):
 
 
 def factory_class(factory, depth=0):
-    """The class a factory function returns, if the code tells: its return annotation
-    (`-> torchani.arch.ANI`), else what all its return statements call, followed through other
-    functions (tellurium's loada returns loadAntimonyModel(...), which returns roadrunner.RoadRunner(...))."""
+    """The class a factory function returns, if the code tells.
+
+    Its return annotation (``-> torchani.arch.ANI``), else what all its return statements call,
+    followed through other functions up to three levels (tellurium's loada returns
+    loadAntimonyModel(...), which returns roadrunner.RoadRunner(...)).
+
+    :param factory: the factory function.
+    :param depth: the current level.
+    :type depth: int
+    :return: the class, or None (builtins don't count).
+    :rtype: type or None
+    """
     try:
         hint = typing.get_type_hints(factory).get("return")
     except Exception:

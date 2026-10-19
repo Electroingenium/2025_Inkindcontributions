@@ -22,10 +22,18 @@ from fmugen.arguments import (
     _start_error, _state_base,
 )
 
+#: Step size (and end time) passed to a probe call's time arguments.
 PROBE_STEP_SIZE = 1.0
 
 def _run_setup(data, obj=None):
-    """Run [model] setup steps for the probe: functions before construction, methods after."""
+    """Run ``[model] setup`` steps for the probe: functions before construction, methods after.
+
+    The same order as :meth:`Engine._run_setup`, so the probe sees the model as the FMU will.
+
+    :param data: the config being inferred; updated in place.
+    :type data: dict
+    :param obj: the constructed object (runs the method steps), or None (runs the function steps).
+    """
     from fmugen.config import _setup
     from fmugen.templates.fmugen_runtime import (
         get_path,
@@ -41,9 +49,36 @@ def _run_setup(data, obj=None):
                **{k: resolve_constant(v) for k, v in step["kwargs"].items()})
 
 def _probe_class(cls, method_name, data, comments, arrays, call_starts, create, factory, converts):
-    """--probe: construct the object, call the step method once, and read what changed.
+    """``--probe`` for a class: construct the object, call the step method once, and read what changed.
 
-    Returns (object or None, returned keys, attribute names seen).
+    Outputs come from the return value, from properties, from GEKKO results and from numeric
+    attributes the step set (new: outputs) or changed (existing: locals). Also decides
+    ``init_call`` (a step that changes nothing can run at initialization) and ``save_state``
+    (:func:`_check_picklable`). A failing construction or call is noted and falls back to reading
+    the code.
+
+    :param cls: the model class (None for a factory function).
+    :type cls: type or None
+    :param method_name: the step method.
+    :type method_name: str
+    :param data: the config being inferred; updated in place.
+    :type data: dict
+    :param comments: ``(section, key) -> text`` for :func:`render_toml`; updated in place.
+    :type comments: dict
+    :param arrays: whether arrays may be FMU variables (FMI 3).
+    :type arrays: bool
+    :param call_starts: ``--start`` values for the step method's arguments.
+    :type call_starts: dict
+    :param create: a classmethod that builds the object (``--create``), or None.
+    :type create: str or None
+    :param factory: a factory function that builds the object, or None.
+    :type factory: callable or None
+    :param converts: ``--convert`` options.
+    :type converts: dict
+    :return: ``(object or None, returned keys, attribute names seen)``.
+    :rtype: tuple
+    :raises ConstantError: a configured constant can't be computed.
+    :raises InterfaceError: the factory's object has no such method.
     """
     try:
         _run_setup(data)
@@ -123,12 +158,19 @@ def _probe_class(cls, method_name, data, comments, arrays, call_starts, create, 
     return obj, returned, set(getattr(obj, "__dict__", {})) | set(_property_values(obj, arrays)) | unfit
 
 
+#: GEKKO classes that hold solved results: Var/SV/CV, Intermediate, FV/MV (not Param, Const).
 GEKKO_RESULTS = ("GKVariable", "GK_Intermediate", "GK_FV")   # Var/SV/CV, Intermediate, FV/MV (not Param, Const)
 
 
 def _gekko_result(value):
-    """The value of a solved GEKKO variable, intermediate, FV or MV at the end of its time horizon
-    (m.time), or None: GEKKO keeps results in these objects, as `x.value` after `m.solve()`."""
+    """The value of a solved GEKKO variable, intermediate, FV or MV at the end of its time horizon.
+
+    GEKKO keeps results in these objects, as ``x.value`` after ``m.solve()``; recognised by module
+    and class name, without importing gekko.
+
+    :param value: any attribute value.
+    :return: the last value of ``value.value``, or None.
+    """
     if not type(value).__module__.startswith("gekko.") \
             or not any(k.__name__ in GEKKO_RESULTS for k in type(value).__mro__):
         return None
@@ -140,8 +182,21 @@ def _gekko_result(value):
 
 
 def _gekko_outputs(obj, data, comments, taken):
-    """Outputs for the object's attributes that hold GEKKO results (`self.X = m.Var(...)`), and for
-    dicts of them (`self.W = {"HOU1": m.Var(...)}`), read as their last value. Returns their names."""
+    """Outputs for the object's attributes that hold GEKKO results.
+
+    ``self.X = m.Var(...)`` and dicts of them (``self.W = {"HOU1": m.Var(...)}``), read as their
+    last value (``from = "attr:X.value.-1"``).
+
+    :param obj: the model object.
+    :param data: the config being inferred; updated in place.
+    :type data: dict
+    :param comments: ``(section, key) -> text`` for :func:`render_toml`; updated in place.
+    :type comments: dict
+    :param taken: names already used.
+    :type taken: set[str]
+    :return: the names added.
+    :rtype: set[str]
+    """
     found = {}
     for attr, value in getattr(obj, "__dict__", {}).items():
         if attr.startswith("_"):
@@ -163,8 +218,22 @@ def _gekko_outputs(obj, data, comments, taken):
     return names
 
 def _unfit_properties(obj, data, comments, arrays, taken):
-    """Properties annotated as a number, bool or str (so the code alone would make them outputs) whose
-    probe value isn't one, e.g. None, or that raised: commented out. Returns their names."""
+    """Commented-out entries for properties annotated as a number, bool or str whose probe value isn't one.
+
+    The code alone would make them outputs, but in the probe they were e.g. None, or raised.
+
+    :param obj: the model object.
+    :param data: the config being inferred; updated in place.
+    :type data: dict
+    :param comments: ``(section, key) -> text`` for :func:`render_toml`; updated in place.
+    :type comments: dict
+    :param arrays: whether arrays may be FMU variables (FMI 3).
+    :type arrays: bool
+    :param taken: names already used.
+    :type taken: set[str]
+    :return: their names.
+    :rtype: set[str]
+    """
     annotated = {name for name, kind in static.own_properties(type(obj)).items() if kind}
     unfit = set()
     for attr, value in _property_values(obj, arrays, everything=True).items():
@@ -179,8 +248,19 @@ def _unfit_properties(obj, data, comments, arrays, taken):
 
 
 def _check_sizes(obj, method_name, data, comments):
-    """Call the step method a second time: an array whose size changes (a history that grows each
-    call) can't be an FMI array, which has a fixed size."""
+    """Call the step method a second time and drop arrays whose size changed.
+
+    An array whose size changes (a history that grows each call) can't be an FMI array, which
+    has a fixed size.
+
+    :param obj: the model object.
+    :param method_name: the step method.
+    :type method_name: str
+    :param data: the config being inferred; updated in place.
+    :type data: dict
+    :param comments: ``(section, key) -> text`` for :func:`render_toml`; updated in place.
+    :type comments: dict
+    """
     sized = [(section, name, info) for section in ("outputs", "locals")
              for name, info in data.get(section, {}).items() if "dimensions" in info]
     if not sized:
@@ -211,12 +291,37 @@ def _check_sizes(obj, method_name, data, comments):
             del data[section]
 
 def _taken(data):
+    """Names already used by variables of any section.
+
+    :param data: the config being inferred; updated in place.
+    :type data: dict
+    :rtype: set[str]
+    """
     return {n for section in ("parameters", "structural_parameters", "inputs", "states", "outputs", "locals")
             for n in data.get(section, {})}
 
 
 def _add_returned(read, data, comments, is_class, arrays, probe, seen):
-    """Outputs from what the code returns (static.returned). With --probe, only ones the probe didn't see."""
+    """Outputs from what the code returns (:func:`static.returned`).
+
+    With ``--probe``, only ones the probe didn't see; results of unknown type are added as
+    guesses, and ones that may be None are commented out.
+
+    :param read: what the code returns.
+    :type read: static.Returned
+    :param data: the config being inferred; updated in place.
+    :type data: dict
+    :param comments: ``(section, key) -> text`` for :func:`render_toml`; updated in place.
+    :type comments: dict
+    :param is_class: whether the model is a class (``from`` is then always written).
+    :type is_class: bool
+    :param arrays: whether arrays may be FMU variables (FMI 3).
+    :type arrays: bool
+    :param probe: whether ``--probe`` is in effect.
+    :type probe: bool
+    :param seen: names the probe already handled.
+    :type seen: set[str]
+    """
     if read.unknown:
         if not probe:
             comments[("outputs", None)] = (f"outputs could not be read from the code ({read.unknown}); "
@@ -276,7 +381,26 @@ def _add_returned(read, data, comments, is_class, arrays, probe, seen):
 
 
 def _add_attributes(cls, method_name, data, comments, arrays, probe, seen):
-    """Outputs and locals from the attributes the step method assigns, and the object's own properties."""
+    """Outputs and locals from the attributes the step method assigns, and the object's own properties.
+
+    Attributes also set in ``__init__`` become locals (they exist before the first step), the
+    others outputs. Unannotated properties are only suggested: reading them would run code.
+
+    :param cls: the model class.
+    :type cls: type
+    :param method_name: the step method.
+    :type method_name: str
+    :param data: the config being inferred; updated in place.
+    :type data: dict
+    :param comments: ``(section, key) -> text`` for :func:`render_toml`; updated in place.
+    :type comments: dict
+    :param arrays: whether arrays may be FMU variables (FMI 3).
+    :type arrays: bool
+    :param probe: whether ``--probe`` is in effect.
+    :type probe: bool
+    :param seen: names the probe already handled.
+    :type seen: set[str]
+    """
     in_step, in_init = static.class_attributes(cls, method_name)
     taken = _taken(data) | set(seen)
     for attr, kind in in_step.items():
@@ -312,12 +436,24 @@ def _add_attributes(cls, method_name, data, comments, arrays, probe, seen):
             comments[("outputs", f"#{name}")] = (f"{name} = {{}}  # a property of the object (type unknown): "
                                                  "uncomment if it is a number, or run init --probe")
 
+#: Converters tried in order when a probe call fails with list inputs.
 ARRAY_RETRIES = ("numpy", "torch:tensor")   # tried in order when a probe call fails with list inputs
 
 
 def _probe_constants(data, table, positional=False):
-    """Constants set in the config (e.g. computed by a call), resolved as the FMU would: the keyword
-    ones, or with positional=True {position: value} of those named "0", "1", ... (passed to *args)."""
+    """Constants set in the config (e.g. computed by a call), resolved as the FMU would.
+
+    :param data: the config being inferred; updated in place.
+    :type data: dict
+    :param table: ``"constants"`` or ``"call_constants"``.
+    :type table: str
+    :param positional: return ``{position: value}`` of those named ``"0"``, ``"1"``, ... (passed to
+        ``*args``) instead of the keyword ones.
+    :type positional: bool
+    :return: name (or position) -> value.
+    :rtype: dict
+    :raises ConstantError: a constant fails to compute.
+    """
     from fmugen.templates.fmugen_runtime import resolve_constant
     values = {}
     for k, v in data["model"].get(table, {}).items():
@@ -332,13 +468,29 @@ def _probe_constants(data, table, positional=False):
 
 
 class ConstantError(InterfaceError):
-    """A constant (e.g. --start NAME=call:...) that can't be computed: the FMU would fail the same way."""
+    """A constant (e.g. ``--start NAME=call:...``) that can't be computed: the FMU would fail the same way.
+
+    Re-raised instead of being turned into a comment, because no config could fix it.
+    """
 
 
 def _probe_call(fn, data, comments, constants_key="constants"):
-    """Call fn with the probe inputs (see _probe_once). Arguments taken as date-times only by their
-    name are checked: the call is also made with the number 0.0 there. Works only as a date-time:
-    confirmed; only as a number: an ordinary input instead; both or neither: left as a guess."""
+    """Call ``fn`` with the probe inputs (see :func:`_probe_once`), checking date-time guesses.
+
+    Arguments taken as date-times only by their name are checked: the call is also made with the
+    number 0.0 there. Works only as a date-time: confirmed; only as a number: an ordinary input
+    instead; both or neither: left as a guess.
+
+    :param fn: the function or bound step method.
+    :param data: the config being inferred; updated in place.
+    :type data: dict
+    :param comments: ``(section, key) -> text`` for :func:`render_toml`; updated in place.
+    :type comments: dict
+    :param constants_key: the constants table passed with the call.
+    :type constants_key: str
+    :return: what ``fn`` returned.
+    :raises Exception: what the call raised.
+    """
     guessed = [arg for arg in comments.get(DATETIME_BY_NAME, []) if isinstance(data.get("time", {}).get(arg), dict)]
     if not guessed:
         return _probe_once(fn, data, comments, constants_key)
@@ -376,6 +528,15 @@ def _probe_call(fn, data, comments, constants_key="constants"):
 
 
 def _call_with_probe_inputs(fn, data, constants_key):
+    """Call ``fn`` once with the inferred inputs, time arguments and constants.
+
+    :param fn: the function or bound step method.
+    :param data: the config being inferred; updated in place.
+    :type data: dict
+    :param constants_key: the constants table passed with the call.
+    :type constants_key: str
+    :return: what ``fn`` returned.
+    """
     args, kwargs = _probe_args(data, ("inputs",), fn, constants_key)
     kwargs.update(_time_kwargs(data.get("time", {})))
     kwargs.update(_probe_constants(data, constants_key))
@@ -383,9 +544,27 @@ def _call_with_probe_inputs(fn, data, constants_key):
 
 
 def _probe_once(fn, data, comments, constants_key="constants"):
-    """Call fn with the probe inputs. If it fails and array inputs are plain lists, retry with them
-    as numpy arrays, then torch tensors (when installed), and keep the first that works."""
+    """Call ``fn`` with the probe inputs, retrying in forms the model may need.
+
+    If it fails: with naive date-time epochs, retry them in UTC; with array inputs that are plain
+    lists, retry as numpy arrays, then torch tensors (when installed); with scalar inputs, retry
+    as one-element numpy arrays. The first form that works is kept in ``data`` with a comment.
+
+    :param fn: the function or bound step method.
+    :param data: the config being inferred; updated in place.
+    :type data: dict
+    :param comments: ``(section, key) -> text`` for :func:`render_toml`; updated in place.
+    :type comments: dict
+    :param constants_key: the constants table passed with the call.
+    :type constants_key: str
+    :return: what ``fn`` returned.
+    :raises Exception: the original error, when no retry works.
+    """
     def call():
+        """One probe call with the current inputs.
+
+        :return: what ``fn`` returned.
+        """
         return _call_with_probe_inputs(fn, data, constants_key)
 
     try:
@@ -434,13 +613,24 @@ def _probe_once(fn, data, comments, constants_key="constants"):
         raise
 
 
+#: Sentinel: :func:`_retry_as_arrays` found no call that works.
 _FAILED = object()
 
 
 def _retry_as_arrays(call, data, comments):
-    """When a call fails with numbers as inputs, call it again with each number as a one-element numpy
-    array (convert = "numpy:atleast_1d"): some libraries take only arrays (thermofeel's
-    calculate_heat_index_simplified calls numpy.nonzero on its inputs). Returns the result, or _FAILED."""
+    """Call again with each number input as a one-element numpy array (``convert = "numpy:atleast_1d"``).
+
+    Some libraries take only arrays (thermofeel's calculate_heat_index_simplified calls
+    numpy.nonzero on its inputs).
+
+    :param call: makes the probe call.
+    :type call: callable
+    :param data: the config being inferred; updated in place.
+    :type data: dict
+    :param comments: ``(section, key) -> text`` for :func:`render_toml`; updated in place.
+    :type comments: dict
+    :return: the result, or :data:`_FAILED`.
+    """
     numbers = {name: info for name, info in data.get("inputs", {}).items()
                if isinstance(info.get("start"), (int, float)) and not isinstance(info.get("start"), bool)
                and "dimensions" not in info and not info.get("convert") and not info.get("numpy")}
@@ -459,7 +649,12 @@ def _retry_as_arrays(call, data, comments):
     return result
 
 def _state_bytes(obj):
-    """The object's attributes pickled, to tell whether a call changed them; None if they can't be."""
+    """The object's attributes pickled, to tell whether a call changed them.
+
+    :param obj: the model object.
+    :return: the pickle, or None if they can't be pickled.
+    :rtype: bytes or None
+    """
     try:
         return pickle.dumps(vars(obj))
     except Exception:
@@ -467,9 +662,17 @@ def _state_bytes(obj):
 
 
 def _check_picklable(obj, data, comments):
-    """Pick [model] save_state: FMU state save/restore pickles the model object (as the runtime does:
-    pickle, else cloudpickle). If that fails, save only the attributes that can be pickled; if none
-    can, declare save/restore unsupported."""
+    """Pick ``[model] save_state`` by trying to pickle the object as the runtime would.
+
+    FMU state save/restore pickles the model object (pickle, else cloudpickle). If that fails,
+    save only the attributes that can be pickled; if none can, declare save/restore unsupported.
+
+    :param obj: the model object.
+    :param data: the config being inferred; updated in place.
+    :type data: dict
+    :param comments: ``(section, key) -> text`` for :func:`render_toml`; updated in place.
+    :type comments: dict
+    """
     from fmugen.templates.fmugen_runtime import dump_state
     try:
         dump_state(obj)
@@ -499,11 +702,33 @@ def _check_picklable(obj, data, comments):
                                             "the FMU can't save and restore its state"
 
 def _split_varargs(cls, create, method_name, init_starts, call_starts, data, comments, probe):
-    """When the constructor and the step method both take only *args (SWIG classes such as
-    openturns.Normal(mu, sigma).computePDF(x)), the signatures can't tell which --start values go
-    where: _assign_starts gives them all to the constructor. With --probe, the first values (in
-    --start order) go to the constructor, the rest to the method, trying the constructor with as
-    many as possible first, and the first split where both calls work is kept."""
+    """Split ``--start`` values between a constructor and a step method that both take only ``*args``.
+
+    SWIG classes such as ``openturns.Normal(mu, sigma).computePDF(x)``: the signatures can't tell
+    which values go where, so _assign_starts gives them all to the constructor. With ``--probe``,
+    the first values (in ``--start`` order) go to the constructor, the rest to the method, trying
+    the constructor with as many as possible first, and the first split where both calls work
+    is kept.
+
+    :param cls: the model class.
+    :type cls: type
+    :param create: ``--create``, or None (then nothing is split).
+    :type create: str or None
+    :param method_name: the step method.
+    :type method_name: str
+    :param init_starts: the values given to the constructor so far.
+    :type init_starts: dict
+    :param call_starts: the values given to the method so far.
+    :type call_starts: dict
+    :param data: the config being inferred; updated in place.
+    :type data: dict
+    :param comments: ``(section, key) -> text`` for :func:`render_toml`; updated in place.
+    :type comments: dict
+    :param probe: whether ``--probe`` is in effect.
+    :type probe: bool
+    :return: ``(constructor starts, method starts)``.
+    :rtype: tuple[dict, dict]
+    """
     method = getattr(cls, method_name, None)
     if create or method is None or not _only_varargs(cls.__init__) or not _only_varargs(method) \
             or len(init_starts) < 1:
@@ -533,8 +758,22 @@ def _split_varargs(cls, create, method_name, init_starts, call_starts, data, com
     return init_starts, call_starts
 
 def _probe_args(data, sections, fn=None, constants_key=None):
-    """(positional args, keyword args) for a probe call from the inferred start values (and the
-    positional constants of `constants_key`)."""
+    """Positional and keyword arguments for a probe call from the inferred start values.
+
+    Includes the positional constants of ``constants_key``; item and field bindings
+    (``arg:pair[0]``, ``arg:u.T``) are assembled as the runtime does (:func:`assemble_items`).
+
+    :param data: the config being inferred; updated in place.
+    :type data: dict
+    :param sections: the variable sections passed (``("inputs",)`` or ``("parameters",)``).
+    :type sections: tuple[str, ...]
+    :param fn: the function called (to build object arguments).
+    :type fn: callable or None
+    :param constants_key: the constants table for positional constants, or None.
+    :type constants_key: str or None
+    :return: ``(args, kwargs)``.
+    :rtype: tuple[list, dict]
+    """
     values = _probe_kwargs(data, sections)
     positional = [
         (int(info["to"].split(":")[1]), name)
@@ -556,6 +795,17 @@ def _probe_args(data, sections, fn=None, constants_key=None):
 
 
 def _probe_kwargs(data, sections):
+    """Python values of the start values of these sections, as the runtime would pass them.
+
+    Enum members, reshaped (numpy) arrays, Binary bytes and ``convert`` functions are applied.
+
+    :param data: the config being inferred; updated in place.
+    :type data: dict
+    :param sections: the variable sections.
+    :type sections: tuple[str, ...]
+    :return: variable name -> value.
+    :rtype: dict
+    """
     from fmugen.templates.fmugen_runtime import reshape, resolve_reference
     kwargs = {}
     for section in sections:
@@ -578,6 +828,15 @@ def _probe_kwargs(data, sections):
 
 
 def _time_kwargs(time_args):
+    """Values of the ``[time]`` arguments for a probe call.
+
+    Date-times get their epoch; ``step_size`` and ``end_time`` get :data:`PROBE_STEP_SIZE`;
+    everything else 0.0.
+
+    :param time_args: the ``[time]`` table.
+    :type time_args: dict
+    :rtype: dict
+    """
     kwargs = {}
     for arg, source in time_args.items():
         if isinstance(source, dict):   # { source = ..., epoch = ... }: a date-time
@@ -587,8 +846,26 @@ def _time_kwargs(time_args):
     return kwargs
 
 def _outputs_from_return(result, data, comments, default_name, is_class, arrays=False):
-    """Outputs from a probe result. Returns the names of the parts it looked at (dict keys,
-    tuple positions y0, y1, ...), also those left out because they aren't FMI values."""
+    """Outputs from a probe result.
+
+    Dicts, pandas/xarray tables, NamedTuples, tuples/lists, single values and objects (their
+    public attributes and properties) are split into outputs; nested ones get dotted names.
+
+    :param result: what the probe call returned.
+    :param data: the config being inferred; updated in place.
+    :type data: dict
+    :param comments: ``(section, key) -> text`` for :func:`render_toml`; updated in place.
+    :type comments: dict
+    :param default_name: name of a single result, and prefix of tuple positions (``y0``, ``y1``).
+    :type default_name: str
+    :param is_class: whether the model is a class.
+    :type is_class: bool
+    :param arrays: whether arrays may be FMU variables (FMI 3).
+    :type arrays: bool
+    :return: the names of the parts it looked at (dict keys, tuple positions y0, y1, ...), also
+        those left out because they aren't FMI values.
+    :rtype: set[str]
+    """
     outputs = data.setdefault("outputs", {})
     wrapped = any(info.get("convert") == "numpy:atleast_1d" for info in data.get("inputs", {}).values())
     if wrapped and getattr(result, "size", None) == 1 and hasattr(result, "reshape"):
@@ -636,12 +913,26 @@ def _outputs_from_return(result, data, comments, default_name, is_class, arrays=
     return looked_at
 
 
+#: How deep nested results are split into dotted outputs.
 MAX_NESTING = 4
 
 
 def _nested(name, value, source, arrays, depth=0):
-    """(name, value, source) for each value inside nested dicts, NamedTuples, dataclasses and
-    namespaces, named with dots: {"zone": {"T": 21}} gives ("zone.T", 21, "return:zone.T")."""
+    """``(name, value, source)`` for each value inside nested dicts, NamedTuples, dataclasses and namespaces.
+
+    Named with dots: ``{"zone": {"T": 21}}`` gives ``("zone.T", 21, "return:zone.T")``.
+
+    :param name: the outer name.
+    :type name: str
+    :param value: the value.
+    :param source: its ``from`` binding.
+    :type source: str
+    :param arrays: whether arrays may be FMU variables (FMI 3).
+    :type arrays: bool
+    :param depth: the current nesting level.
+    :type depth: int
+    :rtype: list[tuple]
+    """
     if depth < MAX_NESTING and not _fmi_value(value, arrays):
         children = _children(value)
         if children:
@@ -652,6 +943,12 @@ def _nested(name, value, source, arrays, depth=0):
 
 
 def _children(value):
+    """The named parts of a container value (tables, mappings, NamedTuples, dataclasses, namespaces).
+
+    :param value: the value.
+    :return: ``[(name, part)]``, empty for anything else.
+    :rtype: list[tuple]
+    """
     table = _table_children(value)
     if table is not None:
         return table
@@ -667,8 +964,14 @@ def _children(value):
 
 
 def _table_children(value):
-    """[(label, scalar)] for a pandas Series, a one-row pandas DataFrame or an xarray Dataset of
-    single values (labels that are strings); None for anything else."""
+    """``[(label, scalar)]`` for a pandas Series, a one-row DataFrame or an xarray Dataset of single values.
+
+    Recognised by module and class name, so pandas/xarray aren't imported; only string labels.
+
+    :param value: the value.
+    :return: the pairs, or None for anything else.
+    :rtype: list[tuple] or None
+    """
     kind = type(value).__name__
     library = type(value).__module__.split(".")[0]
     try:
@@ -686,9 +989,15 @@ def _table_children(value):
 
 
 def _public_properties(obj):
-    """{name: value} of the public properties of obj's class whose value is an FMI value; of
-    properties that are the same object under several names (uncertainties' n and nominal_value),
-    only the longest name."""
+    """``{name: value}`` of the public properties of obj's class whose value is an FMI value.
+
+    Of properties that are the same object under several names (uncertainties' n and
+    nominal_value), only the longest name. The class is searched with
+    :func:`inspect.getattr_static`: getattr on the class runs descriptors, which can fail.
+
+    :param obj: the object.
+    :rtype: dict
+    """
     by_property = {}
     for name in dir(type(obj)):
         # static lookup: getattr on the class runs descriptors, which can fail (SQLAlchemy hybrid properties)
@@ -707,9 +1016,21 @@ def _public_properties(obj):
     return values
 
 def _detect_states(data, comments, returned, attrs):
-    """An input named like a previous value (x_prev, x_old, last_x, ...) whose next value is
-    returned (a key in `returned`) or stored as an attribute (a name in `attrs`) as x_next,
-    next_x, x_new, new_x or x is a state."""
+    """Turn inputs named like a previous value into states.
+
+    An input named like a previous value (x_prev, x_old, last_x, ...) whose next value is
+    returned or stored as an attribute as x_next, next_x, x_new, new_x or x is a state, with
+    ``next`` bound to that value.
+
+    :param data: the config being inferred; updated in place.
+    :type data: dict
+    :param comments: ``(section, key) -> text`` for :func:`render_toml`; updated in place.
+    :type comments: dict
+    :param returned: keys of the return value.
+    :type returned: set[str]
+    :param attrs: attribute names of the object.
+    :type attrs: set[str]
+    """
     inputs = data.get("inputs", {})
     for name in list(inputs):
         base = _state_base(name)
@@ -731,6 +1052,13 @@ def _detect_states(data, comments, returned, attrs):
 
 
 def _numeric_attributes(obj, arrays=False):
+    """Snapshots of the object's public attributes that hold FMI values.
+
+    :param obj: the model object.
+    :param arrays: whether arrays may be FMU variables (FMI 3).
+    :type arrays: bool
+    :rtype: dict
+    """
     try:
         attrs = vars(obj)
     except TypeError:
@@ -739,7 +1067,10 @@ def _numeric_attributes(obj, arrays=False):
 
 
 def _snapshot(value):
-    """A copy that later in-place changes (e.g. numpy `+=`) don't affect."""
+    """A copy that later in-place changes (e.g. numpy ``+=``) don't affect.
+
+    :param value: the value.
+    """
     return value.copy() if hasattr(value, "copy") and not isinstance(value, (str, bytes)) else value
 
 
@@ -748,6 +1079,14 @@ def _property_values(obj, arrays=False, everything=False):
 
     Only properties defined in the model's own package count: base classes from frameworks
     (torch.nn.Module, transformers' PreTrainedModel, ...) add properties that aren't model results.
+
+    :param obj: the model object.
+    :param arrays: whether arrays may be FMU variables (FMI 3).
+    :type arrays: bool
+    :param everything: include every property, with the exception in place of the value when
+        reading it raised.
+    :type everything: bool
+    :rtype: dict
     """
     package = type(obj).__module__.split(".")[0]
     own = {name for klass in type(obj).__mro__ if klass.__module__.split(".")[0] == package
@@ -768,6 +1107,13 @@ def _property_values(obj, arrays=False, everything=False):
 
 
 def _writable_attribute(obj, name):
+    """Whether ``name`` can be set on the object: an instance attribute, or a property with a setter.
+
+    :param obj: the model object.
+    :param name: the attribute.
+    :type name: str
+    :rtype: bool
+    """
     if name not in getattr(obj, "__dict__", {}):
         prop = inspect.getattr_static(type(obj), name, None)
         return isinstance(prop, property) and prop.fset is not None

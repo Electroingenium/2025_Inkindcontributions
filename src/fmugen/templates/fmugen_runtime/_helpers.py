@@ -31,11 +31,28 @@ from pathlib import Path
 
 
 def _clock_of(var):
+    """The clock a variable belongs to, or None for an unclocked variable.
+
+    :param var: an entry of ``interface["variables"]``.
+    :type var: dict
+    :return: the first name in its ``clocks``, or None.
+    :rtype: str or None
+    """
     clocks = var.get("clocks")
     return clocks[0] if clocks else None
 
 
 def setup_sys_path(interface, resources_dir):
+    """Prepend the interface's ``sys_path`` folders (relative to ``resources/``) to ``sys.path``.
+
+    So the user's modules, copied into ``resources/fmugen_model/``, import by their own names.
+    Folders already on the path are not added twice; the order of ``sys_path`` is kept.
+
+    :param interface: a parsed ``interface.json``.
+    :type interface: dict
+    :param resources_dir: the folder the paths are relative to.
+    :type resources_dir: str or pathlib.Path
+    """
     for path in reversed(interface.get("sys_path", [])):
         path = str((Path(resources_dir) / path).resolve())
         if path not in sys.path:
@@ -43,7 +60,20 @@ def setup_sys_path(interface, resources_dir):
 
 
 def load_entry(interface, resources_dir):
-    """Return (module, entry object)."""
+    """Import the user's module and get its entry class or function.
+
+    Uses :func:`importlib.import_module` on ``entry.module`` after :func:`setup_sys_path`, so the
+    module is imported exactly as the user's own code would import it.
+
+    :param interface: a parsed ``interface.json``.
+    :type interface: dict
+    :param resources_dir: the FMU's ``resources/`` folder.
+    :type resources_dir: str or pathlib.Path
+    :return: ``(module, entry object)``.
+    :rtype: tuple
+    :raises ImportError: the module can't be imported.
+    :raises AttributeError: the module has no ``entry.name``.
+    """
     setup_sys_path(interface, resources_dir)
     entry = interface["entry"]
     module = importlib.import_module(entry["module"])
@@ -51,8 +81,15 @@ def load_entry(interface, resources_dir):
 
 
 def rng_states():
-    """States of the global random number generators the model may draw from (random, numpy,
-    torch), so a rolled-back step draws the same numbers again."""
+    """States of the global random number generators the model may draw from.
+
+    Saved with the FMU state, so a rolled-back step draws the same numbers again. numpy and torch
+    are only looked up in :data:`sys.modules` (never imported here): if the model didn't import
+    them, it can't have used them.
+
+    :return: ``{"random": ..., "numpy": ..., "torch": ..., "torch.cuda": ...}`` for those loaded.
+    :rtype: dict
+    """
     states = {"random": random.getstate()}
     numpy = sys.modules.get("numpy")
     if numpy is not None:
@@ -66,6 +103,13 @@ def rng_states():
 
 
 def set_rng_states(states):
+    """Restore random generator states saved by :func:`rng_states`.
+
+    Generators whose module isn't loaded (or whose state wasn't saved) are left alone.
+
+    :param states: as returned by :func:`rng_states`.
+    :type states: dict
+    """
     if "random" in states:
         random.setstate(states["random"])
     if "numpy" in states and "numpy" in sys.modules:
@@ -79,7 +123,14 @@ def set_rng_states(states):
 
 
 def split_global(ref):
-    """'package.module:NAME' -> (module, 'NAME') for [model] globals."""
+    """Resolve a ``[model] globals`` entry into its module and name.
+
+    :param ref: ``"package.module:NAME"``.
+    :type ref: str
+    :return: ``(module, "NAME")``.
+    :rtype: tuple
+    :raises AttributeError: the module has no such global.
+    """
     module_name, _, name = ref.partition(":")
     module = importlib.import_module(module_name)
     if not hasattr(module, name):
@@ -88,7 +139,19 @@ def split_global(ref):
 
 
 def resolve_reference(ref):
-    """'package.module:attr.path' (or dotted 'package.module.attr') -> the object."""
+    """Import the object a reference names.
+
+    Accepts ``"package.module:attr.path"`` or a dotted ``"package.module.attr"``. In the dotted
+    form the longest importable module prefix is imported and the rest is followed as attributes.
+    With a colon, if the module part isn't a real submodule (``pybamm.lithium_ion:SPM``, where
+    ``lithium_ion`` is an attribute set lazily by ``pybamm``), the dotted form is tried instead.
+
+    :param ref: the reference.
+    :type ref: str
+    :return: the object.
+    :raises ImportError: nothing in the reference can be imported.
+    :raises AttributeError: an attribute on the path doesn't exist.
+    """
     if ":" in ref:
         module_name, _, attr = ref.partition(":")
         try:
@@ -113,8 +176,17 @@ def resolve_reference(ref):
 
 
 def dump_state(state):
-    """pickle, else cloudpickle (lambdas, local functions), else dill (when installed); the first
-    byte says which."""
+    """Pickle an FMU state with the first library that can.
+
+    pickle, else cloudpickle (lambdas, local functions), else dill (when installed); the first
+    byte of the result says which (``P``, ``C``, ``D``), for :func:`load_state`.
+
+    :param state: the state dict built by :meth:`Engine.serialize`.
+    :type state: dict
+    :return: the tagged bytes.
+    :rtype: bytes
+    :raises Exception: the last pickling error when none of them can pickle the state.
+    """
     try:
         return b"P" + pickle.dumps(state)
     except Exception as e:
@@ -130,6 +202,17 @@ def dump_state(state):
 
 
 def load_state(data):
+    """Unpickle bytes made by :func:`dump_state`.
+
+    cloudpickle pickles load with plain pickle once cloudpickle is importable, so it is only
+    imported; dill's are loaded by dill.
+
+    :param data: tagged bytes.
+    :type data: bytes
+    :return: the state dict.
+    :rtype: dict
+    :raises ValueError: the first byte isn't a known tag.
+    """
     kind, payload = data[:1], data[1:]
     if kind == b"C":
         import cloudpickle  # noqa: F401  (its pickles load with pickle once it is importable)
@@ -142,8 +225,16 @@ def load_state(data):
 
 
 def split_item(name):
-    """'pair[0]' -> ('pair', 0); 'params[key]' -> ('params', 'key'); 'u.temp' -> ('u', Field('temp'));
-    'x' -> ('x', None)."""
+    """Split a bound argument name into its base argument and item key or field.
+
+    ``"pair[0]"`` -> ``("pair", 0)``; ``"params[key]"`` -> ``("params", "key")``;
+    ``"u.temp"`` -> ``("u", Field("temp"))``; ``"x"`` -> ``("x", None)``.
+
+    :param name: the name after ``arg:`` / ``init:`` in ``to``.
+    :type name: str
+    :return: ``(base, key)``.
+    :rtype: tuple
+    """
     if "." in name and "[" not in name:
         base, _, field = name.partition(".")
         return base, Field(field)
@@ -155,13 +246,28 @@ def split_item(name):
 
 
 class Field(str):
-    """The field name in to = "arg:u.temp": u is an object (dataclass, pydantic, attrs) built from its fields."""
+    """The field name in ``to = "arg:u.temp"``: ``u`` is an object built from its fields.
+
+    A ``str`` subclass, so :func:`assemble_items` can tell fields (dataclass, pydantic, attrs
+    objects) from dict keys.
+    """
 
 
 def assemble_items(bound, fn=None):
-    """Combine {"pair[0]": a, "pair[1]": b, "u.T": c, "x": d} into {"pair": (a, b), "u": U(T=c), "x": d}.
-    Objects are built from fn's signature: its default for that argument with the fields replaced,
-    else the class in its annotation called with the fields."""
+    """Combine bound item and field arguments into whole arguments.
+
+    ``{"pair[0]": a, "pair[1]": b, "u.T": c, "x": d}`` -> ``{"pair": (a, b), "u": U(T=c), "x": d}``.
+    Integer keys make a tuple (numbered 0, 1, ... without gaps), other keys a dict; fields make
+    an object from ``fn``'s signature (:func:`build_object`).
+
+    :param bound: bound name -> value.
+    :type bound: dict
+    :param fn: the function whose arguments these are (needed only for fields).
+    :type fn: callable or None
+    :return: argument name -> value.
+    :rtype: dict
+    :raises ValueError: fields mixed with items, or tuple items with gaps.
+    """
     result, items = {}, {}
     for name, value in bound.items():
         base, key = split_item(name)
@@ -183,17 +289,32 @@ def assemble_items(bound, fn=None):
     return result
 
 
+#: Cache of :func:`object_argument`: (function, argument name) -> (default, class).
 _OBJECT_ARGS = {}
 
 
 def object_argument(fn, name):
-    """(default instance or None, class or None) of fn's argument `name`, from its signature."""
+    """The default instance and the annotated class of ``fn``'s argument ``name``.
+
+    Uses :func:`inspect.signature` for the default and :func:`typing.get_type_hints` for the
+    class (which resolves string and ``from __future__ import annotations`` hints);
+    ``Optional[X]`` / ``X | None`` is unwrapped to ``X`` with :func:`typing.get_origin` /
+    :func:`typing.get_args`. For a class, the hints are those of its ``__init__``. Cached per
+    (function, name), because it runs on every call.
+
+    :param fn: the function, method or class.
+    :type fn: callable
+    :param name: the argument name.
+    :type name: str
+    :return: ``(default instance or None, class or None)``.
+    :rtype: tuple
+    """
     key = (getattr(fn, "__func__", fn), name)
     if key not in _OBJECT_ARGS:
         target = fn.__init__ if isinstance(fn, type) else fn
         param = inspect.signature(fn).parameters.get(name)
         default = None if param is None or param.default is inspect.Parameter.empty else param.default
-        try:
+        try:   # get_type_hints, not __annotations__: it resolves string (postponed) annotations
             cls = typing.get_type_hints(target).get(name)
         except Exception:
             cls = None
@@ -205,6 +326,22 @@ def object_argument(fn, name):
 
 
 def build_object(fn, name, fields):
+    """Build an object argument from bound fields.
+
+    With a default instance, a copy of it with the fields replaced (dataclasses.replace,
+    pydantic ``model_copy``, attrs.evolve, namedtuple ``_replace``, else copy + setattr), so
+    fields that aren't FMU variables keep their default; otherwise the annotated class called
+    with the fields.
+
+    :param fn: the function whose argument it is.
+    :type fn: callable or None
+    :param name: the argument name.
+    :type name: str
+    :param fields: field name -> value.
+    :type fields: dict
+    :return: the object.
+    :raises ValueError: neither a default nor a class annotation.
+    """
     if fn is None:
         raise ValueError(f"{name}: cannot tell which object to build from {sorted(fields)}")
     default, cls = object_argument(fn, name)
@@ -228,16 +365,39 @@ def build_object(fn, name, fields):
 
 
 def keyword_constants(constants):
-    """The constants passed by keyword: all but those named "0", "1", ... (positions of *args)."""
+    """The constants passed by keyword: all but those named ``"0"``, ``"1"``, ... (``*args`` positions).
+
+    :param constants: resolved constants.
+    :type constants: dict
+    :return: the keyword ones.
+    :rtype: dict
+    """
     return {k: v for k, v in constants.items() if not k.isdigit()}
 
 
 def is_literal_constant(value):
-    """Whether a constant is a value (resolved again on reset), not a { call = ... } or a reference."""
+    """Whether a constant is a value, not a ``{ call = ... }`` or ``{ ref = ... }``.
+
+    Literal constants are resolved again on reset and saved with the FMU state; calls and
+    references are objects shared by the whole run.
+
+    :param value: the constant as written in ``interface.json``.
+    :return: True for a literal.
+    :rtype: bool
+    """
     return not (isinstance(value, dict) and len(value) == 1 and ("call" in value or "ref" in value))
 
 
 def resolve_constant(value):
+    """The Python value of a constant from ``interface.json``.
+
+    ``{ python = "..." }`` is evaluated with :func:`ast.literal_eval` (literals only, never
+    arbitrary code); ``{ ref = ... }`` is imported (:func:`resolve_reference`);
+    ``{ call = ... }`` is called (:func:`call_reference`); anything else is the value itself.
+
+    :param value: the constant as written in ``interface.json``.
+    :return: its value.
+    """
     if isinstance(value, dict) and len(value) == 1:
         if "python" in value:
             return ast.literal_eval(value["python"])
@@ -249,7 +409,18 @@ def resolve_constant(value):
 
 
 def parse_call_text(text):
-    """'module:function(arg, key=arg, ...)' -> (target, [arg nodes], {key: arg node}); no call is made."""
+    """Parse ``"module:function(arg, key=arg, ...)"`` without calling anything.
+
+    The argument list is parsed with :func:`ast.parse` as the call ``_(...)``, so Python's own
+    grammar handles nesting and quoting; the nodes are evaluated later by :func:`call_argument`.
+
+    :param text: the call text.
+    :type text: str
+    :return: ``(target, [argument nodes], {keyword: node})``.
+    :rtype: tuple
+    :raises ValueError: a missing ``)`` or ``*`` / ``**`` arguments.
+    :raises SyntaxError: arguments that aren't valid Python.
+    """
     target, paren, rest = text.partition("(")
     if not paren:
         return target.strip(), [], {}
@@ -262,9 +433,16 @@ def parse_call_text(text):
 
 
 def call_reference(text):
-    """Call 'module:function(args)' and return the result, e.g. load_from_hub(repo_id="sb3/x",
-    filename="m.zip"). Without parentheses, 'module:attr.path' is the object itself, not called
-    (a function to pass, an enum member). Arguments: see call_argument."""
+    """Call ``"module:function(args)"`` and return the result.
+
+    E.g. ``load_from_hub(repo_id="sb3/x", filename="m.zip")``. Without parentheses,
+    ``"module:attr.path"`` is the object itself, not called (a function to pass, an enum member).
+    Arguments: see :func:`call_argument`.
+
+    :param text: the call text.
+    :type text: str
+    :return: what the call returned (or the object).
+    """
     target, paren, _ = text.partition("(")
     if not paren:
         return resolve_reference(target.strip())
@@ -274,9 +452,18 @@ def call_reference(text):
 
 
 def call_argument(node):
-    """The value of an argument in a call constant: a Python literal; a dotted name of an importable
-    object or a builtin (numpy.sin, float); a call of one (numpy.linspace(0, 1, 5), float("inf")); or
-    a list, tuple, set or dict of these."""
+    """Evaluate one argument node of a call constant.
+
+    Allowed: a Python literal; a dotted name of an importable object or a builtin
+    (``numpy.sin``, ``float``); a call of one (``numpy.linspace(0, 1, 5)``, ``float("inf")``);
+    a list, tuple, set or dict of these; a negated value. Evaluating the AST ourselves (instead
+    of ``eval``) keeps this to imports and calls the user wrote, nothing else.
+
+    :param node: an expression node from :func:`parse_call_text`.
+    :type node: ast.expr
+    :return: the value.
+    :raises ValueError: any other kind of expression.
+    """
     with contextlib.suppress(ValueError, SyntaxError, TypeError):
         return ast.literal_eval(node)
     if isinstance(node, ast.Name) and hasattr(builtins, node.id):
@@ -301,7 +488,16 @@ def call_argument(node):
 
 
 def converter(var):
-    """The function applied to a value before the model gets it (`convert`)."""
+    """The function applied to a value before the model gets it (``convert``).
+
+    ``"pint"`` makes a quantity in the variable's ``unit`` from pint's application registry;
+    anything else is a reference to a function.
+
+    :param var: an entry of ``interface["variables"]`` with ``convert``.
+    :type var: dict
+    :return: the converter.
+    :rtype: callable
+    """
     if var["convert"] == "pint":   # a quantity in the variable's unit, from pint's application registry
         import pint
         registry, unit = pint.get_application_registry(), var.get("unit", "")
@@ -310,13 +506,29 @@ def converter(var):
 
 
 def _labelled(obj):
+    """Whether ``obj`` is a pandas or xarray object indexed by labels (has ``keys``).
+
+    Checked by module name, so pandas and xarray are never imported here.
+
+    :param obj: any object.
+    :return: True for a labelled pandas/xarray object.
+    :rtype: bool
+    """
     return type(obj).__module__.split(".")[0] in ("pandas", "xarray") and hasattr(obj, "keys")
 
 
 def plain_number(value, unit=None):
-    """A pint quantity (anything with .magnitude and .units) or an astropy one as a number, in `unit`
-    when given;
-    a one-value pandas/xarray column as its value."""
+    """A quantity or one-value pandas/xarray object as a plain number.
+
+    A pint quantity (anything with ``.magnitude`` and ``.units``) or an astropy one becomes its
+    magnitude, in ``unit`` when given; a one-value pandas/xarray column becomes its value.
+    Anything else is returned unchanged.
+
+    :param value: what the model returned.
+    :param unit: the variable's unit, to convert to.
+    :type unit: str or None
+    :return: the number (or ``value``).
+    """
     if type(value).__module__.split(".")[0] in ("pandas", "xarray") and getattr(value, "size", None) == 1:
         value = value.item()
     if hasattr(value, "magnitude") and hasattr(value, "units"):
@@ -330,8 +542,17 @@ def plain_number(value, unit=None):
 
 
 def get_path(obj, path):
-    """Follow a dotted path through attributes, mapping keys and sequence indexes: "state.T", "rewards.speed", "4.x",
-    "X.value.-1" (the last element)."""
+    """Follow a dotted path through attributes, mapping keys and sequence indexes.
+
+    ``"state.T"``, ``"rewards.speed"``, ``"4.x"``, ``"X.value.-1"`` (the last element). On a
+    mapping a part is a key, unless it's only an attribute (``"options.update"``: the method).
+
+    :param obj: the start object (usually the model object or a call result).
+    :param path: the dotted path.
+    :type path: str
+    :return: the value at the end of the path.
+    :raises AttributeError: a missing attribute (or KeyError / IndexError).
+    """
     for part in path.split("."):
         if isinstance(obj, Mapping) and (part in obj or not hasattr(obj, part)) or _labelled(obj) and part in obj:   # "options.update": the method
             obj = obj[part]
@@ -346,6 +567,13 @@ def get_path(obj, path):
 
 
 def set_path(obj, path, value):
+    """Set the attribute at the end of a dotted path.
+
+    :param obj: the start object (the model object).
+    :param path: the dotted path; all but the last part are attributes to follow.
+    :type path: str
+    :param value: the new value.
+    """
     *parents, last = path.split(".")
     for part in parents:
         obj = getattr(obj, part)
@@ -353,6 +581,14 @@ def set_path(obj, path, value):
 
 
 def pick(result, key):
+    """Pick a value out of a call result.
+
+    :param result: what the model returned.
+    :param key: None for the whole result; a key (possibly containing dots) of a mapping;
+        else a path for :func:`get_path`.
+    :type key: str or None
+    :return: the value.
+    """
     if key is None:
         return result
     if isinstance(result, Mapping) and key in result:   # a key that itself contains dots
@@ -361,18 +597,40 @@ def pick(result, key):
 
 
 def describe(source):
+    """Describe a ``from`` / ``next`` source for error messages.
+
+    :param source: ``{"kind": "return" | "attr", "name": ...}``.
+    :type source: dict
+    :return: e.g. ``"the return value ['y']"`` or ``"attribute 'state.T'"``.
+    :rtype: str
+    """
     if source["kind"] == "return":
         return "the return value" + (f" [{source['name']!r}]" if source.get("name") else "")
     return f"attribute {source['name']!r}"
 
 
 def flatten(value):
+    """Flatten nested lists and tuples into one list.
+
+    :param value: a scalar or nested lists.
+    :return: the elements in row-major order.
+    :rtype: list
+    """
     if isinstance(value, (list, tuple)):
         return [x for item in value for x in flatten(item)]
     return [value]
 
 
 def reshape(flat, dims):
+    """Turn a flat list into nested lists of the given dimensions (row-major).
+
+    :param flat: the elements.
+    :type flat: list
+    :param dims: the dimensions.
+    :type dims: list[int]
+    :return: nested lists.
+    :rtype: list
+    """
     if len(dims) <= 1:
         return list(flat)
     step = len(flat) // dims[0]
@@ -380,6 +638,12 @@ def reshape(flat, dims):
 
 
 def _is_number(text):
+    """Whether a string can be read as a number by :func:`float`.
+
+    :param text: the string.
+    :type text: str
+    :rtype: bool
+    """
     try:
         float(text)
     except ValueError:
@@ -388,6 +652,16 @@ def _is_number(text):
 
 
 def coerce(fmi_type, value):
+    """Convert a value to an FMI type, checking it fits.
+
+    :param fmi_type: an FMI 2 or FMI 3 type name (``Real``, ``Int16``, ``Boolean``, ...).
+    :type fmi_type: str
+    :param value: the value to convert. Booleans accept ``TRUE_STRINGS`` / ``FALSE_STRINGS``;
+        Binary accepts hex strings.
+    :return: the converted value.
+    :raises ValueError: a non-integer for an integer type, a value out of range, or a string
+        that isn't a Boolean.
+    """
     if fmi_type in FLOAT_TYPES:
         return float(value)
     if fmi_type in INT_RANGES or fmi_type == "Enumeration":
@@ -428,13 +702,18 @@ def _quiet_debug_logging():
 
 
 def _capture_output(enabled):
-    """With `fmugen build --capture-output`, inside UniFMU's backend process, send stdout and
-    stderr (file descriptors 1 and 2) to a file.
+    """Inside UniFMU's backend, send stdout and stderr (file descriptors 1 and 2) to a file.
 
-    UniFMU 0.14 crashes when its backend writes more than about 4 KB to the console, which
-    models that print warnings or progress bars do. The output then goes to the importer's
-    log instead (Engine._forward_output). Outside UniFMU (build probe, tests), nothing is
-    redirected.
+    Only with ``fmugen build --capture-output``. UniFMU 0.14 crashes when its backend writes more
+    than about 4 KB to the console, which models that print warnings or progress bars do. The
+    output then goes to the importer's log instead (:meth:`Engine._forward_output`). Outside
+    UniFMU (build probe, tests), nothing is redirected. ``os.dup2`` is used rather than replacing
+    ``sys.stdout`` so output from C extensions is captured too.
+
+    :param enabled: the interface's ``capture_output``.
+    :type enabled: bool
+    :return: the temporary file the output goes to, or None.
+    :rtype: typing.BinaryIO or None
     """
     if not enabled or "UNIFMU_DISPATCHER_ENDPOINT" not in os.environ:
         return None
@@ -448,12 +727,21 @@ def _capture_output(enabled):
     return sink
 
 
+#: Largest FMI 3 uint64: the limit of a ``*Fraction`` resolution.
 UINT64_MAX = 2**64 - 1
 
 
 def fraction(value):
-    """float -> (counter, resolution) for FMI 3 *Fraction functions; both are uint64, so a value
-    that needs a larger resolution (1e-20) is rounded to the nearest fraction that fits."""
+    """A float as ``(counter, resolution)`` for FMI 3 ``*Fraction`` functions.
+
+    Both are uint64, so a value that needs a larger resolution (1e-20) is rounded to the nearest
+    fraction that fits. Uses the float's decimal text, so 0.1 gives 1/10, not its binary value.
+
+    :param value: an interval or shift in seconds.
+    :type value: float
+    :return: ``(counter, resolution)``.
+    :rtype: tuple[int, int]
+    """
     f = Fraction(str(value))
     if f.denominator > UINT64_MAX:
         f = f.limit_denominator(UINT64_MAX)
