@@ -235,7 +235,7 @@ In the GUI, open the `.fmu`, set start values, press play, and tick outputs to p
 | `src/fmugen/probe.py` | Probing (calling the model once), output detection and state detection |
 | `src/fmugen/toml_output.py` | Render an inferred config dict as a `fmugen.toml` file |
 | `src/fmugen/description.py` | `modelDescription.xml` writers (FMI 2 and FMI 3) |
-| `src/fmugen/templates/fmugen_runtime.py` | The engine copied into every FMU: runs the user's code, values, clocks, state |
+| `src/fmugen/templates/fmugen_runtime/` | The engine: split into `_constants`, `_helpers`, `_engine`, `_composite` for development; concatenated into one file at build time |
 | `src/fmugen/templates/model_fmi2.py`, `model_fmi3.py` | The adapters copied into the FMU as `resources/model.py`: FMI calls → engine |
 | `src/fmugen/__main__.py` | CLI (argparse and `main()`) |
 | `src/fmugen/builder.py` | Build/init orchestration, packaging, UniFMU version check |

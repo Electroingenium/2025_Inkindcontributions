@@ -5,6 +5,7 @@ import importlib
 import importlib.util
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -30,10 +31,49 @@ from fmugen.templates.fmugen_runtime import setup_sys_path
 PACKAGE_DIR = Path(__file__).resolve().parent
 TEMPLATES_DIR = PACKAGE_DIR / "templates"
 ADAPTERS = {2: TEMPLATES_DIR / "model_fmi2.py", 3: TEMPLATES_DIR / "model_fmi3.py"}
-RUNTIME = TEMPLATES_DIR / "fmugen_runtime.py"
+RUNTIME_DIR = TEMPLATES_DIR / "fmugen_runtime"
+RUNTIME_SOURCES = [
+    RUNTIME_DIR / "_constants.py",
+    RUNTIME_DIR / "_helpers.py",
+    RUNTIME_DIR / "_engine.py",
+    RUNTIME_DIR / "_composite.py",
+]
 LAUNCHER = TEMPLATES_DIR / "fmugen_launch.py"
 IGNORE = shutil.ignore_patterns("__pycache__", "*.pyc", "venv", ".venv")
 FORMATS = ("fmu", "folder")
+
+def _concatenate_runtime(destination):
+    """Concatenate the split runtime source files into a single fmugen_runtime.py for the FMU."""
+    _INTERNAL_IMPORT = re.compile(
+        r"from fmugen\.templates\.fmugen_runtime\._\w+ import\s+"
+        r"(?:\(.*?\)|[^\n]+)\n",
+        re.DOTALL,
+    )
+    sections = []
+    for source in RUNTIME_SOURCES:
+        text = source.read_text(encoding="utf-8")
+        text = _INTERNAL_IMPORT.sub("", text)
+        sections.append(text)
+    first, *rest = sections
+    seen_imports = set()
+    for line in first.splitlines():
+        stripped = line.strip()
+        if stripped.startswith(("import ", "from ")):
+            seen_imports.add(stripped)
+    cleaned_rest = []
+    for section in rest:
+        section = re.sub(r'\A\s*""".*?"""\s*\n', "", section, count=1, flags=re.DOTALL)
+        lines = []
+        for line in section.splitlines(keepends=True):
+            stripped = line.strip()
+            if stripped in seen_imports:
+                continue
+            if stripped.startswith(("import ", "from ")):
+                seen_imports.add(stripped)
+            lines.append(line)
+        cleaned_rest.append("".join(lines))
+    content = first + "\n" + "\n".join(cleaned_rest)
+    Path(destination).write_text(content, encoding="utf-8")
 
 OSES = ("linux", "macos", "windows")
 DEFAULT_PYTHON = {"linux": "python3", "macos": "python3", "windows": "python"}
@@ -330,7 +370,7 @@ def build(target, output, model_name=None, author=None, output_format="fmu", cal
             generate_boilerplate(version, fmu_dir)
             resources = fmu_dir / "resources"
         shutil.copy2(ADAPTERS[version], resources / "model.py")
-        shutil.copy2(RUNTIME, resources / "fmugen_runtime.py")
+        _concatenate_runtime(resources / "fmugen_runtime.py")
         (resources / "requirements.txt").write_text(
             "# UniFMU backend\n" + "\n".join(backend_requirements) + "\n"
             + ("# model requirements\n" + "\n".join(requirements) + "\n" if requirements else "")
