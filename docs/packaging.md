@@ -230,11 +230,15 @@ In the GUI, open the `.fmu`, set start values, press play, and tick outputs to p
 | Path | Contents |
 |---|---|
 | `src/fmugen/config.py` | `fmugen.toml` loading, validation, normalisation into the interface spec (FMI 2 and 3) |
-| `src/fmugen/interface.py` | `fmugen init`: inference and TOML output |
+| `src/fmugen/interface.py` | `fmugen init`: inference orchestration (import, infer, rename, requirements) |
+| `src/fmugen/arguments.py` | Argument processing and type/value utilities used by inference |
+| `src/fmugen/probe.py` | Probing (calling the model once), output detection and state detection |
+| `src/fmugen/toml_output.py` | Render an inferred config dict as a `fmugen.toml` file |
 | `src/fmugen/description.py` | `modelDescription.xml` writers (FMI 2 and FMI 3) |
 | `src/fmugen/templates/fmugen_runtime.py` | The engine copied into every FMU: runs the user's code, values, clocks, state |
 | `src/fmugen/templates/model_fmi2.py`, `model_fmi3.py` | The adapters copied into the FMU as `resources/model.py`: FMI calls → engine |
-| `src/fmugen/__main__.py` | CLI, packaging, UniFMU version check |
+| `src/fmugen/__main__.py` | CLI (argparse and `main()`) |
+| `src/fmugen/builder.py` | Build/init orchestration, packaging, UniFMU version check |
 | `src/fmugen/distribute.py` | `--vendor` and `--compile` |
 | `src/fmugen/templates/fmugen_launch.py` | The launcher of vendored FMUs: offline install into a cached environment |
 | `examples/` | Example models with their `fmugen.toml` |
@@ -250,7 +254,7 @@ fmugen doesn't ship UniFMU. Every `fmugen build` runs the UniFMU CLI to generate
 - Download UniFMU **0.14.0** from https://github.com/INTO-CPS-Association/unifmu/releases.
 - Put `unifmu` on `PATH`, or set `FMUGEN_UNIFMU` to the executable's path.
 
-fmugen runs `unifmu --version` and refuses any other version, because the adapters (`resources/model.py`) are written against that version's `backend.py` and protobuf messages. The pinned version is `UNIFMU_VERSION` in `src/fmugen/__main__.py`.
+fmugen runs `unifmu --version` and refuses any other version, because the adapters (`resources/model.py`) are written against that version's `backend.py` and protobuf messages. The pinned version is `UNIFMU_VERSION` in `src/fmugen/builder.py`.
 
 UniFMU 0.14 writes `fmiVersion="3.0-beta.4"` into the FMI 3 template's `modelDescription.xml`. That file is replaced on every build, so it doesn't matter.
 

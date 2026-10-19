@@ -22,7 +22,7 @@ import sys
 from pathlib import Path
 
 from fmugen.config import MODEL_DIR, InterfaceError
-from fmugen.interface import _dotted_names
+from fmugen.arguments import _dotted_names
 from fmugen.static import packages_distributions
 
 COMPILERS = {"pyinstaller": "PyInstaller", "nuitka": "nuitka"}   # --compile value -> module

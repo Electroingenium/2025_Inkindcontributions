@@ -9,7 +9,7 @@ import pytest
 from conftest import EXAMPLES
 from fmpy import simulate_fmu
 
-from fmugen.__main__ import build
+from fmugen.builder import build
 from fmugen.config import InterfaceError
 
 for _module in ("toml", "coloredlogs", "colorama"):   # fmugen[distributed]: the private side imports them

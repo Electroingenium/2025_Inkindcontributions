@@ -7,7 +7,7 @@ import pytest
 from fmpy import read_model_description, simulate_fmu
 from fmpy.validation import validate_fmu
 
-from fmugen.__main__ import build, init
+from fmugen.builder import build, init
 from fmugen.config import InterfaceError
 
 OK = 0

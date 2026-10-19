@@ -5,7 +5,8 @@ import pytest
 from fmpy.validation import validate_fmu
 from test_runtime import write
 
-from fmugen.__main__ import build, main
+from fmugen.builder import build
+from fmugen.__main__ import main
 from fmugen.config import InterfaceError
 from fmugen.units import base_unit, display_unit
 

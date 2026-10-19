@@ -117,7 +117,7 @@ Accepted by `build`, but the constructor of `control.StateSpace` is still called
 
 ### `init` crash in `isolated_imports`
 
-`fmugen init mesa.examples:BoltzmannWealth …` crashes with `KeyError: 'scipy'` from `importlib._bootstrap_external._get_parent_path`, when `isolated_imports` restores `sys.modules` (`src/fmugen/__main__.py:131`).
+`fmugen init mesa.examples:BoltzmannWealth …` crashes with `KeyError: 'scipy'` from `importlib._bootstrap_external._get_parent_path`, when `isolated_imports` restores `sys.modules` (`src/fmugen/builder.py:159`).
 
 **Fixed (2026-10-07):** a namespace package's `__path__` (here `mesa.examples.advanced`, `scipy._external`) looks its parent up in `sys.modules` each time it is read. `isolated_imports` deleted modules while reading their paths, so a parent could already be gone. It now finds every module to forget first, then deletes them. mesa now runs with `init` alone.
 

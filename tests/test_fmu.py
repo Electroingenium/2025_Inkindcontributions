@@ -7,7 +7,7 @@ from fmpy import read_model_description, simulate_fmu
 from fmpy.fmi2 import FMU2Slave
 from fmpy.validation import validate_fmu
 
-from fmugen.__main__ import build
+from fmugen.builder import build
 
 EXAMPLE_NAMES = ["psychrometry", "simple_pid", "rc_building"]
 

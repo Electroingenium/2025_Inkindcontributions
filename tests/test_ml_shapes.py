@@ -3,7 +3,8 @@ factory functions, computed constants, tuple/dict arguments, NamedTuple and 0-d 
 and array inputs that must be numpy arrays without saying so."""
 import textwrap
 
-from fmugen.__main__ import _parse_starts, init, isolated_imports
+from fmugen.builder import init, isolated_imports
+from fmugen.__main__ import _parse_starts
 from fmugen.interface import infer_config
 
 

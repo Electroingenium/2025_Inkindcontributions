@@ -6,9 +6,10 @@ import tomllib
 import pytest
 from conftest import EXAMPLES
 
-from fmugen.__main__ import init, isolated_imports
+from fmugen.builder import init, isolated_imports
 from fmugen.config import Config, InterfaceError, load_config, parse_call
-from fmugen.interface import infer_config, render_toml
+from fmugen.interface import infer_config
+from fmugen.toml_output import render_toml
 
 
 def infer(target, **kwargs):
@@ -96,7 +97,7 @@ def test_model_that_fails_when_imported(tmp_path):
         infer(tmp_path / "script.py", probe=False)
     (tmp_path / "fmugen.toml").write_text('[model]\nentry = "script.py:f"\nsources = ["helper.py"]\n\n'
                                          '[outputs]\ny = { from = "return" }\n')
-    from fmugen.__main__ import build
+    from fmugen.builder import build
     with pytest.raises(InterfaceError, match=r"importing script\.py:f failed: FileNotFoundError: options\.json"):
         build(tmp_path, tmp_path / "script.fmu")
 
@@ -476,7 +477,7 @@ def test_names_build_would_reject_are_renamed(tmp_path):
         with isolated_imports():
             init(target, output=output, force=True, probe=True, **kwargs)
         load_config(output)   # and build accepts it:
-        from fmugen.__main__ import build
+        from fmugen.builder import build
         build(output, tmp_path / "out", output_format="folder")
 
 
@@ -639,7 +640,7 @@ def test_probe_timeout_stops_the_process(tmp_path):
 
 
 def test_model_files_named_like_standard_library_modules_are_refused(tmp_path):
-    from fmugen.__main__ import build, init
+    from fmugen.builder import build, init
     from fmugen.config import InterfaceError
     (tmp_path / "queue.py").write_text("def step(x: float = 1.0):\n    return {'y': x}\n")
     with pytest.raises(InterfaceError, match="queue.*standard library"):

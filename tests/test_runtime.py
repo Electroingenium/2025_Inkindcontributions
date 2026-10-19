@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from conftest import EXAMPLES
 
-from fmugen.__main__ import init, isolated_imports
+from fmugen.builder import init, isolated_imports
 from fmugen.config import InterfaceError
 from fmugen.templates.model_fmi2 import Fmi2Status
 
@@ -335,7 +335,7 @@ def test_setter_method_inputs_and_property_outputs(tmp_path, make_fmu, adapter):
             def update(self, dt):
                 self._temp += 0.1 * self._power * dt
     ''')
-    from fmugen.__main__ import init
+    from fmugen.builder import init
     _, data = init(tmp_path / "lab.py", tmp_path / "inferred.toml", probe=True)
     assert data["outputs"] == {"temperature": {}}       # the property is found by inference
     (tmp_path / "fmugen.toml").write_text(textwrap.dedent('''
