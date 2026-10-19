@@ -54,13 +54,21 @@ With `--compile`, `resources/` holds only `launch.toml` and `dist/main/`, the fr
 
 Your code is never rewritten.
 
-`interface.json` is fmugen's normalised description of the model: the FMI version, the entry, `sys.path`, constants, time arguments, the experiment, type definitions, every variable with its binding, and the clocks and events. The engine reads it at runtime, and `modelDescription.xml` is generated from it.
+`interface.json` is fmugen's normalised description of the model: the FMI version, the entry, `sys.path`, constants, time arguments, the experiment, type definitions, every variable with its binding, and the clocks and events. The engine reads it at runtime, and `modelDescription.xml` is generated from it. Every key is described in [interface.md](interface.md), with a JSON Schema.
+
+### Reproducible builds
+
+Rebuilding an unchanged model gives a byte-identical FMU:
+
+- The GUID (FMI 2) / `instantiationToken` (FMI 3) is derived from the FMU's file contents, not random, so it only changes when the FMU does.
+- Zip entries are sorted and dated 1980-01-01, or `SOURCE_DATE_EPOCH` when that environment variable is set.
+- `generationDateAndTime` in `modelDescription.xml` is `SOURCE_DATE_EPOCH` when set, else the build time. Set it for byte-identical rebuilds.
 
 ---
 
 ## The FMU's Python environment
 
-fmugen is installed in the model's virtual environment, and the FMU runs with that environment's Python. `launch.toml`, which UniFMU uses to start the backend, gets the interpreter running fmugen for the current OS:
+fmugen is installed in the model's virtual environment, and the FMU runs with that environment's Python. `launch.toml`, which UniFMU uses to start the backend, gets the interpreter running fmugen for the current OS, and `python3` (Linux, macOS) or `python` (Windows) for the others:
 
 ```toml
 linux = ["python3", "main.py"]
@@ -71,7 +79,7 @@ windows = ["C:\\path\\to\\model\\.venv\\Scripts\\python.exe", "main.py"]
 That environment has everything the FMU needs:
 
 - your model's packages, because you developed the model there
-- `protobuf==5.27.3` and `pyzmq`, the UniFMU backend's packages, installed as fmugen's dependencies
+- `protobuf==5.27.3`, `pyzmq` and `cloudpickle`, the UniFMU backend's packages (cloudpickle for FMU state), installed as fmugen's dependencies. `--distributed` adds `toml`, `coloredlogs` and `colorama`.
 
 The FMU therefore runs on the machine where it was built, as long as that environment exists and keeps those packages. `resources/requirements.txt` records what it must contain: the backend's packages and `[model] requirements`.
 
@@ -99,7 +107,9 @@ macos = ["python3", "fmugen_launch.py"]
 windows = ["python", "fmugen_launch.py"]
 ```
 
-On the FMU's first run on a machine, `fmugen_launch.py` creates a virtual environment, installs the wheels into it without a network connection (`--no-index`), and caches it. Then it starts UniFMU's `main.py` with that environment. Later runs, and other FMUs with the same wheels, reuse it. The cache is in `FMUGEN_ENV_DIR` if set, else `%LOCALAPPDATA%\fmugen\envs` (Windows), `~/Library/Caches/fmugen/envs` (macOS) or `~/.cache/fmugen/envs` (Linux). FMU instances starting at the same time are safe.
+On the FMU's first run on a machine, `fmugen_launch.py` creates a virtual environment, installs the wheels into it without a network connection (`--no-index`), and caches it. Then it starts UniFMU's `main.py` with that environment. Later runs, and other FMUs with the same wheels, reuse it. The cache is in `FMUGEN_ENV_DIR` if set, else `%LOCALAPPDATA%\fmugen\envs` (Windows), `~/Library/Caches/fmugen/envs` (macOS) or `$XDG_CACHE_HOME/fmugen/envs`, default `~/.cache/fmugen/envs` (Linux). One environment is kept per set of requirements, wheels and interpreter. It's created with `uv venv` / `uv pip` when `uv` is on `PATH`, else `venv` and `pip`. FMU instances starting at the same time are safe: the environment is built in a temporary folder and renamed into place.
+
+If the install fails (usually no wheels for this platform or Python version), the launcher prints why and exits with code 1, so the FMU fails to instantiate. Command-line arguments are passed on to `main.py` (a distributed FMU's private side takes the proxy's port).
 
 `[model] requirements` must list every package the model needs from PyPI: only those are vendored, not everything in your environment.
 
@@ -115,7 +125,7 @@ Vendoring uses the environment's `pip`, or `uvx pip` when the environment has no
 
 Models such as Chronos, TTM or an SB3 policy download their weights from Hugging Face on first use. With `--vendor` or `--compile` (or `--hf-weights` on any build), `fmugen build` puts them into the FMU, in `resources/hf_cache/`:
 
-- every string parameter or constant that is a Hugging Face model id, such as `"amazon/chronos-bolt-tiny"` (`snapshot_download`), and
+- every string parameter or constant that is a Hugging Face model id, such as `"amazon/chronos-bolt-tiny"` (`snapshot_download`). A string counts when it looks like `owner/name` and doesn't end in a data-file suffix (`.csv`, `.json`, `.npy`, `.h5`, `.fmu`, ... : `DATA_SUFFIXES` in `src/fmugen/distribute.py`), so `"data/input.csv"` is left alone, and
 - whatever a `{ call = "…" }` constant downloads, such as `huggingface_sb3.load_from_hub(...)`: the call is made once at build time, with Hugging Face's cache inside the FMU.
 
 The FMU then sets `HF_HUB_CACHE` to that folder and `HF_HUB_OFFLINE=1` before importing the model, so it runs without a network connection or the user's cache. The FMU grows by the size of the weights. `--no-hf-weights` turns it off.
