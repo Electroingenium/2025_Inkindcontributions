@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from fmugen.__main__ import build, isolated_imports
+from fmugen.builder import build, isolated_imports
 from fmugen.templates import model_fmi2, model_fmi3
 from fmugen.templates.fmugen_runtime import Status
 

@@ -6,9 +6,11 @@ import tomllib
 import pytest
 from conftest import EXAMPLES
 
-from fmugen.__main__ import _parse_converts, init, isolated_imports
+from fmugen.builder import init, isolated_imports
+from fmugen.__main__ import _parse_converts
 from fmugen.config import InterfaceError
-from fmugen.interface import infer_config, render_toml
+from fmugen.interface import infer_config
+from fmugen.toml_output import render_toml
 
 
 def infer(target, **kwargs):

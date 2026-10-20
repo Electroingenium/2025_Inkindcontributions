@@ -2,7 +2,7 @@
 
 fmugen builds UniFMU FMUs for **FMI 2.0** (the default) or **FMI 3.0** (`[model] fmi_version = 3` or `fmugen build --fmi 3`). Both are Co-Simulation FMUs.
 
-The native UniFMU library in `binaries/` starts a Python process (`resources/main.py`), which forwards each FMI call to the adapter in `resources/model.py`. fmugen generates that adapter: `model_fmi2.py` or `model_fmi3.py`, depending on the version. Both are thin and delegate to the same engine (`resources/fmugen_runtime.py`). The engine reads `resources/interface.json` to find out how each FMU variable maps onto your code.
+The native UniFMU library in `binaries/` starts a Python process (`resources/main.py`), which forwards each FMI call to the adapter in `resources/model.py`. fmugen generates that adapter: `model_fmi2.py` or `model_fmi3.py`, depending on the version. Both are thin and delegate to the same engine (`resources/fmugen_runtime.py`). The engine reads `resources/interface.json` ([reference](interface.md)) to find out how each FMU variable maps onto your code.
 
 - [Support overview](#support-overview)
 - [FMI 2](#fmi-2)

@@ -7,9 +7,10 @@ and FMI ("m/s2", "W/(m2.K)", "kg.m-3"), with "*", "^" and spaces also accepted.
 import math
 import re
 
+#: SI base units in the order of the <BaseUnit> attributes (FMI adds rad).
 BASE = ("kg", "m", "s", "A", "K", "mol", "cd", "rad")
 
-# symbol -> (exponents of BASE, factor, offset); value in SI = factor * value + offset
+#: symbol -> (exponents of BASE, factor, offset); value in SI = factor * value + offset.
 UNITS = {
     "m": ({"m": 1}, 1.0, 0.0), "s": ({"s": 1}, 1.0, 0.0), "g": ({"kg": 1}, 1e-3, 0.0),
     "A": ({"A": 1}, 1.0, 0.0), "K": ({"K": 1}, 1.0, 0.0), "mol": ({"mol": 1}, 1.0, 0.0),
@@ -30,20 +31,28 @@ UNITS = {
 UNITS["Ω"] = UNITS["Ohm"]
 UNITS["°C"] = UNITS["degC"]
 UNITS["°"] = UNITS["deg"]
+#: Decimal prefixes a unit symbol may carry (``u`` and ``µ`` are both micro).
 PREFIXES = {"G": 1e9, "M": 1e6, "k": 1e3, "c": 1e-2, "m": 1e-3, "u": 1e-6, "µ": 1e-6, "n": 1e-9}
-# units that take no prefix (an offset, or a prefix that would read as another unit)
+#: Units that take no prefix (an offset, or a prefix that would read as another unit).
 NO_PREFIX = {"degC", "degF", "deg", "°C", "°", "min", "h", "d", "rpm", "K"}
 
-# written for other units as often as for these: "C" for Celsius (coulomb), "F" for Fahrenheit
-# (farad), "S" for seconds (siemens), "T" for temperature (tesla). On their own they get no
-# BaseUnit; with a prefix ("uF", "mS") they are unambiguous.
+#: Written for other units as often as for these: "C" for Celsius (coulomb), "F" for Fahrenheit
+#: (farad), "S" for seconds (siemens), "T" for temperature (tesla). On their own they get no
+#: BaseUnit; with a prefix ("uF", "mS") they are unambiguous.
 AMBIGUOUS = {"C", "F", "S", "T"}
 
+#: One factor of a product: a symbol, an optional ``^`` and an optional signed integer power.
 _FACTOR = re.compile(r"^([^\d^+-]+)\^?([+-]?\d+)?$")
 
 
 def _symbol(text):
-    """(exponents, factor, offset) of one symbol, possibly with a prefix: 'km', 'kW', 'mbar'."""
+    """The exponents, factor and offset of one symbol, possibly with a prefix: 'km', 'kW', 'mbar'.
+
+    :param text: the symbol.
+    :type text: str
+    :return: ``(exponents, factor, offset)``, or None when unknown or ambiguous.
+    :rtype: tuple or None
+    """
     if text in AMBIGUOUS:
         return None
     if text in UNITS:
@@ -56,7 +65,14 @@ def _symbol(text):
 
 
 def _product(text):
-    """Exponents and factor of 'kg.m2' / 'kg*m^2' / 'kg m2' (no division)."""
+    """Exponents and factor of a product such as 'kg.m2', 'kg*m^2' or 'kg m2' (no division).
+
+    :param text: the product.
+    :type text: str
+    :return: ``(exponents, factor, offset)``, or None when a factor isn't recognised or an offset
+        unit (degC) is combined with others.
+    :rtype: tuple or None
+    """
     tokens = [t for t in re.split(r"[.*\s·]+", text.strip()) if t and t != "1"]
     exponents, factor, offset = {}, 1.0, 0.0
     for token in tokens:
@@ -77,7 +93,15 @@ def _product(text):
 
 
 def parse(unit):
-    """(exponents, factor, offset) of a unit string, or None if it isn't recognised."""
+    """The exponents, factor and offset of a unit string, or None if it isn't recognised.
+
+    Accepts one ``/`` with an optional parenthesised denominator ("W/(m2.K)").
+
+    :param unit: the unit string.
+    :type unit: str
+    :return: ``(exponents without zeros, factor, offset)``, or None.
+    :rtype: tuple or None
+    """
     text = unit.strip()
     numerator, slash, denominator = text.partition("/")
     denominator = denominator.strip()
@@ -100,7 +124,13 @@ def parse(unit):
 
 
 def base_unit(unit):
-    """The attributes of <BaseUnit> for a unit string, or None if it isn't recognised."""
+    """The attributes of <BaseUnit> for a unit string, or None if it isn't recognised.
+
+    :param unit: the unit string.
+    :type unit: str
+    :return: base-unit exponents as strings, plus ``factor`` / ``offset`` when not 1 / 0.
+    :rtype: dict[str, str] or None
+    """
     parsed = parse(unit)
     if parsed is None:
         return None
@@ -114,8 +144,18 @@ def base_unit(unit):
 
 
 def display_unit(unit, display):
-    """(factor, offset) of <DisplayUnit name=display> for a variable in `unit`, or None when the two
-    units aren't recognised or don't measure the same quantity. FMI: display value = factor * value + offset."""
+    """The factor and offset of <DisplayUnit name=display> for a variable in ``unit``.
+
+    FMI: display value = factor * value + offset.
+
+    :param unit: the variable's unit.
+    :type unit: str
+    :param display: the display unit.
+    :type display: str
+    :return: ``(factor, offset)``, or None when the two units aren't recognised or don't measure
+        the same quantity.
+    :rtype: tuple[float, float] or None
+    """
     a, b = parse(unit), parse(display)
     if a is None or b is None or a[0] != b[0]:
         return None
@@ -123,5 +163,11 @@ def display_unit(unit, display):
 
 
 def _round(x):
-    """Without floating-point noise: 3.6, not 3.5999999999999996."""
+    """A float without floating-point noise: 3.6, not 3.5999999999999996.
+
+    :param x: the value.
+    :type x: float
+    :return: ``x`` rounded to 15 significant digits.
+    :rtype: float
+    """
     return float(f"{x:.15g}")

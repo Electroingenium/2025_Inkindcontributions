@@ -12,13 +12,30 @@ try:
 except ImportError:  # imported from the fmugen package (build probe, tests)
     from fmugen.templates.fmugen_runtime import Status, make_engine
 
-# Frozen with PyInstaller (fmugen build --compile), data files are in sys._MEIPASS;
-# with Nuitka, next to the compiled modules, as in a normal FMU.
+#: The FMU's resources folder. Frozen with PyInstaller (fmugen build --compile), data files
+#: are in sys._MEIPASS; with Nuitka, next to the compiled modules, as in a normal FMU.
 RESOURCES_DIR = Path(getattr(sys, "_MEIPASS", None) or Path(__file__).resolve().parent)
 
 
 class Model:
+    """The FMI 2 co-simulation model that UniFMU's Python backend drives.
+
+    UniFMU's ``backend.py`` creates one ``Model`` per ``fmi2Instantiate`` and calls the method
+    named after each FMI function. Every method forwards to the fmugen engine (``make_engine``:
+    an ``Engine`` or ``CompositeEngine``) and returns an FMI 2 status (and values, for getters).
+    FMI 2 has no arrays, clocks or event mode: array elements are separate scalar variables.
+
+    :ivar engine: the runtime engine that runs the user's model.
+    """
     def __init__(self, _log_callback, resources_dir=None) -> None:
+        """``fmi2Instantiate``: create the engine, which imports the user's model.
+
+        :param _log_callback: UniFMU's ``callback(status, category, message)`` to the importer's logger.
+        :type _log_callback: callable
+        :param resources_dir: the FMU's resources folder (tests and the build probe); default
+            :data:`RESOURCES_DIR`.
+        :type resources_dir: str or pathlib.Path or None
+        """
         self._log_callback = _log_callback # Removing this line will break logging
         self.engine = make_engine(resources_dir or RESOURCES_DIR, self.log, info_category="logAll")
 
@@ -27,55 +44,183 @@ class Model:
     def fmi2DoStep(
         self, current_time, step_size, no_set_fmu_state_prior_to_current_point
     ):
+        """``fmi2DoStep``: advance one communication step (:meth:`Engine.do_step`).
+
+        :param current_time: communication point at the start of the step.
+        :type current_time: float
+        :param step_size: communication step size.
+        :type step_size: float
+        :param no_set_fmu_state_prior_to_current_point: the importer's promise not to roll back;
+            unused (the engine saves state only for ``discard_on``).
+        :type no_set_fmu_state_prior_to_current_point: bool
+        :return: the FMI status (``Fmi2Status``).
+        :rtype: int
+        """
         status, _ = self.engine.do_step(current_time, step_size)
         return status
 
     def fmi2SetDebugLogging(self, categories, logging_on):
+        """``fmi2SetDebugLogging``: choose which messages reach the importer.
+
+        :param categories: log categories to send; empty means all.
+        :type categories: list[str] or None
+        :param logging_on: whether non-error messages are sent.
+        :type logging_on: bool
+        :return: the FMI status (``Fmi2Status``).
+        :rtype: int
+        """
         return self.engine.set_debug_logging(logging_on, categories or ())
 
     def fmi2EnterInitializationMode(self):
+        """``fmi2EnterInitializationMode``: :meth:`Engine.enter_initialization_mode`.
+
+        :return: the FMI status (``Fmi2Status``).
+        :rtype: int
+        """
         return self.engine.enter_initialization_mode()
 
     def fmi2ExitInitializationMode(self):
+        """``fmi2ExitInitializationMode``: constructs and initializes the model (:meth:`Engine.exit_initialization_mode`).
+
+        :return: the FMI status (``Fmi2Status``).
+        :rtype: int
+        """
         return self.engine.exit_initialization_mode()
 
     def fmi2SetupExperiment(self, start_time, stop_time, tolerance):
+        """``fmi2SetupExperiment``: start time, stop time and tolerance (:meth:`Engine.setup_experiment`).
+
+        :param start_time: simulation start.
+        :type start_time: float
+        :param stop_time: simulation end, or None.
+        :type stop_time: float or None
+        :param tolerance: relative tolerance, or None.
+        :type tolerance: float or None
+        :return: the FMI status (``Fmi2Status``).
+        :rtype: int
+        """
         return self.engine.setup_experiment(start_time, stop_time, tolerance)
 
     def fmi2Terminate(self):
+        """``fmi2Terminate``: calls the model's terminate method (:meth:`Engine.terminate`).
+
+        :return: the FMI status (``Fmi2Status``).
+        :rtype: int
+        """
         return self.engine.terminate()
 
     def fmi2Reset(self):
+        """``fmi2Reset``: back to the instantiated state (:meth:`Engine.reset`).
+
+        :return: the FMI status (``Fmi2Status``).
+        :rtype: int
+        """
         return self.engine.reset()
 
     def fmi2SerializeFmuState(self):
+        """``fmi2GetFMUstate`` + ``fmi2SerializeFMUstate`` (UniFMU combines them): :meth:`Engine.serialize`.
+
+        :return: ``(status, state bytes)``.
+        :rtype: tuple[int, bytes]
+        """
         return self.engine.serialize()
 
     def fmi2DeserializeFmuState(self, bytes):
+        """``fmi2DeSerializeFMUstate`` + ``fmi2SetFMUstate``: :meth:`Engine.deserialize`.
+
+        :param bytes: bytes from :meth:`fmi2SerializeFmuState`.
+        :type bytes: bytes
+        :return: the FMI status (``Fmi2Status``).
+        :rtype: int
+        """
         return self.engine.deserialize(bytes)
 
     def fmi2GetReal(self, references):
+        """``fmi2GetReal``: current values of these variables (:meth:`Engine.get_values`).
+
+        :param references: value references.
+        :type references: list[int]
+        :return: ``(status, values)``.
+        :rtype: tuple[int, list]
+        """
         return self.engine.get_values(references)
 
     def fmi2GetInteger(self, references):
+        """``fmi2GetInteger``: current values of these variables (:meth:`Engine.get_values`).
+
+        :param references: value references.
+        :type references: list[int]
+        :return: ``(status, values)``.
+        :rtype: tuple[int, list]
+        """
         return self.engine.get_values(references)
 
     def fmi2GetBoolean(self, references):
+        """``fmi2GetBoolean``: current values of these variables (:meth:`Engine.get_values`).
+
+        :param references: value references.
+        :type references: list[int]
+        :return: ``(status, values)``.
+        :rtype: tuple[int, list]
+        """
         return self.engine.get_values(references)
 
     def fmi2GetString(self, references):
+        """``fmi2GetString``: current values of these variables (:meth:`Engine.get_values`).
+
+        :param references: value references.
+        :type references: list[int]
+        :return: ``(status, values)``.
+        :rtype: tuple[int, list]
+        """
         return self.engine.get_values(references)
 
     def fmi2SetReal(self, references, values):
+        """``fmi2SetReal``: set inputs and parameters (:meth:`Engine.set_values`).
+
+        :param references: value references.
+        :type references: list[int]
+        :param values: one value per reference.
+        :type values: list
+        :return: the FMI status (``Fmi2Status``).
+        :rtype: int
+        """
         return self.engine.set_values(references, values)
 
     def fmi2SetInteger(self, references, values):
+        """``fmi2SetInteger``: set inputs and parameters (:meth:`Engine.set_values`).
+
+        :param references: value references.
+        :type references: list[int]
+        :param values: one value per reference.
+        :type values: list
+        :return: the FMI status (``Fmi2Status``).
+        :rtype: int
+        """
         return self.engine.set_values(references, values)
 
     def fmi2SetBoolean(self, references, values):
+        """``fmi2SetBoolean``: set inputs and parameters (:meth:`Engine.set_values`).
+
+        :param references: value references.
+        :type references: list[int]
+        :param values: one value per reference.
+        :type values: list
+        :return: the FMI status (``Fmi2Status``).
+        :rtype: int
+        """
         return self.engine.set_values(references, values)
 
     def fmi2SetString(self, references, values):
+        """``fmi2SetString``: set inputs and parameters (:meth:`Engine.set_values`).
+
+        :param references: value references.
+        :type references: list[int]
+        :param values: one value per reference.
+        :type values: list
+        :return: the FMI status (``Fmi2Status``).
+        :rtype: int
+        """
         return self.engine.set_values(references, values)
 
     # ================= Logging =================
@@ -84,26 +229,29 @@ class Model:
         # UniFMU 0.14 passes the text to the importer's FMI 2 logger as its printf format string, with no
         # arguments: a "%s" in a traceback or URL would crash the importer. "%%" prints as "%".
         # (docs/unifmu-limitations.md §12; remove when UniFMU passes the text as an argument.)
+        """Send a message to the importer through UniFMU.
+
+        :param message: the text.
+        :type message: str
+        :param status: the FMI status of the message.
+        :type status: int
+        :param category: the FMI log category.
+        :type category: str
+        """
         message = message.replace("%", "%%")
         # Removing the line below will break logging.
         self._log_callback(status, category, message)
 
 
 class Fmi2Status(Status):
-    """
-    Represents the status of an FMI2 FMU or the results of function calls.
+    """FMI 2 status codes, as UniFMU's FMI 2 backend expects them (FMI 2 section 2.1.3).
 
-    Values:
-        * ok: all well
-        * warning: an issue has arisen, but the computation can continue.
-        * discard: an operation has resulted in invalid output, which must be discarded
-        * error: an error has ocurred for this specific FMU instance.
-        * fatal: an fatal error has ocurred which has corrupted ALL FMU instances.
-        * pending: indicates that the FMu is doing work asynchronously, which can be retrived later.
-
-    Notes:
-        FMI section 2.1.3
-
+    :cvar ok: all well.
+    :cvar warning: an issue has arisen, but the computation can continue.
+    :cvar discard: an operation has resulted in invalid output, which must be discarded.
+    :cvar error: an error has occurred for this specific FMU instance.
+    :cvar fatal: a fatal error has occurred which has corrupted ALL FMU instances.
+    :cvar pending: the FMU is doing work asynchronously, which can be retrieved later.
     """
 
     pending = 5

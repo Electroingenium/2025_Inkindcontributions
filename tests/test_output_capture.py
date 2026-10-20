@@ -11,7 +11,7 @@ import textwrap
 
 import pytest
 
-from fmugen.__main__ import build
+from fmugen.builder import build
 
 SIMULATE = textwrap.dedent("""
     import sys

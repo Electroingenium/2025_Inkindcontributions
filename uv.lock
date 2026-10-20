@@ -292,6 +292,7 @@ pyinstaller = [
 dev = [
     { name = "filterpy" },
     { name = "fmpy" },
+    { name = "jsonschema" },
     { name = "pytest" },
     { name = "simple-pid" },
 ]
@@ -313,6 +314,7 @@ provides-extras = ["pyinstaller", "nuitka", "distributed"]
 dev = [
     { name = "filterpy", specifier = "==1.4.5" },
     { name = "fmpy", specifier = ">=0.3.32" },
+    { name = "jsonschema", specifier = ">=4.26.0" },
     { name = "pytest", specifier = ">=9.1.1" },
     { name = "simple-pid", specifier = "==2.0.1" },
 ]

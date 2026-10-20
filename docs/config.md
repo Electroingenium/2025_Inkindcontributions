@@ -251,7 +251,8 @@ One table per clock; `<name>` is the FMU clock name. See [fmi.md](fmi.md#clocks-
 - `pos:` indices have gaps, a state has no `next`, or a clocked input's clock has no `call`;
 - `fixed_step` is set without `step_size`, or `call = false` is set without clocks;
 - it defines no variables at all;
-- an FMI 3-only feature is used in an FMI 2 build.
+- an FMI 3-only feature is used in an FMI 2 build;
+- the model's module (the entry file or a file in `sources`) has the name of a module the FMU's backend already uses (`model`, `backend`, `main`, `abstract_backend`, `schemas`, `fmugen_runtime`, `fmugen_launch`) or of a Python standard library module (e.g. `queue.py`, `random.py`), which would shadow it: rename the file. Your code goes into `resources/fmugen_model/` inside the FMU, which is first on `sys.path`.
 
 The model itself is not run: errors in the model show up when the FMU runs, or earlier in `fmugen init --probe`.
 

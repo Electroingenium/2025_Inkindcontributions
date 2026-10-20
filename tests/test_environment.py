@@ -5,7 +5,7 @@ import zipfile
 
 from conftest import EXAMPLES
 
-from fmugen.__main__ import CURRENT_OS, build
+from fmugen.builder import CURRENT_OS, build
 
 
 def test_fmu_runs_with_this_interpreter_and_lists_its_requirements(tmp_path):

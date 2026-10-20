@@ -9,7 +9,7 @@ from fmpy import read_model_description, simulate_fmu
 from fmpy.fmi3 import FMU3Slave, fmi3ValueReference
 from fmpy.validation import validate_fmu
 
-from fmugen.__main__ import build
+from fmugen.builder import build
 from fmugen.config import InterfaceError
 from fmugen.templates.fmugen_runtime import Status
 from fmugen.templates.fmugen_runtime import Status
@@ -428,7 +428,7 @@ def test_a_failed_step_reports_the_start_of_the_step_as_last_successful_time(mak
 
 
 def test_instantiating_with_logging_off_turns_logging_off(make_fmu):
-    from fmugen.__main__ import isolated_imports
+    from fmugen.builder import isolated_imports
     from fmugen.templates import model_fmi3
     fmu_dir = make_fmu(EXAMPLES / "simple_pid", fmi_version=3)
     with isolated_imports():

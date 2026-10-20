@@ -11,6 +11,7 @@ from pathlib import Path
 
 from fmugen.units import base_unit, display_unit
 
+#: FMI 2 log categories: (name, description or None).
 LOG_CATEGORIES = [
     ("logStatusWarning", None),
     ("logStatusDiscard", None),
@@ -23,13 +24,16 @@ LOG_CATEGORIES = [
      "Enabling this category is required for distributed UniFMUs.")),
 ]
 
-# Replaced after the FMU's files are written by a token derived from their content (stamp_guid),
-# so an unchanged model rebuilds to the same GUID / instantiationToken.
+#: Replaced after the FMU's files are written by a token derived from their content (stamp_guid),
+#: so an unchanged model rebuilds to the same GUID / instantiationToken.
 GUID_PLACEHOLDER = "{00000000-0000-0000-0000-000000000000}"
+#: Namespace of the name-based UUID made from the FMU's content hash.
 GUID_NAMESPACE = uuid.UUID("6f3c1d52-8a4e-4b7a-9d0e-2f5c8b1a7e43")
 
+#: FMI floating-point types (FMI 2 and FMI 3 names).
 FLOAT_TYPES = ("Real", "Float32", "Float64")
 
+#: ``[experiment]`` key -> <DefaultExperiment> attribute.
 EXPERIMENT_ATTRIBUTES = {
     "start_time": "startTime", "stop_time": "stopTime",
     "tolerance": "tolerance", "step_size": "stepSize",
@@ -37,12 +41,22 @@ EXPERIMENT_ATTRIBUTES = {
 
 
 def build_time():
-    """The build time: SOURCE_DATE_EPOCH when set (reproducible builds), else now."""
+    """The build time: ``SOURCE_DATE_EPOCH`` when set (reproducible builds), else now.
+
+    :rtype: datetime.datetime
+    """
     epoch = os.environ.get("SOURCE_DATE_EPOCH")
     return datetime.fromtimestamp(int(epoch), UTC) if epoch else datetime.now(UTC)
 
 
 def _format_value(fmi_type, value):
+    """A value as XML attribute text: ``true`` / ``false``, ``NaN`` / ``INF`` / ``-INF``, full-precision floats.
+
+    :param fmi_type: the variable's FMI type.
+    :type fmi_type: str
+    :param value: the value.
+    :rtype: str
+    """
     if fmi_type == "Boolean":
         return "true" if value else "false"
     if isinstance(value, float):
@@ -55,7 +69,21 @@ def _format_value(fmi_type, value):
 
 
 def build_model_description(interface, model_name=None, author=None):
-    """Return the modelDescription.xml ElementTree for a fmugen interface spec."""
+    """Return the FMI 2.0 Co-Simulation modelDescription.xml ElementTree for an interface spec.
+
+    Built with :mod:`xml.etree.ElementTree`. FMI 2 has no arrays, so each array element is its
+    own <ScalarVariable> (``x[1,2]``, see :func:`_scalars`) with the array's value reference plus
+    its index. ModelStructure lists outputs (with ``depends_on`` dependencies) and initial
+    unknowns by 1-based ScalarVariable index. The GUID is a placeholder until :func:`stamp_guid`.
+
+    :param interface: the interface spec (see ``docs/interface.md``).
+    :type interface: dict
+    :param model_name: overrides ``model_name``.
+    :type model_name: str or None
+    :param author: overrides ``author``.
+    :type author: str or None
+    :rtype: xml.etree.ElementTree.ElementTree
+    """
     variables = interface["variables"]
     experiment = interface.get("experiment", {})
     can_state = "true" if interface.get("can_get_and_set_state", True) else "false"
@@ -166,13 +194,21 @@ def build_model_description(interface, model_name=None, author=None):
     return tree
 
 
-# FMI 2 attributes of the <Real>/<Integer>/... element; the others go on <ScalarVariable>
+#: FMI 2 attributes of the <Real>/<Integer>/... element; the others go on <ScalarVariable>.
 FMI2_TYPE_ATTRIBUTES = {"displayUnit", "relativeQuantity", "unbounded", "reinit", "derivative"}
 
 
 def _unit_definitions(root, variables):
-    """<UnitDefinitions>: each unit by name, with its SI <BaseUnit> when the unit is recognised, and
-    the <DisplayUnit>s variables ask for (extra = { displayUnit = ... })."""
+    """Add <UnitDefinitions>: each unit by name, with its SI <BaseUnit> when the unit is recognised.
+
+    Also the <DisplayUnit>s variables ask for (``extra = { displayUnit = ... }``), with factor and
+    offset when both units are known.
+
+    :param root: the <fmiModelDescription> element.
+    :type root: xml.etree.ElementTree.Element
+    :param variables: the floating-point variables.
+    :type variables: list[dict]
+    """
     displays = {}
     for v in variables:
         if v.get("unit"):
@@ -200,8 +236,18 @@ def _unit_definitions(root, variables):
 
 
 def _annotations(root, tag, interface):
-    """[model] annotations: <Tool name="..."> elements, inside <VendorAnnotations> (FMI 2), or as
-    <Annotation type="..."> inside <Annotations> (FMI 3)."""
+    """Add ``[model] annotations``: <Tool name="..."> elements.
+
+    Inside <VendorAnnotations> (FMI 2), or as <Annotation type="..."> inside <Annotations> (FMI 3).
+    The text was validated by ``config._check_annotations``.
+
+    :param root: the <fmiModelDescription> element.
+    :type root: xml.etree.ElementTree.Element
+    :param tag: ``"VendorAnnotations"`` or ``"Annotations"``.
+    :type tag: str
+    :param interface: the interface spec (see ``docs/interface.md``).
+    :type interface: dict
+    """
     text = interface.get("annotations")
     if text:
         element = ET.fromstring(f"<{tag}>{text}</{tag}>")
@@ -213,6 +259,16 @@ def _annotations(root, tag, interface):
 
 
 def _unknown(var, index, index_of):
+    """The attributes of an FMI 2 <Unknown>: its index and the indexes of the inputs it depends on.
+
+    :param var: the output variable.
+    :type var: dict
+    :param index: its ScalarVariable index.
+    :type index: int
+    :param index_of: variable name -> its ScalarVariable indexes.
+    :type index_of: dict
+    :rtype: dict
+    """
     attrs = {"index": str(index)}
     if "depends_on" in var:
         attrs["dependencies"] = " ".join(str(i) for name in var["depends_on"] for i in index_of[name])
@@ -220,8 +276,15 @@ def _unknown(var, index, index_of):
 
 
 def _scalars(variables):
-    """(variable, element, name) for each FMI 2 ScalarVariable: an array x with dimensions [2, 3]
-    becomes x[1,1], x[1,2], ... x[2,3] (row-major, 1-based, FMI 2 "structured" naming)."""
+    """``(variable, element, name)`` for each FMI 2 ScalarVariable.
+
+    An array x with dimensions [2, 3] becomes x[1,1], x[1,2], ... x[2,3] (row-major, 1-based,
+    FMI 2 "structured" naming).
+
+    :param variables: the interface's variables.
+    :type variables: list[dict]
+    :rtype: collections.abc.Iterator[tuple]
+    """
     for var in variables:
         dims = var.get("dimensions")
         if not dims:
@@ -244,7 +307,21 @@ LOG_CATEGORIES_FMI3 = [
 
 
 def build_model_description_fmi3(interface, model_name=None, author=None):
-    """Return the FMI 3.0 Co-Simulation modelDescription.xml ElementTree for a fmugen interface spec."""
+    """Return the FMI 3.0 Co-Simulation modelDescription.xml ElementTree for an interface spec.
+
+    FMI 3 variables are typed elements (<Float64>, <Int32>, ...) with <Dimension> children for
+    arrays (a structural parameter's value reference, or a fixed size); String and Binary starts
+    are <Start> children. Clocks follow the variables. ModelStructure uses value references;
+    clocked variables are never initial unknowns.
+
+    :param interface: the interface spec (see ``docs/interface.md``).
+    :type interface: dict
+    :param model_name: overrides ``model_name``.
+    :type model_name: str or None
+    :param author: overrides ``author``.
+    :type author: str or None
+    :rtype: xml.etree.ElementTree.ElementTree
+    """
     variables = interface["variables"]
     clocks = interface.get("clocks", [])
     experiment = interface.get("experiment", {})
@@ -371,13 +448,32 @@ def build_model_description_fmi3(interface, model_name=None, author=None):
 
 
 def write_model_description(interface, path, **kwargs):
+    """Write modelDescription.xml for the interface's FMI version.
+
+    :param interface: the interface spec (see ``docs/interface.md``).
+    :type interface: dict
+    :param path: the file.
+    :type path: str or pathlib.Path
+    :param kwargs: ``model_name`` / ``author`` overrides.
+    """
     build = build_model_description_fmi3 if interface.get("fmi_version", 2) == 3 else build_model_description
     tree = build(interface, **kwargs)
     tree.write(Path(path), encoding="utf-8", xml_declaration=True)
 
 
 def stamp_guid(fmu_dir):
-    """Replace GUID_PLACEHOLDER in fmu_dir's modelDescription.xml by a UUID hashed from every file of the FMU."""
+    """Replace :data:`GUID_PLACEHOLDER` in the FMU's modelDescription.xml by a token hashed from every file.
+
+    SHA-256 over every file's path and content (the model description without its build time,
+    which changes on every build), turned into a :func:`uuid.uuid5`: an unchanged model rebuilds
+    to the same GUID / instantiationToken, and any change gives a new one. Files are hashed in
+    chunks: a frozen FMU can hold files of hundreds of MB.
+
+    :param fmu_dir: the FMU folder.
+    :type fmu_dir: str or pathlib.Path
+    :return: the token, ``{...}``.
+    :rtype: str
+    """
     fmu_dir = Path(fmu_dir)
     digest = hashlib.sha256()
     for file in sorted(f for f in fmu_dir.rglob("*") if f.is_file() and "__pycache__" not in f.parts):

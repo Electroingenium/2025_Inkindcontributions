@@ -1,0 +1,433 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "fmugen interface.json",
+  "description": "resources/interface.json of an fmugen FMU, spec_version 1. Reference: docs/interface.md.",
+  "oneOf": [
+    { "$ref": "#/$defs/single" },
+    { "$ref": "#/$defs/composite" }
+  ],
+  "$defs": {
+    "single": {
+      "type": "object",
+      "description": "One model (also each part of a composite FMU, in resources/parts/<name>/interface.json).",
+      "additionalProperties": false,
+      "required": [
+        "spec_version", "fmi_version", "model_name", "description", "author", "entry", "sys_path", "cwd",
+        "globals", "setup", "constants", "call_constants", "time_args", "time_epochs", "experiment",
+        "type_definitions", "variables", "clocks", "events", "has_event_mode", "can_get_and_set_state",
+        "save_state", "discard_on", "integrate", "annotations", "capture_output"
+      ],
+      "properties": {
+        "spec_version": { "const": 1 },
+        "fmi_version": { "$ref": "#/$defs/fmiVersion" },
+        "model_name": { "type": "string" },
+        "description": { "type": "string" },
+        "author": { "type": "string" },
+        "entry": { "$ref": "#/$defs/entry" },
+        "sys_path": {
+          "description": "Paths relative to resources/, prepended to sys.path.",
+          "type": "array", "items": { "type": "string" }
+        },
+        "cwd": {
+          "description": "Working directory relative to resources/, or null to leave it unchanged.",
+          "type": ["string", "null"]
+        },
+        "globals": { "type": "array", "items": { "$ref": "#/$defs/moduleRef" } },
+        "setup": { "type": "array", "items": { "$ref": "#/$defs/setupCall" } },
+        "constants": { "$ref": "#/$defs/constants" },
+        "call_constants": { "$ref": "#/$defs/constants" },
+        "time_args": {
+          "type": "object",
+          "additionalProperties": {
+            "enum": ["time", "step_size", "end_time", "start_time", "stop_time", "tolerance"]
+          }
+        },
+        "time_epochs": {
+          "description": "Argument -> ISO 8601 date-time: the argument receives a datetime instead of seconds.",
+          "type": "object", "additionalProperties": { "type": "string" }
+        },
+        "experiment": { "$ref": "#/$defs/experiment" },
+        "type_definitions": { "$ref": "#/$defs/typeDefinitions" },
+        "variables": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/variable" } },
+        "clocks": { "type": "array", "items": { "$ref": "#/$defs/clock" } },
+        "events": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "terminate": { "$ref": "#/$defs/fromBinding" },
+            "next_event_time": { "$ref": "#/$defs/fromBinding" }
+          }
+        },
+        "has_event_mode": { "type": "boolean" },
+        "can_get_and_set_state": { "type": "boolean" },
+        "save_state": {
+          "description": "true: pickle the whole model; false: no state support; list: only these attribute paths.",
+          "oneOf": [
+            { "type": "boolean" },
+            { "type": "array", "minItems": 1, "items": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$" } }
+          ]
+        },
+        "discard_on": { "type": "array", "items": { "$ref": "#/$defs/moduleRef" } },
+        "integrate": {
+          "oneOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["method", "substeps"],
+              "properties": {
+                "method": {
+                  "type": "string",
+                  "pattern": "^(euler|rk4|scipy:(RK45|RK23|DOP853|Radau|BDF|LSODA))$"
+                },
+                "substeps": { "type": "integer", "minimum": 1 }
+              }
+            }
+          ]
+        },
+        "annotations": {
+          "description": "XML of <Tool name=\"...\"> elements put inside modelDescription.xml's <Annotations>.",
+          "type": ["string", "null"]
+        },
+        "capture_output": { "type": "boolean" }
+      }
+    },
+
+    "composite": {
+      "type": "object",
+      "description": "Top-level file of a composite FMU. Each part has its own single-model file in its dir.",
+      "additionalProperties": false,
+      "required": [
+        "spec_version", "composite", "fmi_version", "model_name", "description", "author", "parts",
+        "connections", "variables", "type_definitions", "experiment", "clocks", "events", "has_event_mode",
+        "can_get_and_set_state", "capture_output"
+      ],
+      "properties": {
+        "spec_version": { "const": 1 },
+        "composite": { "const": true },
+        "fmi_version": { "$ref": "#/$defs/fmiVersion" },
+        "model_name": { "type": "string" },
+        "description": { "type": "string" },
+        "author": { "type": "string" },
+        "parts": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "dir"],
+            "properties": {
+              "name": { "type": "string" },
+              "dir": { "description": "Relative to resources/, e.g. parts/<name>.", "type": "string" }
+            }
+          }
+        },
+        "connections": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["from", "to"],
+            "properties": {
+              "from": { "$ref": "#/$defs/partReference" },
+              "to": { "$ref": "#/$defs/partReference" }
+            }
+          }
+        },
+        "variables": {
+          "type": "array",
+          "items": {
+            "anyOf": [
+              { "$ref": "#/$defs/timeVariable" },
+              {
+                "allOf": [{ "$ref": "#/$defs/variableBody" }],
+                "required": ["part", "local"],
+                "properties": {
+                  "part": { "type": "string" },
+                  "local": { "type": "integer", "minimum": 0 }
+                },
+                "unevaluatedProperties": false
+              }
+            ]
+          }
+        },
+        "type_definitions": { "$ref": "#/$defs/typeDefinitions" },
+        "experiment": { "$ref": "#/$defs/experiment" },
+        "clocks": {
+          "type": "array",
+          "items": {
+            "allOf": [{ "$ref": "#/$defs/clockBody" }],
+            "required": ["part", "local"],
+            "properties": {
+              "part": { "type": "string" },
+              "local": { "type": "integer", "minimum": 0 }
+            },
+            "unevaluatedProperties": false
+          }
+        },
+        "events": { "const": {} },
+        "has_event_mode": { "type": "boolean" },
+        "can_get_and_set_state": { "type": "boolean" },
+        "capture_output": { "type": "boolean" }
+      }
+    },
+
+    "fmiVersion": { "enum": [2, 3] },
+
+    "moduleRef": {
+      "description": "\"package.module:NAME\"",
+      "type": "string",
+      "pattern": "^[A-Za-z_][\\w.]*:[\\w.]+$"
+    },
+
+    "partReference": {
+      "description": "[part name, value reference inside that part]",
+      "type": "array",
+      "prefixItems": [{ "type": "string" }, { "type": "integer", "minimum": 0 }],
+      "minItems": 2,
+      "maxItems": 2
+    },
+
+    "entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["module", "name", "kind", "create", "factory", "call", "step", "init_call", "terminate"],
+      "properties": {
+        "module": { "description": "Module imported from sys_path.", "type": "string" },
+        "name": { "description": "Function or class in that module.", "type": "string" },
+        "kind": { "description": "A factory counts as class.", "enum": ["function", "class"] },
+        "create": { "description": "Classmethod that builds the object, e.g. from_pretrained.", "type": ["string", "null"] },
+        "factory": { "description": "A function called once that returns the object stepped by call.", "type": "boolean" },
+        "call": { "description": "Method run on each step; null for functions and when step is false.", "type": ["string", "null"] },
+        "step": { "description": "false: doStep runs no model code, only clocks do.", "type": "boolean" },
+        "init_call": { "description": "Call the model once when leaving initialization mode.", "type": "boolean" },
+        "terminate": { "description": "Method called at fmiTerminate.", "type": ["string", "null"] }
+      }
+    },
+
+    "constant": {
+      "description": "A JSON literal, or {python}, {ref} or {call}, resolved when the FMU initializes.",
+      "oneOf": [
+        { "not": { "type": "object" } },
+        { "type": "object", "additionalProperties": false, "required": ["python"], "properties": { "python": { "type": "string" } } },
+        { "type": "object", "additionalProperties": false, "required": ["ref"], "properties": { "ref": { "type": "string" } } },
+        { "type": "object", "additionalProperties": false, "required": ["call"], "properties": { "call": { "type": "string" } } }
+      ]
+    },
+
+    "constants": {
+      "description": "Argument name (or \"0\", \"1\", ... for positions) -> constant.",
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/constant" }
+    },
+
+    "setupCall": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["call", "args", "kwargs"],
+      "properties": {
+        "call": { "description": "\"module:function\", or a method name for class models.", "type": "string" },
+        "args": { "type": "array", "items": { "$ref": "#/$defs/constant" } },
+        "kwargs": { "type": "object", "additionalProperties": { "$ref": "#/$defs/constant" } }
+      }
+    },
+
+    "experiment": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "start_time": { "type": "number" },
+        "stop_time": { "type": "number" },
+        "step_size": { "type": "number" },
+        "tolerance": { "type": "number" },
+        "fixed_step": { "type": "boolean" }
+      },
+      "dependentRequired": { "fixed_step": ["step_size"] }
+    },
+
+    "typeDefinitions": {
+      "description": "Enumeration type name -> its items (FMI values 1, 2, ...) and the Python enum, if any.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["items", "enum"],
+        "properties": {
+          "items": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+          "enum": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/moduleRef" }] }
+        }
+      }
+    },
+
+    "toBinding": {
+      "description": "Where a value goes in the model.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "name"],
+      "properties": {
+        "kind": { "enum": ["init", "arg", "pos", "initpos", "attr", "call"] },
+        "name": { "type": "string", "minLength": 1 }
+      }
+    },
+
+    "fromBinding": {
+      "description": "Where a value is read from. return with name null: the whole return value.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "name"],
+      "properties": {
+        "kind": { "enum": ["return", "attr"] },
+        "name": { "type": ["string", "null"] }
+      },
+      "if": { "properties": { "kind": { "const": "attr" } } },
+      "then": { "properties": { "name": { "type": "string", "minLength": 1 } } }
+    },
+
+    "value": { "type": ["number", "integer", "boolean", "string"] },
+
+    "variable": {
+      "anyOf": [
+        { "$ref": "#/$defs/timeVariable" },
+        { "allOf": [{ "$ref": "#/$defs/variableBody" }], "unevaluatedProperties": false }
+      ]
+    },
+
+    "timeVariable": {
+      "description": "FMI 3 only: the independent variable, always last.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "causality", "variability", "type", "description", "valueReference"],
+      "properties": {
+        "name": { "const": "time" },
+        "causality": { "const": "independent" },
+        "variability": { "const": "continuous" },
+        "type": { "const": "Float64" },
+        "description": { "type": "string" },
+        "valueReference": { "type": "integer", "minimum": 0 }
+      }
+    },
+
+    "variableBody": {
+      "type": "object",
+      "required": ["name", "causality", "type", "variability", "valueReference"],
+      "properties": {
+        "name": { "type": "string" },
+        "causality": {
+          "enum": ["structuralParameter", "parameter", "calculatedParameter", "input", "output", "local"]
+        },
+        "type": {
+          "enum": [
+            "Real", "Integer",
+            "Float32", "Float64", "Int8", "UInt8", "Int16", "UInt16", "Int32", "UInt32", "Int64", "UInt64",
+            "Boolean", "String", "Binary", "Enumeration"
+          ]
+        },
+        "variability": { "enum": ["constant", "fixed", "tunable", "discrete", "continuous"] },
+        "valueReference": {
+          "description": "FMI 2: the first of one reference per array element. FMI 3: one per variable.",
+          "type": "integer", "minimum": 0
+        },
+        "start": {
+          "oneOf": [
+            { "$ref": "#/$defs/value" },
+            { "type": "array", "items": { "$ref": "#/$defs/value" } }
+          ]
+        },
+        "initial": { "enum": ["exact", "approx", "calculated"] },
+        "unit": { "type": "string" },
+        "description": { "type": "string" },
+        "quantity": { "type": "string" },
+        "min": { "type": "number" },
+        "max": { "type": "number" },
+        "nominal": { "type": "number" },
+        "extra": {
+          "description": "More XML attributes of the variable.",
+          "type": "object", "additionalProperties": { "type": "string" }
+        },
+        "dimensions": {
+          "description": "Sizes, or (FMI 3) names of structural parameters.",
+          "type": "array", "minItems": 1,
+          "items": { "oneOf": [{ "type": "integer", "minimum": 1 }, { "type": "string" }] }
+        },
+        "numpy": { "const": true },
+        "convert": { "description": "\"module:function\" or \"pint\".", "type": "string" },
+        "clocks": {
+          "description": "FMI 3: the one clock this variable belongs to.",
+          "type": "array", "minItems": 1, "maxItems": 1, "items": { "type": "string" }
+        },
+        "declared_type": { "description": "Key of type_definitions (Enumeration only).", "type": "string" },
+        "depends_on": { "type": "array", "items": { "type": "string" } },
+        "attr": { "description": "Attribute updated when a tunable parameter changes.", "type": "string" },
+        "to": { "$ref": "#/$defs/toBinding" },
+        "from": { "$ref": "#/$defs/fromBinding" },
+        "next": { "$ref": "#/$defs/fromBinding" },
+        "der": { "$ref": "#/$defs/fromBinding" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "type": { "const": "Enumeration" } } },
+          "then": { "required": ["declared_type"] }
+        },
+        {
+          "description": "Values passed to the model have to; results have from.",
+          "if": { "properties": { "causality": { "enum": ["structuralParameter", "parameter", "input"] } } },
+          "then": { "required": ["to"], "not": { "required": ["from"] } }
+        },
+        {
+          "if": { "properties": { "causality": { "enum": ["output", "calculatedParameter"] } } },
+          "then": { "required": ["from"], "not": { "required": ["to"] } }
+        },
+        {
+          "description": "A state is a local with to and exactly one of next / der.",
+          "if": { "properties": { "causality": { "const": "local" } }, "required": ["to"] },
+          "then": { "oneOf": [{ "required": ["next"] }, { "required": ["der"] }] }
+        }
+      ]
+    },
+
+    "clock": {
+      "allOf": [{ "$ref": "#/$defs/clockBody" }],
+      "unevaluatedProperties": false
+    },
+
+    "clockBody": {
+      "description": "FMI 3 only. Value references follow the variables'.",
+      "type": "object",
+      "required": ["name", "causality", "interval_variability", "valueReference"],
+      "properties": {
+        "name": { "type": "string" },
+        "causality": { "enum": ["input", "output"] },
+        "interval_variability": { "enum": ["constant", "fixed", "tunable", "changing", "countdown", "triggered"] },
+        "valueReference": { "type": "integer", "minimum": 0 },
+        "description": { "type": "string" },
+        "interval": { "type": "number" },
+        "shift": { "type": "number" },
+        "interval_from": { "$ref": "#/$defs/fromBinding" },
+        "call": { "description": "Function or method run when the clock ticks.", "type": "string" },
+        "time_args": { "type": "array", "items": { "type": "string" } },
+        "from": { "description": "Output clocks: a value that is true when the clock ticks.", "$ref": "#/$defs/fromBinding" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "causality": { "const": "output" } } },
+          "then": {
+            "required": ["from"],
+            "properties": { "interval_variability": { "const": "triggered" } }
+          }
+        },
+        {
+          "if": { "properties": { "interval_variability": { "enum": ["constant", "fixed", "tunable"] } } },
+          "then": { "required": ["interval", "shift"] }
+        },
+        {
+          "if": { "properties": { "interval_variability": { "enum": ["changing", "countdown"] } } },
+          "then": { "required": ["interval_from"] }
+        },
+        {
+          "if": { "required": ["call"] },
+          "then": { "required": ["time_args"] }
+        }
+      ]
+    }
+  }
+}

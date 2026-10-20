@@ -7,7 +7,7 @@ from fmpy import read_model_description, simulate_fmu
 from fmpy.fmi2 import FMU2Slave
 from fmpy.validation import validate_fmu
 
-from fmugen.__main__ import build
+from fmugen.builder import build
 
 EXAMPLE_NAMES = ["psychrometry", "simple_pid", "rc_building"]
 
@@ -103,7 +103,7 @@ def test_an_unchanged_model_rebuilds_to_the_same_guid(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize("output_format", ["fmu", "folder"])
 def test_a_failed_build_keeps_the_previous_output(tmp_path, monkeypatch, output_format):
-    import fmugen.__main__ as main
+    import fmugen.builder as main
     out = tmp_path / ("pid.fmu" if output_format == "fmu" else "pid")
     build(EXAMPLES / "simple_pid", out, output_format=output_format)
     before = sorted(p.name for p in tmp_path.iterdir())

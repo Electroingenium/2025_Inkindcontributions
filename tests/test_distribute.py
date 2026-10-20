@@ -7,7 +7,7 @@ import pytest
 from conftest import EXAMPLES
 from fmpy import simulate_fmu
 
-from fmugen.__main__ import build
+from fmugen.builder import build
 from fmugen.config import InterfaceError
 
 

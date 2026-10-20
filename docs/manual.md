@@ -107,7 +107,7 @@ fmugen init MODEL [-o OUTPUT] [--call METHOD] [--fmi {2,3}]
 | `--setup CALL` | none | A [setup call](config.md#model), written to `[model] setup`; with `--probe` it is also run before the probe. Repeatable. E.g. `"psychrolib:SetUnitSystem(psychrolib.SI)"`, `reset`. |
 | `--kind function` | none | Treat a class whose constructor does the work as a function called on every step (writes `[model] kind`). |
 | `--create CLASSMETHOD` | none | Classes built by a factory: the classmethod that creates the object, e.g. `from_pretrained`. Its arguments become parameters (writes `[model] create`). |
-| `--probe` | off | Also **call the model once**: run the setup calls, build the object, call the step with the start values (retrying array inputs as numpy arrays, then tensors, and number inputs as one-element numpy arrays, `convert = "numpy:atleast_1d"`, for libraries that take only arrays), and try to pickle the object. Finds what the code doesn't show: array sizes, exact types, results built at runtime, unannotated properties, and `save_state`. Results the code shows but the probe didn't reach are added too. Without `--probe`, the model is never called. |
+| `--probe` | off | Also **call the model once**: run the setup calls, build the object, call the step with the start values (retrying array inputs as numpy arrays, then tensors, and number inputs as one-element numpy arrays, `convert = "numpy:atleast_1d"`, for libraries that take only arrays), and try to pickle the object. Time arguments from `[time]` get `1.0` for `step_size` and `end_time`, `0.0` otherwise. Finds what the code doesn't show: array sizes, exact types, results built at runtime, unannotated properties, and `save_state`. Results the code shows but the probe didn't reach are added too. Without `--probe`, the model is never called. |
 | `--convert NAME=module:function` | none | How an argument is passed to the model, e.g. `x=torch:tensor`, `x=numpy` for a numpy array, or `x=pint` for a pint quantity (needs a `unit` on the variable); writes `convert` / `numpy`. Repeatable. Not needed when the argument is annotated (`torch.Tensor`, `np.ndarray`). |
 | `--force` | off | Overwrite an existing config. |
 | `--probe-timeout SECONDS` | no limit | With `--probe`: stop (exit code 2) if the probe hasn't finished by then, e.g. a model waiting for a device. The model's code can't be interrupted, so `fmugen` exits. |
@@ -227,6 +227,15 @@ In `fmugen.toml` the same forms appear as `[model] entry`, with file paths relat
 | `0` | Success. |
 | `1` | An unexpected error, e.g. the model's own code raising while it is imported: printed as `fmugen: error: <type>: <message>`. Add `--debug` for the traceback. |
 | `2` | A usage or config error, printed as `fmugen: error: …`: an unknown key, a bad value, an import failure, an `init` probe failure or timeout, or an existing config without `--force`. |
+
+### Environment variables
+
+| Variable | Used by | Effect |
+|---|---|---|
+| `FMUGEN_UNIFMU` | `build` | Path of the UniFMU executable, instead of `unifmu` on `PATH` |
+| `SOURCE_DATE_EPOCH` | `build` | Build time (Unix seconds) written into `modelDescription.xml` and the zip, for [reproducible builds](packaging.md#reproducible-builds) |
+| `FMUGEN_ENV_DIR` | `--vendor` FMUs | Where the FMU's cached environments go ([details](packaging.md#--vendor)) |
+| `XDG_CACHE_HOME` | `--vendor` FMUs, Linux | Base of the default cache folder |
 
 Each error names the section and key, e.g. `[inputs] x: unknown key(s) ['strat']`. See [Troubleshooting](#7-troubleshooting) and the [validation rules](config.md#validation-rules).
 

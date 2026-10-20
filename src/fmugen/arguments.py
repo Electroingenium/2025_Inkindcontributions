@@ -1,0 +1,1024 @@
+"""Argument processing and type/value utilities for interface inference."""
+import ast
+import dataclasses
+import datetime
+import enum
+import inspect
+import json
+import keyword
+import math
+import re
+import typing
+
+from fmugen import static
+from fmugen.config import InterfaceError
+from fmugen.toml_output import _key, _value
+
+#: Argument names (lower case, without ``_``) taken as ``[time]`` arguments, and their source.
+TIME_NAMES = {"t": "time", "time": "time", "currenttime": "time", "tcurrent": "time", "tnow": "time",
+              "dt": "step_size", "h": "step_size", "stepsize": "step_size", "timestep": "step_size",
+              "until": "end_time", "endtime": "end_time", "tend": "end_time", "tnext": "end_time"}
+
+
+def _time_source(name):
+    """The ``[time]`` source for an argument named like a time (currentTime, step_size, until), or None.
+
+    :param name: the argument name.
+    :type name: str
+    :rtype: str or None
+    """
+    return TIME_NAMES.get(name.lower().replace("_", ""))
+
+#: Python types that are FMI scalar values.
+SCALARS = (bool, int, float, str)
+
+def _dotted_names(text):
+    """Dotted names (numpy.linspace) in a Python expression, or ``[]`` if it doesn't parse.
+
+    Parsed with :func:`ast.parse` only, never evaluated; used to find the packages a
+    ``call:`` start needs.
+
+    :param text: the expression.
+    :type text: str
+    :rtype: list[str]
+    """
+    try:
+        tree = ast.parse(text.rstrip().removesuffix(")") or "0", mode="eval")
+    except SyntaxError:
+        return []
+    return [ast.unparse(n) for n in ast.walk(tree) if isinstance(n, ast.Name)
+            or isinstance(n, ast.Attribute) and isinstance(n.value, (ast.Name, ast.Attribute))]
+
+DATETIME_BY_NAME = ("init", "date-time by name")   # comments key (not rendered): [time] args only named like one
+POSITIONAL_STARTS = ("init", "positional starts")   # comments key (not rendered): {--start name: *args position}
+START_ERRORS = ("init", "start errors")   # comments key (not rendered): {--start name: why it can't be used}
+NO_SIGNATURE = ("init", "no signature")   # comments key (not rendered): callables whose arguments can't be read
+
+
+def _start_error(comments, name, message):
+    """Record why a ``--start`` value can't be used (reported by init).
+
+    :param comments: ``(section, key) -> text`` for :func:`render_toml`, plus internal ``("init", ...)`` keys.
+    :type comments: dict
+    :param name: the ``--start`` name.
+    :type name: str
+    :param message: the reason.
+    :type message: str
+    """
+    comments.setdefault(START_ERRORS, {})[name] = message
+
+
+GUESSED = ("init", "guessed")   # comments key (not rendered): outputs typed Real only by default
+
+
+def _guessed(comments, name):
+    """Record an output whose type the code doesn't show: written as Real, which may be wrong.
+
+    :param comments: ``(section, key) -> text`` for :func:`render_toml`, plus internal ``("init", ...)`` keys.
+    :type comments: dict
+    :param name: the output.
+    :type name: str
+    """
+    comments.setdefault(GUESSED, []).append(name)
+
+
+def guessed_outputs(data, comments):
+    """Outputs still in the config whose type is a guess (see :func:`_guessed`).
+
+    :param data: the config being inferred; updated in place.
+    :type data: dict
+    :param comments: ``(section, key) -> text`` for :func:`render_toml`, plus internal ``("init", ...)`` keys.
+    :type comments: dict
+    :rtype: list[str]
+    """
+    return [n for n in comments.get(GUESSED, []) if n in data.get("outputs", {})
+            and not {"type", "dimensions", "enum"} & set(data["outputs"][n])]
+
+
+UNFIT = ("init", "unfit")   # comments key (not rendered): {name: why init left it out}
+PROBED = ("init", "probed")   # comments key (not rendered): the probe's step call worked
+
+
+def _unfit(comments, section, name, why, lines):
+    """Write an output (or local) the probe showed can't work as it is commented out, with why.
+
+    :param comments: ``(section, key) -> text`` for :func:`render_toml`, plus internal ``("init", ...)`` keys.
+    :type comments: dict
+    :param section: the config section.
+    :type section: str
+    :param name: the variable.
+    :type name: str
+    :param why: the reason, shown above it.
+    :type why: str
+    :param lines: the commented-out TOML lines.
+    :type lines: list[str]
+    """
+    comments[(section, f"#{name}#why")] = f"{name}: {why}"
+    for i, line in enumerate(lines):
+        comments[(section, f"#{name}#{i}")] = line
+    comments.setdefault(UNFIT, {})[name] = why
+
+
+def unfit_outputs(comments):
+    """``{name: why}`` for outputs init left commented out because the probe showed they'd fail.
+
+    :param comments: ``(section, key) -> text`` for :func:`render_toml`, plus internal ``("init", ...)`` keys.
+    :type comments: dict
+    :rtype: dict
+    """
+    return dict(comments.get(UNFIT, {}))
+
+
+#: Comments on a variable that record an assumption the user should check: (text in the comment,
+#: what `fmugen init` prints after the variable names). Read from the final comments, so a guess the
+#: probe later confirmed or replaced isn't reported.
+ASSUMPTIONS = (
+    ("no default in the code", "no default in the code: the start value is made up, check it"),
+    ("no default: check the start value", "no default in the code: the start value is made up, check it"),
+    ("Integer because the default is an int", "typed Integer because the default is an int; "
+                                              "write a float start if it is Real"),
+    ("an int in the probe; Real", 'an int in the probe, typed Real; set type = "Integer" if it is a count'),
+    ("taken as a date-time from its name", "taken as a date-time from the name only: check [time], "
+                                           "or make it an input"),
+    ("check the epoch", "a date-time: the epoch is set to today, check it"),
+    ("epoch in UTC", "a date-time epoch taken as UTC (the probe failed without a time zone)"),
+    ("passed by position to *args", "passed by position to *args in the order of --start: check the order"),
+    ("passed through **kwargs", "passed through **kwargs: check the model uses them"),
+    ("can also return None", "the code can also return None, which fails the step: check it, or run init --probe"),
+    ("so a fixed value; to pass the simulation time", "named like a time but given by --start, so a fixed "
+                                                     "value: add [time] NAME = ... to pass the simulation time"),
+    ("the probe failed with lists", "passed as arrays of another kind, since the probe failed with lists"),
+    ("fed back from", "taken as states from their names (x_prev fed back from x / x_next)"),
+    ("set its dimensions and uncomment", "arrays left commented out: set their dimensions and uncomment"),
+    ("(type unknown): uncomment", "properties of unknown type left commented out: uncomment the numbers"),
+    ("need --fmi 3", "left out: bytes and resizable arrays need --fmi 3"),
+)
+#: Section notes (and [model] comments) that are warnings as they are.
+NOTE_WARNINGS = ("probe call failed", "probe construction failed", "outputs could not be read",
+                 "cannot inspect the signature", "is known only by running it", "skipped ",
+                 "can't be pickled", "both take *args", "results that can be None")
+
+
+def assumptions(comments):
+    """Warnings for what init assumed and only wrote as comments in the config (see :data:`ASSUMPTIONS`).
+
+    Variables with the same assumption are grouped into one line.
+
+    :param comments: ``(section, key) -> text`` for :func:`render_toml`, plus internal ``("init", ...)`` keys.
+    :type comments: dict
+    :return: the warning lines printed by ``fmugen init``.
+    :rtype: list[str]
+    """
+    grouped, notes = {}, []
+    for key, text in comments.items():
+        if key[0] == "init" or not isinstance(text, str):
+            continue
+        section, name = key
+        if name is None or (section == "model" and name == "save_state"):
+            if any(text.startswith(n) or n in text for n in NOTE_WARNINGS):
+                notes.append(f"[{section}] {text}")
+            continue
+        name = str(name)
+        if name == "#requirements":
+            notes.append(f"[model] {text}")
+            continue
+        if name.count("#") > 1 or name == "#save_state":   # unfit outputs: reported on their own
+            continue
+        for fragment, warning in ASSUMPTIONS:
+            if fragment in text:
+                grouped.setdefault(warning, []).append(name.lstrip("#"))
+                break
+    warnings = notes
+    for warning, names in grouped.items():
+        names = list(dict.fromkeys(names))
+        shown = ", ".join(names[:8]) + (f" and {len(names) - 8} more" if len(names) > 8 else "")
+        warnings.append(f"{shown}: {warning}")
+    return warnings
+
+
+def _misfit(value):
+    """Why a value seen in the probe can't be read into an FMI variable, or None.
+
+    Covers None (type unknown) and complex numbers (FMI has none).
+
+    :param value: the probe value.
+    :rtype: str or None
+    """
+    value = _scalar_of(value)
+    if value is None:
+        return "None in the probe, so its type is unknown; a None at run time fails the step"
+    if isinstance(value, complex) or "complex" in str(getattr(value, "dtype", "")):
+        return "complex in the probe, and FMI has no complex type: uncomment its real and imaginary parts"
+    return None
+
+
+def _unfit_value(comments, section, name, value, source, arrays=True):
+    """Comment out ``name`` if its probe value is None or complex.
+
+    A complex value is offered as two outputs, its real and imaginary parts.
+
+    :param comments: ``(section, key) -> text`` for :func:`render_toml`, plus internal ``("init", ...)`` keys.
+    :type comments: dict
+    :param section: the config section.
+    :type section: str
+    :param name: the variable.
+    :type name: str
+    :param value: the probe value.
+    :param source: where it is read from: ``"return"``, ``"return:key"`` or ``"attr:name"``.
+    :type source: str
+    :param arrays: whether arrays and bytes may be FMU variables (FMI 3).
+    :type arrays: bool
+    :return: True if it did.
+    :rtype: bool
+    """
+    why = _misfit(value)
+    if why is None:
+        return False
+    if "complex" in why:
+        info = _array_info(value.real) if getattr(value, "ndim", 0) else None
+        dims = f", dimensions = {info['dimensions']}" if info else ""
+        sep = "." if ":" in source else ":"
+        lines = [f'{_key(f"{name}_{part}")} = {{ from = "{source}{sep}{part}"{dims} }}' for part in ("real", "imag")]
+        if dims and not arrays:
+            why += " (an array: needs init --fmi 3)"
+    else:
+        lines = [f'{_key(name)} = {{ from = "{source}", type = ... }}']
+    _unfit(comments, section, name, why, lines)
+    return True
+
+
+def _apply_converts(data, converts):
+    """Apply ``--convert NAME=module:function`` (or ``NAME=numpy``): how an argument is passed to the model.
+
+    :param data: the config being inferred; updated in place.
+    :type data: dict
+    :param converts: ``{NAME: converter}``, or None.
+    :type converts: dict or None
+    """
+    for name, converter in (converts or {}).items():
+        for section in ("parameters", "inputs", "states"):
+            info = data.get(section, {}).get(name)
+            if info is None:
+                continue
+            info.pop("numpy", None), info.pop("convert", None)
+            if converter == "numpy":
+                info["numpy"] = True
+            else:
+                info["convert"] = converter
+
+
+def _assign_starts(init, method, starts):
+    """Split ``--start`` values between constructor and step method arguments.
+
+    A name goes to the argument that has no default (it needs a value); on a tie, to the
+    step method. Names neither declares go to whichever accepts ``**kwargs`` (method first).
+    For a name both declare, ``<method>_NAME`` (the variable name init gives the method's one)
+    goes to the method, and then NAME to the constructor: x0 and calculate_optimal_actuation_x0.
+
+    :param init: the constructor (or factory), or None.
+    :type init: callable or None
+    :param method: the step method, or None.
+    :type method: callable or None
+    :param starts: the ``--start`` values.
+    :type starts: dict
+    :return: ``(constructor starts, method starts)``; names nobody takes are left out.
+    :rtype: tuple[dict, dict]
+    """
+    def params(fn):
+        """The parameters of ``fn`` from :func:`inspect.signature`, or ``{}`` without one.
+
+        :param fn: a callable, or None.
+        :rtype: collections.abc.Mapping
+        """
+        try:
+            return inspect.signature(fn).parameters if fn is not None else {}
+        except (TypeError, ValueError):
+            return {}
+
+    init_p, call_p = params(init), params(method)
+    init_starts, call_starts = {}, {}
+    # the method's copy of a shared name, given by the name _rename_duplicates gives its variable
+    prefix = f"{getattr(method, '__name__', 'call').strip('_')}_"
+    for name, value in list(starts.items()):
+        shared = name[len(prefix):] if name.startswith(prefix) and name not in init_p and name not in call_p else None
+        if shared and shared.partition(".")[0] in init_p and shared.partition(".")[0] in call_p:
+            call_starts[shared] = value
+    for name, value in starts.items():
+        base = name.partition(".")[0]   # ARG.FIELD goes where ARG goes
+        in_init, in_call = init_p.get(base), call_p.get(base)
+        if name.startswith(prefix) and name[len(prefix):] in call_starts and name not in init_p and name not in call_p:
+            continue   # placed above
+        if in_init and in_call and name in call_starts:
+            target = init_starts   # the method's copy was given by its own name
+        elif in_init and in_call:
+            target = init_starts if (in_init.default is in_init.empty and in_call.default is not in_call.empty) \
+                else call_starts
+        elif in_init or in_call:
+            target = init_starts if in_init else call_starts
+        elif any(p.kind is p.VAR_KEYWORD for p in call_p.values()):
+            target = call_starts
+        elif any(p.kind in (p.VAR_KEYWORD, p.VAR_POSITIONAL) for p in init_p.values()):
+            target = init_starts
+        else:
+            continue  # reported as unused
+        target[name] = value
+    return init_starts, call_starts
+
+
+def _only_varargs(fn, skip_self=True):
+    """Whether ``fn`` declares no named arguments, only ``*args`` (and maybe ``**kwargs``).
+
+    :param fn: the callable.
+    :param skip_self: ignore the first parameter (an unbound method's self).
+    :type skip_self: bool
+    :rtype: bool
+    """
+    try:
+        params = list(inspect.signature(fn).parameters.values())[1 if skip_self else 0:]
+    except (TypeError, ValueError):
+        return False
+    return any(p.kind is p.VAR_POSITIONAL for p in params) \
+        and all(p.kind in (p.VAR_POSITIONAL, p.VAR_KEYWORD) for p in params)
+
+
+# ---------------- shared ----------------
+
+def _arguments(fn, section, data, comments, skip_self=False, allow_time=True, constants_key="constants",
+               arrays=False, starts=None, positional=True):
+    """Sort the arguments of ``fn`` into variables of ``section`` and time arguments.
+
+    Reads the signature with :func:`inspect.signature`. Each parameter becomes, in order of
+    precedence: a ``[time]`` argument (named like a time, or a date-time), a call constant
+    (``--start NAME=call:...``), item or field variables (tuple/dict starts, dataclass-like
+    objects), or a variable typed from its default, ``--start`` value or annotation.
+    Positional-only parameters get ``to = "pos:N"``. Arguments whose default is not an FMI value
+    (None, tuples, objects) keep their code default; they are listed as commented-out constants
+    so the user can override them. ``--start`` values for ``*args`` / ``**kwargs`` become
+    positional or keyword variables.
+
+    :param fn: the function, constructor or step method.
+    :param section: the config section to fill (``parameters`` or ``inputs``).
+    :type section: str
+    :param data: the config being inferred; updated in place.
+    :type data: dict
+    :param comments: ``(section, key) -> text`` for :func:`render_toml`, plus internal ``("init", ...)`` keys.
+    :type comments: dict
+    :param skip_self: drop the first parameter (self).
+    :type skip_self: bool
+    :param allow_time: whether arguments may become ``[time]`` arguments (not for constructors).
+    :type allow_time: bool
+    :param constants_key: ``"constants"`` or ``"call_constants"``.
+    :type constants_key: str
+    :param arrays: whether arrays and bytes may be FMU variables (FMI 3).
+    :type arrays: bool
+    :param starts: ``--start`` values for these arguments.
+    :type starts: dict or None
+    :param positional: whether positional-only parameters are included.
+    :type positional: bool
+    :raises InterfaceError: an array ``--start`` for FMI 2, or an unusable value for ``*args``.
+    """
+    variables = data.setdefault(section, {})
+    time_args = data.get("time", {})
+    starts = starts or {}
+    try:
+        params = list(inspect.signature(fn).parameters.values())
+    except (TypeError, ValueError):  # e.g. some C extensions
+        comments.setdefault(NO_SIGNATURE, []).append(getattr(fn, "__qualname__", repr(fn)))
+        comments[(section, None)] = f"cannot inspect the signature of {getattr(fn, '__qualname__', fn)}; " \
+                                    "add the variables by hand (to = \"pos:N\" for positional arguments)"
+        params = []
+    if skip_self and params:
+        params = params[1:]
+    params = [_unwrap_descriptor(p) for p in params]
+    position = 0
+    for p in params:
+        if p.kind in (p.VAR_POSITIONAL, p.VAR_KEYWORD):
+            continue
+        if p.kind is p.POSITIONAL_ONLY and not positional:
+            continue
+        if allow_time and _time_source(p.name) and p.name not in starts:
+            time_args[p.name] = _time_source(p.name)
+            continue
+        if allow_time and _time_source(p.name) and isinstance(starts.get(p.name), (int, float)):
+            comments[(section, p.name)] = (f"from --start, so a fixed value; to pass the simulation time instead, "
+                                           f"remove it and add [time] {p.name} = \"{_time_source(p.name)}\"")
+        how = _is_datetime(fn, p) if allow_time and p.name not in starts else None
+        if how == "name":
+            comments.setdefault(DATETIME_BY_NAME, []).append(p.name)
+        if how:
+            today = datetime.datetime.now(datetime.UTC).date().isoformat()
+            time_args[p.name] = {"source": "end_time", "epoch": f"{today}T00:00:00"}   # naive: some models need it
+            comments[("time", p.name)] = (
+                "a date-time argument: the epoch plus the simulation time; check the epoch" if how == "annotation"
+                else f"taken as a date-time from its name {p.name!r} (not annotated): check it, or replace this "
+                     "with an input; the epoch plus the simulation time")
+            continue
+        if isinstance(starts.get(p.name), dict) and "call" in starts[p.name]:
+            data["model"].setdefault(constants_key, {})[p.name] = dict(starts[p.name])
+            continue
+        if p.name in starts and _split_items(p, starts[p.name], variables, section, comments, arrays):
+            continue
+        if p.name not in starts and _split_fields(fn, p, variables, section, comments, starts, arrays):
+            continue
+        for name in starts:
+            if name.startswith(f"{p.name}."):
+                _start_error(comments, name, f"cannot tell the class of {p.name} (no default and no dataclass, "
+                                             "pydantic, attrs or namedtuple annotation) to build it from fields; "
+                                             f"give the whole argument instead, e.g. --start={p.name}=call:module:Class(...)")
+        if p.name in starts and not arrays and isinstance(starts[p.name], (list, tuple, bytes)):
+            raise InterfaceError(f"--start {p.name}: arrays and bytes need --fmi 3 (FMI 2 has only scalar variables)")
+        has_default = p.default is not p.empty or p.name in starts
+        default = starts.get(p.name, None if p.default is p.empty else p.default)
+        before = len(variables)
+        if not has_default or isinstance(default, SCALARS):
+            info = _type_info(default, p.annotation)
+            if p.name in starts:
+                comments.setdefault((section, p.name), "start from --start")
+            elif not has_default:
+                comments[(section, p.name)] = "no default in the code: check the start value"
+            elif type(default) is int and static.unwrap_optional(p.annotation) is not int:
+                comments[(section, p.name)] = "Integer because the default is an int; write a float start for Real"
+            variables[p.name] = info
+        elif isinstance(default, enum.Enum):
+            variables[p.name] = {
+                "enum": f"{type(default).__module__}:{type(default).__qualname__}",
+                "start": default.name,
+            }
+        elif arrays and isinstance(default, bytes):
+            variables[p.name] = {"type": "Binary", "start": default.hex()}
+        elif arrays and _array_info(default):
+            variables[p.name] = _array_info(default, with_start=True)
+        elif p.name in starts and _constant(default):   # --start with a value that isn't an FMI one
+            data["model"].setdefault(constants_key, {})[p.name] = _constant(default)
+        else:
+            comments[("model", f"{constants_key}.{p.name}")] = _constant(default)
+        if len(variables) > before and "dimensions" in variables[p.name]:
+            converter = _converter(p.annotation)
+            if converter == "numpy":
+                variables[p.name]["numpy"] = True
+            elif converter:
+                variables[p.name]["convert"] = converter
+                comments.setdefault((section, p.name), f"passed as {converter.replace(':', '.')}(...)")
+        if p.kind is p.POSITIONAL_ONLY and len(variables) > before:
+            variables[p.name]["to"] = f"pos:{position}"
+            position += 1
+    names = {p.name for p in params}
+    extra = [name for name in starts
+             if name not in names and "." not in name   # ARG.FIELD: a field of an object argument, not a keyword
+             and name not in time_args]
+    only_varargs = any(p.kind is p.VAR_POSITIONAL for p in params) \
+        and all(p.kind in (p.VAR_POSITIONAL, p.VAR_KEYWORD) for p in params)
+    # by position: for a constructor, for computed constants, and when there's no **kwargs to take them
+    by_position = only_varargs and (section == "parameters" or not any(p.kind is p.VAR_KEYWORD for p in params)
+                                    or any(isinstance(starts[n], dict) and "call" in starts[n] for n in extra))
+    for name in extra:
+        computed = isinstance(starts[name], dict) and "call" in starts[name]   # call:...: a constant
+        if by_position:
+            # A callable that only declares (*args, **kwargs), e.g. StateSpace(A, B, C, D):
+            # the --start values go by position, in the order given. Constants are named "0", "1", ...
+            if computed:
+                data["model"].setdefault(constants_key, {})[str(position)] = dict(starts[name])
+                comments[("model", f"{constants_key}.{position}")] = f"--start {name}, passed by position to *args"
+                comments.setdefault(POSITIONAL_STARTS, {})[name] = position
+            else:
+                variables[name] = _extra_info(name, starts[name], arrays)
+                variables[name]["to"] = f"pos:{position}"
+                comments[(section, name)] = "start from --start, passed by position to *args: check the order"
+            position += 1
+        elif any(p.kind is p.VAR_KEYWORD for p in params):  # **kwargs: --start values become keyword arguments
+            if computed:
+                data["model"].setdefault(constants_key, {})[name] = dict(starts[name])
+            else:
+                variables[name] = _extra_info(name, starts[name], arrays)
+                comments[(section, name)] = "start from --start (passed through **kwargs)"
+    if time_args and allow_time:
+        data["time"] = time_args
+    if not variables:
+        data.pop(section)
+
+
+def _unwrap_descriptor(p):
+    """Replace a descriptor default by the value it stands for.
+
+    A default that is a descriptor (astropy's ``Parameter(default=3.04, ...)`` in FlatLambdaCDM's
+    signature) stands for the class's own handling of the argument: its ``default`` is the value.
+
+    :param p: a signature parameter.
+    :type p: inspect.Parameter
+    :rtype: inspect.Parameter
+    """
+    default = p.default
+    if p.default is p.empty or callable(default) \
+            or not hasattr(type(default), "__get__") or not hasattr(default, "default"):
+        return p
+    return p.replace(default=default.default)
+
+
+def _extra_info(name, value, arrays):
+    """The variable for a ``--start`` value that no declared argument takes (``*args``, ``**kwargs``).
+
+    :param name: the ``--start`` name.
+    :type name: str
+    :param value: its value.
+    :param arrays: whether arrays and bytes may be FMU variables (FMI 3).
+    :type arrays: bool
+    :rtype: dict
+    :raises InterfaceError: not an FMI value.
+    """
+    if isinstance(value, SCALARS):
+        return _type_info(value)
+    if arrays and _array_info(value):
+        return _array_info(value, with_start=True)
+    raise InterfaceError(f"--start {name}: {value!r} is not an FMI value")
+
+
+#: Annotation text -> how an array argument of that type is passed (``convert``, or ``numpy``).
+ARRAY_CONVERTERS = {"torch.Tensor": "torch:tensor", "ndarray": "numpy", "jax.Array": "jax.numpy:asarray",
+                    "tf.Tensor": "tensorflow:constant"}
+
+
+def _converter(annotation):
+    """How an array argument must be passed, from its annotation.
+
+    :param annotation: the parameter's annotation (or ``inspect.Parameter.empty``).
+    :return: ``"numpy"``, ``"module:function"``, or None.
+    :rtype: str or None
+    """
+    if annotation is inspect.Parameter.empty:
+        return None
+    text = annotation if isinstance(annotation, str) else repr(annotation)
+    return next((conv for name, conv in ARRAY_CONVERTERS.items() if name in text), None)
+
+
+def _split_items(p, value, variables, section, comments, arrays):
+    """Make one variable per item of a tuple (of arrays) or dict ``--start`` value.
+
+    Bound with ``to = "arg:NAME[i]"`` / ``"arg:NAME[key]"`` (``init:`` for parameters); the
+    runtime puts the argument back together (:func:`assemble_items`).
+
+    :param p: the parameter.
+    :type p: inspect.Parameter
+    :param value: its ``--start`` value.
+    :param variables: the section's variables; updated in place.
+    :type variables: dict
+    :param section: the config section (``parameters`` or ``inputs``).
+    :type section: str
+    :param comments: ``(section, key) -> text`` for :func:`render_toml`, plus internal ``("init", ...)`` keys.
+    :type comments: dict
+    :param arrays: whether arrays and bytes may be FMU variables (FMI 3).
+    :type arrays: bool
+    :return: whether it was split.
+    :rtype: bool
+    """
+    import typing
+    if isinstance(value, tuple) and len(value) > 1 and not (arrays and _array_info(value)):
+        keys = list(range(len(value)))
+        names = [f"{p.name}_{i}" for i in keys]
+        hints = typing.get_args(p.annotation) if p.annotation is not p.empty else ()
+    elif isinstance(value, dict) and value and all(isinstance(k, str) and k.isidentifier() for k in value):
+        keys = list(value)
+        names = keys
+        hints = ()
+    else:
+        return False
+    items = [value[k] for k in keys]
+    if not all(isinstance(item, SCALARS) or (arrays and _array_info(item)) for item in items):
+        return False
+    for i, (key, name, item) in enumerate(zip(keys, names, items)):
+        info = _array_info(item, with_start=True) if (arrays and _array_info(item)) else _type_info(item)
+        if "dimensions" in info:
+            from fmugen.templates.fmugen_runtime import flatten
+            flat = flatten(list(item))
+            if all(isinstance(x, int) and not isinstance(x, bool) for x in flat):   # e.g. atomic numbers, indices
+                info.update(type="Int32", start=flat)
+        info["to"] = f"{'init' if section == 'parameters' else 'arg'}:{p.name}[{key}]"
+        converter = _converter(hints[i]) if i < len(hints) else None
+        if converter == "numpy":
+            info["numpy"] = True
+        elif converter and "dimensions" in info:
+            info["convert"] = converter
+        variables[name] = info
+        comments[(section, name)] = f"item {key!r} of the argument {p.name}"
+    return True
+
+
+def _object_fields(cls):
+    """The fields of a dataclass, pydantic model, attrs class or namedtuple.
+
+    Field types come from :func:`typing.get_type_hints` (resolving string annotations);
+    default factories are called to get a default.
+
+    :param cls: the class.
+    :return: ``[(field, type hint, default or inspect.Parameter.empty)]``, else None.
+    :rtype: list[tuple] or None
+    """
+    if not isinstance(cls, type):
+        return None
+    try:
+        hints = typing.get_type_hints(cls)
+    except Exception:
+        hints = {}
+    empty = inspect.Parameter.empty
+    if dataclasses.is_dataclass(cls):
+        missing = dataclasses.MISSING
+        return [(f.name, hints.get(f.name), empty if f.default is missing and f.default_factory is missing
+                 else (f.default if f.default is not missing else f.default_factory()))
+                for f in dataclasses.fields(cls) if f.init]
+    if hasattr(cls, "model_fields") and isinstance(cls.model_fields, dict):   # pydantic 2
+        return [(name, f.annotation, empty if f.is_required() else f.get_default(call_default_factory=True))
+                for name, f in cls.model_fields.items()]
+    if hasattr(cls, "__attrs_attrs__"):
+        import attrs
+        return [(a.name, hints.get(a.name, a.type), empty if a.default is attrs.NOTHING
+                 else (a.default.factory() if isinstance(a.default, attrs.Factory) else a.default))
+                for a in cls.__attrs_attrs__ if a.init]
+    if issubclass(cls, tuple) and hasattr(cls, "_fields"):   # a namedtuple
+        defaults = getattr(cls, "_field_defaults", {})
+        return [(name, hints.get(name), defaults.get(name, empty)) for name in cls._fields]
+    return None
+
+
+def _split_fields(fn, p, variables, section, comments, starts, arrays):
+    """Make one variable per field of an object argument.
+
+    An argument that is a dataclass / pydantic / attrs object (by its default or its annotation)
+    becomes one variable per field, NAME_FIELD, bound with ``to = "arg:NAME.FIELD"``. Fields that
+    aren't FMI values keep the default's value; without a default, they must have their own
+    default.
+
+    :param fn: the function (for its type hints).
+    :param p: the parameter.
+    :type p: inspect.Parameter
+    :param variables: the section's variables; updated in place.
+    :type variables: dict
+    :param section: the config section (``parameters`` or ``inputs``).
+    :type section: str
+    :param comments: ``(section, key) -> text`` for :func:`render_toml`, plus internal ``("init", ...)`` keys.
+    :type comments: dict
+    :param starts: ``--start`` values (``NAME.FIELD`` ones give field starts).
+    :type starts: dict
+    :param arrays: whether arrays and bytes may be FMU variables (FMI 3).
+    :type arrays: bool
+    :return: whether it was split.
+    :rtype: bool
+    """
+    if p.default is None:
+        return False   # None means "not given" to the model: it stays a constant, as for any argument
+    default = None if p.default is p.empty else p.default
+    try:
+        cls = typing.get_type_hints(fn).get(p.name)
+    except Exception:
+        cls = p.annotation if isinstance(p.annotation, type) else None
+    cls = type(default) if default is not None else static.unwrap_optional(cls)
+    fields = _object_fields(cls)
+    if not fields:
+        return False
+    found = {}
+    for field, hint, field_default in fields:
+        value = getattr(default, field) if default is not None else starts.get(f"{p.name}.{field}", field_default)
+        if value is p.empty:   # a required field without a start: a variable if its annotation is a number
+            if static.unwrap_optional(hint) not in (float, int, bool, str):
+                return False   # can't be built from FMI values
+            value = None
+        elif not isinstance(value, SCALARS) and not (arrays and _array_info(value)):
+            continue   # None or not an FMI value: the default's value (or the field's default) is kept
+        info = _array_info(value, with_start=True) if value is not None and not isinstance(value, SCALARS)             else _type_info(value, static.unwrap_optional(hint))
+        if isinstance(info.get("start"), int) and not isinstance(info["start"], bool)                 and static.unwrap_optional(hint) is float:
+            info["start"] = float(info["start"])
+        info["to"] = f"{'init' if section == 'parameters' else 'arg'}:{p.name}.{field}"   # a constructor's
+        found[f"{p.name}_{field}"] = info
+        if value is None:
+            comments[(section, f"{p.name}_{field}")] = f"field {field!r} of {p.name} ({cls.__name__}); no default: check the start value"
+        else:
+            comments[(section, f"{p.name}_{field}")] = f"field {field!r} of {p.name} ({cls.__name__})"
+    if not found:
+        return False
+    names = {field for field, _, _ in fields}
+    for name in starts:
+        base, _, field = name.partition(".")
+        if base == p.name and field not in names:
+            _start_error(comments, name, f"{p.name} ({cls.__name__}) has no field {field!r}; "
+                                         f"its fields: {', '.join(sorted(names))}")
+    variables.update(found)
+    return True
+
+
+def _type_info(value, annotation=inspect.Parameter.empty):
+    """The ``start`` of a scalar variable from its default and annotation.
+
+    Without a default, the annotation's zero (float by default); an int default for a float
+    annotation becomes a float.
+
+    :param value: the default, or None.
+    :param annotation: the parameter's annotation.
+    :rtype: dict
+    """
+    annotation = static.unwrap_optional(annotation)
+    if value is None:
+        hint = {float: 0.0, int: 0, bool: False, str: ""}.get(annotation, 0.0)
+        return {"start": hint}
+    if isinstance(value, int) and not isinstance(value, bool) and annotation is float:
+        return {"start": float(value)}
+    if isinstance(value, SCALARS):
+        return {"start": value}
+    return {"start": float(value)}
+
+
+def _constant(value):
+    """How a non-FMI default would be written as a constant (for a commented-out example).
+
+    ``{python = repr}`` when :func:`ast.literal_eval` gives the value back, else
+    ``{ref = "module:qualname"}`` for a named object.
+
+    :param value: the default.
+    :rtype: dict or None
+    """
+    text = repr(value)
+    try:
+        if ast.literal_eval(text) == value:
+            return {"python": text}
+    except (ValueError, SyntaxError):
+        pass
+    module, qualname = getattr(value, "__module__", None), getattr(value, "__qualname__", None)
+    if module and qualname and "<" not in qualname:
+        return {"ref": f"{module}:{qualname}"}
+    return None
+
+#: Argument names taken as date-times when they aren't annotated.
+DATETIME_NAMES = ("when", "date", "datetime", "dateandtime", "date_time", "timestamp", "utc_time")
+
+
+def _is_datetime(fn, p):
+    """Whether an argument takes a date-time.
+
+    :param fn: the function (for its type hints).
+    :param p: the parameter.
+    :type p: inspect.Parameter
+    :return: ``"annotation"`` (datetime, Optional[datetime]), ``"name"`` (an unannotated argument
+        named like one, without a non-None default), or None.
+    :rtype: str or None
+    """
+    try:
+        hint = typing.get_type_hints(fn).get(p.name, p.annotation)
+    except Exception:
+        hint = p.annotation
+    hint = static.unwrap_optional(hint)
+    if isinstance(hint, type) and issubclass(hint, datetime.date):
+        return "annotation"
+    if isinstance(hint, str) and "datetime" in hint:
+        return "annotation"
+    if hint is not p.empty and hint is not None:
+        return None   # annotated as something else
+    if p.name.lower() in DATETIME_NAMES and (p.default is p.empty or p.default is None):
+        return "name"
+    return None
+
+
+def _typed(info, value, arrays=False):
+    """Add the type (and unit, dimensions) of an output seen in the probe.
+
+    Ints become Real (a probe often just returns 0); ``numpy`` / ``convert`` are dropped, since
+    they only matter for values passed into the model.
+
+    :param info: the variable's table; updated and returned.
+    :type info: dict
+    :param value: the probe value.
+    :param arrays: whether arrays and bytes may be FMU variables (FMI 3).
+    :type arrays: bool
+    :rtype: dict
+    """
+    if _unit_of(value):
+        info["unit"] = _unit_of(value)
+    value = _scalar_of(value)
+    if arrays and isinstance(value, bytes):
+        info["type"] = "Binary"
+    elif arrays and _array_info(value):
+        # numpy = true only matters for values passed *into* the model
+        info.update({k: v for k, v in _array_info(value).items() if k not in ("numpy", "convert")})
+    elif type(value).__name__ == "float32":
+        info["type"] = "Float32" if arrays else "Real"
+    elif isinstance(value, enum.Enum):
+        info["enum"] = f"{type(value).__module__}:{type(value).__qualname__}"
+    elif isinstance(value, (bool, str)):
+        info["type"] = _type_name(value)
+    return info
+
+def _valid_name(name):
+    """A dotted variable name for a result key.
+
+    Other characters become ``_`` (``"N-14"`` -> ``"N_14"``), and a part that starts with a digit
+    or is a keyword gets a leading ``_``.
+
+    :param name: the key.
+    :rtype: str
+    """
+    parts = []
+    for part in str(name).split("."):
+        part = re.sub(r"\W", "_", part) or "_"
+        if part[0].isdigit() or keyword.iskeyword(part):
+            part = f"_{part}"
+        parts.append(part)
+    return ".".join(parts)
+
+
+def _dotted_name(name):
+    """Whether every dot-separated part of ``name`` is an identifier.
+
+    :param name: the name.
+    :type name: str
+    :rtype: bool
+    """
+    return all(part.isidentifier() for part in name.split("."))
+
+#: Suffixes of input names that mean a previous value (x_prev): candidates for states.
+STATE_SUFFIXES = ("_prev", "_old", "_last")
+#: Prefixes of input names that mean a previous value (prev_x).
+STATE_PREFIXES = ("prev_", "last_", "old_")
+
+
+def _state_base(name):
+    """'x' for an input named like a previous value (x_prev, x_old, x_last, prev_x, last_x, old_x), else None.
+
+    :param name: the input name.
+    :type name: str
+    :rtype: str or None
+    """
+    for suffix in STATE_SUFFIXES:
+        if name.endswith(suffix) and len(name) > len(suffix):
+            return name[: -len(suffix)]
+    for prefix in STATE_PREFIXES:
+        if name.startswith(prefix) and len(name) > len(prefix):
+            return name[len(prefix):]
+    return None
+
+#: numpy scalar type names, kept as they are (not unwrapped with .item()).
+NUMPY_SCALARS = ("float64", "float32", "int64", "int32", "int16", "int8", "uint64", "uint32", "uint16",
+                 "uint8", "bool_")
+#: numpy/torch dtype name -> FMI type of an array's elements.
+NUMPY_TYPES = {"float32": "Float32", "float64": "Real", "int8": "Int8", "uint8": "UInt8", "int16": "Int16",
+               "uint16": "UInt16", "int32": "Int32", "uint32": "UInt32", "int64": "Int64", "uint64": "UInt64",
+               "bool": "Boolean"}
+
+
+def _scalar_of(value):
+    """The scalar inside a 0-dimensional array or tensor (numpy, torch, ...) or a quantity, else the value itself.
+
+    numpy scalars (np.float32, ...) also have ndim 0, but are kept as they are, keeping their type.
+
+    :param value: the value.
+    """
+    if hasattr(value, "magnitude") and hasattr(value, "units"):
+        value = value.magnitude
+    elif hasattr(value, "unit") and hasattr(value, "to_value"):   # an astropy Quantity
+        value = value.value
+    # numpy scalars (np.float32, ...) also have ndim 0, but are handled as they are, keeping their type
+    if getattr(value, "ndim", None) == 0 and hasattr(value, "item") and type(value).__name__ not in NUMPY_SCALARS:
+        try:
+            return value.item()
+        except Exception:
+            return value
+    return value
+
+
+def _fmi_value(value, arrays=False):
+    """Whether a value can be an FMI variable.
+
+    :param value: the value.
+    :param arrays: whether arrays and bytes may be FMU variables (FMI 3).
+    :type arrays: bool
+    :rtype: bool
+    """
+    value = _scalar_of(value)
+    if isinstance(value, (*SCALARS, enum.Enum)) or type(value).__name__ in NUMPY_SCALARS or _number_like(value):
+        return True
+    return arrays and (isinstance(value, bytes) or _array_info(value) is not None)
+
+
+def _number_like(value):
+    """Decimal, Fraction, numpy.float16, ...: anything that converts to a float or an int and isn't an array.
+
+    :param value: the value.
+    :rtype: bool
+    """
+    if getattr(value, "ndim", 0) or isinstance(value, (str, bytes, complex)):
+        return False
+    if not (hasattr(type(value), "__float__") or hasattr(type(value), "__index__")):
+        return False
+    try:   # uncertainties' AffineScalarFunc has __float__, but it raises
+        float(value)
+    except Exception:
+        return False
+    return True
+
+
+def _unit_of(value):
+    """The unit of a pint or astropy quantity, written compactly ("m/s").
+
+    :param value: the value.
+    :return: the unit, or None for anything else or dimensionless.
+    :rtype: str or None
+    """
+    if hasattr(value, "unit") and hasattr(value, "to_value"):   # an astropy Quantity
+        unit = value.unit.to_string() if hasattr(value.unit, "to_string") else str(value.unit)
+        return unit or None
+    units = getattr(value, "units", None)
+    if units is None or not hasattr(value, "magnitude"):
+        return None
+    try:
+        return f"{units:~C}" or None
+    except Exception:
+        return str(units) or None
+
+
+def _array_info(value, with_start=False):
+    """The array keys of a variable for a rectangular list/tuple/numpy array/tensor of numbers.
+
+    :param value: the value.
+    :param with_start: also give the flattened ``start``.
+    :type with_start: bool
+    :return: ``{dimensions, type?, numpy? / convert?, start?}``, else None (also for empty arrays).
+    :rtype: dict or None
+    """
+    if hasattr(value, "shape") and hasattr(value, "tolist") and getattr(value, "ndim", 0) > 0:
+        from fmugen.templates.fmugen_runtime import flatten
+        shape, flat = [int(n) for n in value.shape], flatten(value.tolist())
+        fmi_type = NUMPY_TYPES.get(str(value.dtype).rpartition(".")[2])   # "float32", "torch.float32", ...
+        if fmi_type is None:
+            return None
+        info = {"dimensions": shape}
+        library = type(value).__module__.split(".")[0]
+        if library == "numpy":
+            info["numpy"] = True
+        elif library == "torch":
+            info["convert"] = "torch:tensor"
+    elif isinstance(value, (list, tuple)) and value:
+        shape = _shape(value)
+        if shape is None:
+            return None
+        from fmugen.templates.fmugen_runtime import flatten
+        flat = flatten(value)
+        if all(isinstance(x, bool) for x in flat):
+            fmi_type = "Boolean"
+        elif all(isinstance(x, (int, float)) and not isinstance(x, bool) for x in flat):
+            fmi_type = "Real"
+        else:
+            return None
+        info = {"dimensions": shape}
+    else:
+        return None
+    if 0 in shape:
+        return None
+    if fmi_type != "Real":
+        info["type"] = fmi_type
+    if with_start:
+        info["start"] = [float(x) for x in flat] if fmi_type in ("Real", "Float32") else flat
+    return info
+
+
+def _shape(value):
+    """The shape of nested lists/tuples.
+
+    :param value: the value.
+    :return: the dimensions (``[]`` for a scalar), or None when not rectangular.
+    :rtype: list[int] or None
+    """
+    if not isinstance(value, (list, tuple)):
+        return []
+    shapes = [_shape(item) for item in value]
+    if not shapes or any(s is None or s != shapes[0] for s in shapes):
+        return None
+    return [len(value), *shapes[0]]
+
+
+def _same(a, b):
+    """Whether two probe values are equal (arrays compared as lists, NaN equal to NaN).
+
+    :param a: one value.
+    :param b: the other.
+    :rtype: bool
+    """
+    try:
+        if hasattr(a, "tolist"):
+            a = a.tolist()
+        if hasattr(b, "tolist"):
+            b = b.tolist()
+        return a == b or (isinstance(a, float) and isinstance(b, float) and math.isnan(a) and math.isnan(b))
+    except Exception:
+        return False
+
+
+def _type_name(value):
+    """The config type name of a Python scalar.
+
+    :param value: the value.
+    :return: ``"Boolean"``, ``"Integer"``, ``"String"`` or ``"Real"``.
+    :rtype: str
+    """
+    if isinstance(value, bool):
+        return "Boolean"
+    if isinstance(value, int):
+        return "Integer"
+    if isinstance(value, str):
+        return "String"
+    return "Real"
+
