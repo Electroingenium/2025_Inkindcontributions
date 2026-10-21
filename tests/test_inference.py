@@ -678,3 +678,20 @@ def test_ufunc_arguments_go_by_position(tmp_path):
     """))
     data, _ = infer(f"{tmp_path / 'vec.py'}:ratio", probe=False)
     assert data["inputs"]["dry"]["to"] == "pos:0" and data["inputs"]["rh"]["to"] == "pos:1"
+
+
+def test_star_args_kwargs_constructor_gets_keywords_when_the_probe_needs_them(tmp_path):
+    # like pyquaternion's Quaternion(*args, **kwargs): Quaternion(axis=..., angle=...), not by position
+    (tmp_path / "rot.py").write_text(textwrap.dedent("""
+        class Turn:
+            def __init__(self, *args, **kwargs):
+                if args:
+                    raise ValueError("expected 4 values")
+                self.angle = kwargs["angle"] * kwargs["scale"]
+
+            def rotate(self, x=1.0):
+                return x * self.angle
+    """))
+    data, _ = infer(f"{tmp_path / 'rot.py'}:Turn", call="rotate", starts={"angle": 0.5, "scale": 2.0, "x": 3.0})
+    assert data["parameters"]["angle"] == {"start": 0.5} and data["parameters"]["scale"] == {"start": 2.0}
+    assert "x" in data["inputs"]

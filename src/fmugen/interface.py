@@ -33,7 +33,7 @@ from fmugen.arguments import (
 from fmugen.probe import (
     ConstantError, _run_setup, _probe_call, _probe_class,
     _outputs_from_return, _add_returned, _add_attributes, _detect_states,
-    _taken, _split_varargs,
+    _taken, _split_varargs, _varargs_by_keyword,
 )
 
 #: Step method names tried in order when a class is given without ``--call``.
@@ -750,8 +750,10 @@ def _infer_class(cls, call, data, comments, arrays=False, starts=None, create=No
         init_starts, call_starts = _assign_starts(constructor, getattr(cls, method_name, None), starts or {})
         init_starts, call_starts = _split_varargs(cls, create, method_name, init_starts, call_starts, data,
                                                   comments, probe)
+    by_keyword = not factory and _varargs_by_keyword(getattr(cls, create) if create else cls, init_starts, data,
+                                                     probe)
     _arguments(constructor, "parameters", data, comments, skip_self=not (create or factory), allow_time=False,
-               arrays=arrays, starts=init_starts, positional=False)
+               arrays=arrays, starts=init_starts, positional=False, by_keyword=by_keyword)
     _apply_converts(data, converts)
 
     if method_name != "__call__" or call:

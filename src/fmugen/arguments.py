@@ -356,7 +356,7 @@ def _only_varargs(fn, skip_self=True):
 # ---------------- shared ----------------
 
 def _arguments(fn, section, data, comments, skip_self=False, allow_time=True, constants_key="constants",
-               arrays=False, starts=None, positional=True):
+               arrays=False, starts=None, positional=True, by_keyword=False):
     """Sort the arguments of ``fn`` into variables of ``section`` and time arguments.
 
     Reads the signature with :func:`inspect.signature`. Each parameter becomes, in order of
@@ -387,6 +387,9 @@ def _arguments(fn, section, data, comments, skip_self=False, allow_time=True, co
     :type starts: dict or None
     :param positional: whether positional-only parameters are included.
     :type positional: bool
+    :param by_keyword: give ``--start`` values for ``*args, **kwargs`` as keywords, not by position
+        (the probe found the callable needs them so).
+    :type by_keyword: bool
     :raises InterfaceError: an array ``--start`` for FMI 2, or an unusable value for ``*args``.
     """
     variables = data.setdefault(section, {})
@@ -482,7 +485,7 @@ def _arguments(fn, section, data, comments, skip_self=False, allow_time=True, co
     only_varargs = any(p.kind is p.VAR_POSITIONAL for p in params) \
         and all(p.kind in (p.VAR_POSITIONAL, p.VAR_KEYWORD) for p in params)
     # by position: for a constructor, for computed constants, and when there's no **kwargs to take them
-    by_position = only_varargs and (section == "parameters" or not any(p.kind is p.VAR_KEYWORD for p in params)
+    by_position = only_varargs and not by_keyword and (section == "parameters" or not any(p.kind is p.VAR_KEYWORD for p in params)
                                     or any(isinstance(starts[n], dict) and "call" in starts[n] for n in extra))
     for name in extra:
         computed = isinstance(starts[name], dict) and "call" in starts[name]   # call:...: a constant

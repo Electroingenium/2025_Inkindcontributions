@@ -701,6 +701,47 @@ def _check_picklable(obj, data, comments):
         comments[("model", "save_state")] = f"the model object can't be pickled ({error}): " \
                                             "the FMU can't save and restore its state"
 
+def _varargs_by_keyword(constructor, init_starts, data, probe):
+    """Whether a ``(*args, **kwargs)`` constructor needs its ``--start`` values as keywords.
+
+    The signature can't tell: ``StateSpace(A, B, C, D)`` takes them by position,
+    ``Quaternion(axis=..., angle=...)`` by keyword. Without ``--probe`` they go by position.
+    With it, by keyword only when the positional call fails and the keyword one works.
+
+    :param constructor: the class (or ``create`` classmethod).
+    :param init_starts: the values given to the constructor.
+    :type init_starts: dict
+    :param data: the config being inferred (for its setup calls).
+    :type data: dict
+    :param probe: whether ``--probe`` is in effect.
+    :type probe: bool
+    :rtype: bool
+    """
+    try:
+        params = inspect.signature(constructor).parameters.values()
+    except (TypeError, ValueError):
+        return False
+    if not probe or not init_starts or not any(p.kind is p.VAR_KEYWORD for p in params) \
+            or not any(p.kind is p.VAR_POSITIONAL for p in params):
+        return False
+    from fmugen.templates.fmugen_runtime import resolve_constant
+    try:
+        _run_setup(data)
+        values = {n: resolve_constant(v) for n, v in init_starts.items()}
+    except Exception:
+        return False
+    try:
+        constructor(*values.values())
+        return False
+    except Exception:
+        pass
+    try:
+        constructor(**values)
+    except Exception:
+        return False
+    return True
+
+
 def _split_varargs(cls, create, method_name, init_starts, call_starts, data, comments, probe):
     """Split ``--start`` values between a constructor and a step method that both take only ``*args``.
 
