@@ -1,6 +1,6 @@
 # Tested models
 
-fmugen has been tried on 130+ published, unmodified Python models: the examples in this repository, models from more than 100 libraries on PyPI, 6 neural networks and 16 models built on [GEKKO](https://github.com/BYU-PRISM/GEKKO). Each model is listed once, with its most recent result.
+fmugen has been tried on 134 published, unmodified Python models (two needed a file renamed or a script wrapped in a class; see their notes): the examples in this repository, models from more than 100 libraries on PyPI, 6 neural networks and 16 models built on [GEKKO](https://github.com/BYU-PRISM/GEKKO). Each model is listed once, with its most recent result.
 
 - [How the models were tested](#how-the-models-were-tested)
 - [Summary](#summary)
@@ -35,40 +35,30 @@ Columns: **`init` / `init --probe`**: ✓ if the config of either one builds, si
 
 ## Summary
 
-Libraries, neural networks and repository examples: 118 models, each with an `init` run. FMI 2 and FMI 3 results are combined: a model counts as passing if it passes with either.
+134 models: 118 from libraries, neural networks and the repository examples, and 16 built on GEKKO. FMI 2 and FMI 3 results are combined: a model counts as passing if it passes with either.
 
-| | Count |
-|---|---|
-| `init` writes a config | 113 |
-| `init --probe` writes a config | 117 |
-| **Simulates with useful results** (a config from `init` or `init --probe`) | **95** |
-| …or with a hand-written config | **102** |
-| Fails | 16 |
-| **Compiled FMU simulates** | **96**: every model that simulates with an `init`, `init --probe` or repository config |
+| | Libraries, networks, examples | GEKKO | All |
+|---|---|---|---|
+| `init` writes a config | 113 of 118 | 14 of 16 | 127 of 134 |
+| `init --probe` writes a config | 117 of 118 | 15 of 16 | 132 of 134 |
+| **Simulates with useful results** (a config from `init` or `init --probe`) | **95** | **10** | **105** |
+| …or with a hand-written config | **102** | **10** | **112** |
+| Fails | 16 | 6 | 22 |
+| **Compiled FMU simulates** | **96**: every model that simulates with an `init`, `init --probe` or repository config | 1 (the only one compiled) | 97 |
 
 A config only counts as a success if the FMU simulates **and** gives the model's results. An FMU that runs but only outputs its own parameters, settings or constants counts as a failure.
 
 How far each step gets:
 
-| Config | Simulates correctly | Success |
-|---|---|---|
-| `init` (code only) | 44 of 118 | 37 % |
-| `init --probe` (or `init`, when it already works) | 95 of 118 | 81 % |
-| `init --probe` + a hand-written config (for the examples, the repository's `fmugen.toml`) | 102 of 118 | 86 % |
+| Config | Libraries, networks, examples | GEKKO | All | Success |
+|---|---|---|---|---|
+| `init` (code only) | 44 | 1 | 45 of 134 | 34 % |
+| `init --probe` (or `init`, when it already works) | 95 | 10 | 105 of 134 | 78 % |
+| `init --probe` + a hand-written config (for the examples, the repository's `fmugen.toml`) | 102 | 10 | 112 of 134 | 84 % |
 
-The `init` config fails mostly on models that return arrays, tuples, strings or objects, which only `--probe` types correctly; the error message points to it. Of the 67 `init` configs that simulate, 23 only output parameters, settings or constants. The hand configs add `PropsSI`, `fluids.units` ×2, metpy, cantera, PyTCI and the kalman example ([Hand configs](#hand-configs)); they were checked on 2026-10-06/07, not in the 2026-10-09 rerun.
+The `init` config fails mostly on models that return arrays, tuples, strings or objects, which only `--probe` types correctly; the error message points to it. Of the 67 `init` configs of the first group that simulate, 23 only output parameters, settings or constants. GEKKO models keep their results in GEKKO variables, which only `--probe` finds. The hand configs add `PropsSI`, `fluids.units` ×2, metpy, cantera, PyTCI and the kalman example ([Hand configs](#hand-configs)); they were checked on 2026-10-06/07, not in the 2026-10-09 rerun.
 
-The 16 failures: sgp4 (a C built-in with no signature: hand config not written yet), pyet (needs pandas Series), psychrolib (a numba ufunc takes no keyword arguments), simpy (`until` not bound to time), pyquaternion (`*args` constructor gets the step's arguments), nashpy (the method returns a generator), and 10 that simulate but give no useful results: ambiance, pandapower, pymunk, seirsplus, impedance, pybamm, river, commpy, tellurium and uncertainties.
-
-GEKKO models (16), counted the same way:
-
-| Config | Simulates correctly | Success |
-|---|---|---|
-| `init` (code only) | 1 of 16 | 6 % |
-| `init --probe` (or `init`, when it already works) | 10 of 16 | 63 % |
-| `init --probe` + a hand-written config | 10 of 16 | 63 % |
-
-GEKKO models keep their results in GEKKO variables, which only `--probe` finds. CGE counts as a success, but only after renaming its `model.py`. Of the 6 failures, ethanol and transmembrane fail without fmugen too; drilling, NHES, needforheat and OpenHENS need inputs, data or solvers that aren't available.
+The 22 failures: sgp4 (a C built-in with no signature: hand config not written yet), pyet (needs pandas Series), psychrolib (a numba ufunc takes no keyword arguments), simpy (`until` not bound to time), pyquaternion (`*args` constructor gets the step's arguments), nashpy (the method returns a generator); 10 that simulate but give no useful results: ambiance, pandapower, pymunk, seirsplus, impedance, pybamm, river, commpy, tellurium and uncertainties; and 6 GEKKO models that fail for reasons of their own: ethanol and transmembrane fail without fmugen too, and drilling, NHES, needforheat and OpenHENS need inputs, data or solvers that aren't available. CGE counts as a success, but only after renaming its `model.py`.
 
 ---
 
