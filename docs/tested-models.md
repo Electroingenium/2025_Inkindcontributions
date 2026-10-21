@@ -1,6 +1,6 @@
 # Tested models
 
-fmugen has been tried on 133 published, unmodified Python models (three needed a file renamed or a script wrapped in a class, and one synthetic input data; see their notes): the examples in this repository, models from more than 100 libraries on PyPI, 6 neural networks and 16 models built on [GEKKO](https://github.com/BYU-PRISM/GEKKO). Each model is listed once, with its most recent result.
+fmugen has been tried on 132 published, unmodified Python models (three needed a file renamed or a script wrapped in a class, and one synthetic input data; see their notes): the examples in this repository, models from more than 100 libraries on PyPI, 6 neural networks and 14 models built on [GEKKO](https://github.com/BYU-PRISM/GEKKO). Each model is listed once, with its most recent result.
 
 - [How the models were tested](#how-the-models-were-tested)
 - [Summary](#summary)
@@ -35,15 +35,15 @@ Columns: **`init` / `init --probe`**: ✓ if the config of either one builds, si
 
 ## Summary
 
-133 models: 118 from libraries, neural networks and the repository examples, and 15 built on GEKKO. FMI 2 and FMI 3 results are combined: a model counts as passing if it passes with either.
+132 models: 118 from libraries, neural networks and the repository examples, and 14 built on GEKKO. FMI 2 and FMI 3 results are combined: a model counts as passing if it passes with either.
 
 | | Libraries, networks, examples | GEKKO | All |
 |---|---|---|---|
-| `init` writes a config | 113 of 118 | 14 of 15 | 127 of 133 |
-| `init --probe` writes a config | 117 of 118 | 15 of 15 | 132 of 133 |
+| `init` writes a config | 113 of 118 | 13 of 14 | 126 of 132 |
+| `init --probe` writes a config | 117 of 118 | 14 of 14 | 131 of 132 |
 | **Simulates with useful results** (a config from `init` or `init --probe`) | **96** | **12** | **108** |
 | …or with a hand-written config | **103** | **13** | **116** |
-| Fails | 15 | 2 | 17 |
+| Fails | 15 | 1 | 16 |
 | **Compiled FMU simulates** | **96**: every model that simulates with an `init`, `init --probe` or repository config | 1 (the only one compiled) | 97 |
 
 A config only counts as a success if the FMU simulates **and** gives the model's results. An FMU that runs but only outputs its own parameters, settings or constants counts as a failure.
@@ -52,26 +52,25 @@ How far each step gets:
 
 | Config | Libraries, networks, examples | GEKKO | All | Success |
 |---|---|---|---|---|
-| `init` (code only) | 44 | 1 | 45 of 133 | 34 % |
-| `init --probe` (or `init`, when it already works) | 96 | 12 | 108 of 133 | 81 % |
-| `init --probe` + a hand-written config (for the examples, the repository's `fmugen.toml`) | 103 | 13 | 116 of 133 | 87 % |
+| `init` (code only) | 44 | 1 | 45 of 132 | 34 % |
+| `init --probe` (or `init`, when it already works) | 96 | 12 | 108 of 132 | 82 % |
+| `init --probe` + a hand-written config (for the examples, the repository's `fmugen.toml`) | 103 | 13 | 116 of 132 | 88 % |
 
 The `init` config fails mostly on models that return arrays, tuples, strings or objects, which only `--probe` types correctly; the error message points to it. Of the 67 `init` configs of the first group that simulate, 23 only output parameters, settings or constants. GEKKO models keep their results in GEKKO variables, which only `--probe` finds. The hand configs add `PropsSI`, `fluids.units` ×2, metpy, cantera, PyTCI and the kalman example ([Hand configs](#hand-configs)); they were checked on 2026-10-06/07, not in the 2026-10-09 rerun.
 
-The 17 failures, by cause:
+The 16 failures, by cause:
 
 | Cause | Models | What it means |
 |---|---|---|
 | **fmugen bug**: fmugen calls a model it accepts in the wrong way | pyquaternion (the step method's `--start` values also go to the `*args` constructor), needforheat (a function stored on a class, called as `Model.building(df, …)`, gets the instance as its first argument; also missing data, below) | Fixable in fmugen. |
 | **Not supported by fmugen**: the model's inputs or results have a shape fmugen can't map to FMU variables | sgp4 (C built-ins with no signature), pyet (needs a pandas Series with a date index), simpy (`until` must follow simulation time), nashpy (the method returns a generator), ambiance (results are properties returning 1-element arrays), pandapower (results are DataFrames written onto the network argument), pymunk (`Vec2d` and lists of bodies), seirsplus (arrays that change size), impedance and commpy (complex results), pybamm (the voltage is inside a solution object), river (no prediction or weights exposed), tellurium (the species aren't the step's result), uncertainties (the nominal value of a `ufloat` isn't read) | Each needs a hand config (some may work with one; not tried, except sgp4, where none is written yet) or a new fmugen feature. |
 | **Missing data**: the input data isn't published | needforheat (a home's measured history; the datasets the repository uses hold only data-management documents) | Synthetic data could stand in, once the fmugen bug above is fixed. |
-| **External service**: the model depends on a service that refuses it | drilling MPC (hard-codes APMonitor's public solver server, which answers HTTP 403) | Works only if the server accepts it again. |
 | **Model bug**: the published model doesn't run on its own | none (transmembrane, whose GEKKO class was dead code, is no longer listed) | |
 | **Output mismatch**: the FMU runs but gives different values than the model run directly | none | Every model was compared value by value with a direct run: see below. |
 
 **FMU vs direct run** (2026-10-21, [full report](match-testing/report.md)): every model of the repository examples, Python libraries and neural networks was built into FMUs (`init --probe`, plain `init`, and the repository or hand config; no `--compile`) and compared, output by output and step by step, with the model called directly in plain Python without fmugen. **No mismatch**: 109 of 120 match (230,341 values; largest relative difference 1.3 × 10⁻¹⁶, otherwise identical), and the other 11 are failures listed above (no outputs to compare, or the FMU fails). Models random by design were compared seeded. The GEKKO models were compared one by one (their notes). This run used Linux (WSL 2, Python 3.13) with the latest library versions; the results above are from Windows.
 
-The 17 failures: sgp4 (a C built-in with no signature: hand config not written yet), pyet (needs pandas Series), simpy (`until` not bound to time), pyquaternion (`*args` constructor gets the step's arguments), nashpy (the method returns a generator); 10 that simulate but give no useful results: ambiance, pandapower, pymunk, seirsplus, impedance, pybamm, river, commpy, tellurium and uncertainties; and 2 GEKKO models: needforheat (its methods are written to be called on the class, which fmugen doesn't do, and its data isn't published) and the drilling MPC (it solves on APMonitor's public server, which refuses requests). CGE counts as a success after renaming its `model.py`, NHES with synthetic input data, OpenHENS with a hand-added output and the COIN-OR couenne solver.
+The 16 failures: sgp4 (a C built-in with no signature: hand config not written yet), pyet (needs pandas Series), simpy (`until` not bound to time), pyquaternion (`*args` constructor gets the step's arguments), nashpy (the method returns a generator); 10 that simulate but give no useful results: ambiance, pandapower, pymunk, seirsplus, impedance, pybamm, river, commpy, tellurium and uncertainties; and 1 GEKKO model: needforheat (its methods are written to be called on the class, which fmugen doesn't do, and its data isn't published). CGE counts as a success after renaming its `model.py`, NHES with synthetic input data, OpenHENS with a hand-added output and the COIN-OR couenne solver.
 
 ---
 
@@ -161,7 +160,7 @@ Errors such as `y is an array of shape […], not a single value` in the `init` 
 | `pyfluids:Fluid` | ✓ | — | ✓ (`init --probe` config, 29.4 MB) |  |
 | `pygfunction.heat_transfer:finite_line_source` | ✓ | — | ✓ (`init --probe` config, 52.8 MB) |  |
 | `pykalman:KalmanFilter` | ✓ | — | ✓ (`init --probe` config, 52.5 MB) |  |
-| `pyloudnorm:Meter` | ✓ | — | ✓ (`init` config, 53.2 MB) | `init --probe`: ValueError: blockwise_loudness has 0 values, expected 17 |
+| `pyloudnorm:Meter` | ✓ | — | ✓ (`init` config, 53.2 MB) | `init --probe`: ValueError: blockwise_loudness has 0 values, expected 17 (an fmugen bug: the probe saw 17 values, but at initialization the array is still empty, so the output should have been commented out). |
 | `pymap3d:geodetic2enu` | ✓ | — | ✓ (`init --probe` config, 24.7 MB) |  |
 | `pymsis:calculate` | ✓ | — | ✓ (`init --probe` config, recompiled 2026-10-13) |  |
 | `pymunk:Space` | ✗ no useful outputs | — | ✗ no useful outputs | Outputs are only constant settings (`damping`, `collision_slop`, …); `gravity` (a `Vec2d`), `bodies` and `shapes` are left out. |
@@ -222,7 +221,7 @@ Each was installed as published (`pip install <package>`) into its own venv toge
 
 ## GEKKO models
 
-Dynamic optimization and simulation models built on GEKKO, FMI 2, run on 2026-10-13/14 and checked against each model's published results where it has them. On 2026-10-14 GEKKO's distillation script (nothing to call) was wrapped in a class (first row), and lighter published models (the debutanizer, MPC and FOPDT rows) were added; the last 4 rows are models that only work with extra steps, or don't work. Only the CFTOC model was compiled: the Nuitka builds were stopped after 30 minutes (see below).
+Dynamic optimization and simulation models built on GEKKO, FMI 2, run on 2026-10-13/14 and checked against each model's published results where it has them. On 2026-10-14 GEKKO's distillation script (nothing to call) was wrapped in a class (first row), and lighter published models (the debutanizer, MPC and FOPDT rows) were added; the last 3 rows are models that only work with extra steps, or don't work. Only the CFTOC model was compiled: the Nuitka builds were stopped after 30 minutes (see below).
 
 | Model | Source | Entry and `init` options | `init` / `init --probe` | Hand config | Compiled (PyInstaller) | Notes |
 |---|---|---|---|---|---|---|
@@ -237,7 +236,6 @@ Dynamic optimization and simulation models built on GEKKO, FMI 2, run on 2026-10
 | 2×2 FOPDT process (a `GEKKO` subclass) | [BYU-PRISM/Transformer_MPC](https://github.com/BYU-PRISM/Transformer_MPC) `7686735` | `process_fopdt.py:ProcessModel`, `--call run --start "u=[1.0, 0.5]"` | ✓ | — | — | y = (0.3333, 0.0833), (0.6111, 0.1528), (0.8426, 0.2106): K₁₁ = 2, K₂₂ = 1, τ = 5. |
 | MPC controller for that process (a `GEKKO` subclass) | same repo | `mpc_gekko.py:MPCModel`, `--call solve` | ✓ | — | — | Runs, but with no setpoints its moves stay near 0. The setpoints are attributes (`y1.SP`): bind an input with `to = "attr:y1.SP"` by hand. |
 | Ethanol fed-batch bioreactor (APMonitor's script, wrapped in a class) | [APMonitor](https://apmonitor.com/do/index.php/Main/EthanolBioreactor) | `ethanol_run.py:EthanolBioreactor`, `--call run`: `run()` holds the script's code up to its `solve()`, unchanged (no plots) | ✓ | — | — | `init --probe` finds 30 GEKKO results. FMU = the script run directly, end of the 37 h batch: Xv 2.9955, Xt 11.1237, S 0.5443, P 72.8812 g/L, T 35.4157 °C, Vl 1485 L. The script's model can only be solved once (a second `solve()` fails with `Solution Not Found`, also without fmugen), so `run()` builds it again each step, as running the script does. |
-| Directional drilling MPC | [Xiang-Gu/CS394R_RL_Directional_Drilling](https://github.com/Xiang-Gu/CS394R_RL_Directional_Drilling) `12a45cf` | `mpc/mpc.py:solveMPC`, `--call action --start "state=[0.0, 0.0, 0.0, 0.0]"` | ✗ simulate fails | — | — | **Not fmugen's**: `action()` hard-codes `GEKKO(remote=True)`, and APMonitor's public server refuses the solve (HTTP 403, rechecked 2026-10-21). The model catches the solve error and returns an action from its initial guess, so the FMU would run but give meaningless results. |
 | Nuclear-renewable hybrid energy system | [BYU-PRISM/NHES-opt-sensitivity](https://github.com/BYU-PRISM/NHES-opt-sensitivity) `5e9a6f2` | `simple_nhes.py:model`, `--probe --start "params=call:simple_nhes:nom_params"` | ✓ | — | — | **Run on synthetic data** (2026-10-21): the input file `grid_data/more_data_scaled.csv` isn't published. It only needs hourly `Load`, `Wind` and `Solar` in MW, so a 500-hour series was generated (load 400 ± 60 MW daily cycle, daytime solar up to 150 MW, wind around 110 MW). `init --probe` copies the file into the FMU (`cwd`). FMU = direct run: LCOE 56.134985404 $/MWh, TES 2661.7402233 MWh, SMR 801.97828923 MW, turbine 394.82255668 MW. Also needs seaborn, which it imports without declaring. |
 | Residential heat diagnosis | [energietransitie/needforheat-diagnosis-software](https://github.com/energietransitie/needforheat-diagnosis-software) `48d3a85` | `analysis/rhc_analysis.py:Model`, `--call building` | ✗ simulate fails | — | — | Two causes. **fmugen's**: `Model`'s methods are written without `self`, to be called as `Model.building(df_learn, …)`; fmugen builds a `Model()` and calls `instance.building(…)`, so the instance arrives as `df_learn`. **The data's**: `df_learn` is a DataFrame of a home's measured history (temperatures, gas, heating). Its datasets (REDUCEDHEATCARB 2023, Twomes 2021) aren't published. Also needs CoolProp, missing from its `requirements.txt`. |
 | Heat exchanger network synthesis | [waikato-ahuora-smart-energy-systems/OpenHENS](https://github.com/waikato-ahuora-smart-energy-systems/OpenHENS) `5081bab` | `openhens:OpenHENS`, `--call solve`, the README's options | ✗ no useful outputs | ✓ (one output added: `TAC = { from = "attr:_best_solns.0.case.TAC" }`) | — | **Needs the COIN-OR `couenne` executable on PATH**, as its README says (2026-10-21: from the [IDAES solver bundle](https://github.com/IDAES/idaes-ext/releases/tag/3.4.2), since COIN-OR's own Windows builds stop at 0.3.2). `init --probe` solves it but finds no outputs: the solutions are kept in a private list. With the total annual cost added by hand, the FMU gives TAC 154853.8586 against 154853.8602 run directly (same case: four-stream, ΔTmin 10, 3 dQ/dA values; equal to 1 part in 10⁸, within the solver's 10⁻³ tolerance). About 60 s per step. |
@@ -325,7 +323,7 @@ Still open:
 
 - **The backend outlives a failed FMU.** FMPy's `simulate_fmu` raises without calling `freeInstance`, so the UniFMU backend (`main.py`, 2 processes) keeps running and holds the importer's stdout/stderr; anything reading it through a pipe hangs. Not fmugen's: [fmpy-limitations.md §1](fmpy-limitations.md#1-simulate_fmu-doesnt-free-the-instance-after-an-fmu-error), and UniFMU's part in [unifmu-limitations.md §2](unifmu-limitations.md#2-the-backend-keeps-running-after-an-fmu-error). Workaround: free the instance yourself (`simulate_fmu(…, fmu_instance=fmu)`, then `fmu.freeInstance()` in a `finally`).
 - **`fmpy simulate` shows no reason for a failure**, only the failed FMI call. The traceback shows with `simulate_fmu(…, debug_logging=True, logger=print)`. With FMI 2, a log message containing `%` (a URL, a traceback, Pyomo's log) can then crash FMPy: [unifmu-limitations.md §12](unifmu-limitations.md#12-fmi-2-log-messages-are-used-as-printf-format-strings).
-- **Outputs whose type or size changes at run time fail the step** (a value that becomes `None`, an array whose length varies). `init --probe` comments them out with the reason.
+- **Outputs whose type or size changes at run time fail the step** (a value that becomes `None`, an array whose length varies). `init --probe` comments them out with the reason, but only when it sees the change: pyloudnorm's `blockwise_loudness` is empty at initialization and has 17 values when probed, and the `--probe` config fails.
 - **`to = "call:…"` setters run once more than the steps**: harmless for setters that store a value, not for ones that accumulate ([PyTCI](#pytci)).
 - **Methods that need simulation time aren't bound to it** (simpy `Environment.run(until)`).
 - **An `*args` constructor gets the step method's `--start` values too** (pyquaternion).
