@@ -699,7 +699,7 @@ def test_star_args_kwargs_constructor_gets_keywords_when_the_probe_needs_them(tm
 
 @pytest.mark.parametrize("probe", [False, True])
 def test_method_without_self_is_called_on_the_class(tmp_path, probe):
-    # like needforheat's Model.building(df_learn, ...): a plain function in the class body
+    # like Model.building(df, ...): a plain function in the class body, called on the class
     (tmp_path / "heat.py").write_text(textwrap.dedent("""
         class Model:
             def building(load=2.0, gain=3.0):

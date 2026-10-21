@@ -330,8 +330,8 @@ def class_called(cls, name):
     """Whether method ``name`` of ``cls`` is written to be called on the class, without an instance.
 
     A plain function in the class body whose first parameter isn't ``self``:
-    ``def building(df_learn, ...)``, called as ``Model.building(df, ...)`` (needforheat). Called on
-    an instance, it would get the instance as ``df_learn``. A ``staticmethod`` doesn't need this.
+    ``def building(df, ...)``, called as ``Model.building(df, ...)``. Called on
+    an instance, it would get the instance as ``df``. A ``staticmethod`` doesn't need this.
 
     :param cls: the model class, or None.
     :param name: the step method.
