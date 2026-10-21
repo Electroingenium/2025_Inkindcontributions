@@ -10,7 +10,6 @@ fmugen has been tried on 131 published, unmodified Python models (three needed a
 - [GEKKO models](#gekko-models)
 - [Hand configs](#hand-configs)
 - [Known problems](#known-problems)
-- [Deployment with Liqo](#deployment-with-liqo)
 - [Versions](#versions)
 - [Reproducing a run](#reproducing-a-run)
 
@@ -333,14 +332,6 @@ Limitations (not bugs):
 - **An output's size can't change during the simulation.** FMI variables have fixed sizes (FMI 3 arrays resize only through structural parameters), so an output that becomes `None` or changes length fails the step instead of giving wrong values. `init --probe` comments out the ones it sees change.
 - **Model files named `model.py`** are refused by `build`: the name clashes with UniFMU's backend module. Rename the file; `init` warns about it.
 
-
----
-
-## Deployment with Liqo
-
-On 2026-10-07, about 50 of the library models (numpy_financial, QuantLib, pymap3d, shapely, librosa, mendeleev, tellurium, …) were also deployed across two kind clusters peered with Liqo v1.2.0. Each model's best config got `[model] requirements` and was built into an image with `docker/Dockerfile` (`MODEL=docker/models/r3/<name>`), then run as a Job on the virtual node `fmu-remote`, talking to the OPC UA server in `fmu-local` through the reflected Service. The configs are in `docker/models/r3/<name>/fmugen.toml`.
-
-**Liqo itself caused no failures**: runs succeeded on `fmu-remote` exactly where they succeeded on Windows, with the same values. Exceptions: tellurium's Linux image lacked a dependency (`No module named 'tesbml'`), and antropy's run hung after connecting (cause not investigated). Class models showed `0` in the first row of the runner's CSV (t = 0), and the right value from t = 1.
 
 ---
 
