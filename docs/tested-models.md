@@ -119,7 +119,7 @@ Errors such as `y is an array of shape […], not a single value` in the `init` 
 | `gymnasium.envs.classic_control.cartpole:CartPoleEnv` | ✓ | — | ✓ (`init --probe` config, 135.6 MB) |  |
 | `gymnasium.envs.classic_control.pendulum:PendulumEnv` | ✓ | — | ✓ (`init --probe` config, 135.6 MB) |  |
 | `haversine:haversine` | ✓ | — | ✓ (`init --probe` config, 24.6 MB) |  |
-| `heartpy:process` | ✓ | — | ✓ (`init --probe` config, 2026-10-13) | With its `data/data.csv` given by full path: 20 variables, bpm 58.9 (compiled too). Imports `pkg_resources`: needs `setuptools<81`. |
+| `heartpy:process` | ✓ | — | ✓ (`init --probe` config, 2026-10-13) | **Needs `setuptools<81` installed by hand** (heartpy imports `pkg_resources` without declaring it). With its `data/data.csv` given by full path: 20 variables, bpm 58.9, compiled too. |
 | `highway_env.envs.highway_env:HighwayEnv` | ✓ | — | ✓ (`init --probe` config, 135.8 MB) |  |
 | `hplib.hplib:HeatPump` | ✓ | — | ✓ (`init --probe` config, recompiled 2026-10-13) |  |
 | `ht.conv_internal:Nu_conv_internal` | ✓ | — | ✓ (`init --probe` config, 134.1 MB) |  |
@@ -127,7 +127,7 @@ Errors such as `y is an array of shape […], not a single value` in the `init` 
 | `iapws.iapws97:_TSat_P` | ✓ | — | ✓ (`init --probe` config, recompiled 2026-10-13) | 2026-10-14: with `discard_on = ["builtins:NotImplementedError"]`, a step at 30 MPa returns `discard`; the output keeps 453.04 K, and the step retried at 2 MPa succeeds (485.53 K). |
 | `iapws:IAPWS97` | ✓ | — | ✓ (`init --probe` config, recompiled 2026-10-13) |  |
 | `impedance.models.circuits:Randles` | ✗ no useful outputs | — | ✗ no useful outputs | Outputs only echo `initial_guess`; the complex prediction is left out (commented as real/imaginary parts). |
-| `joblib:load` | ✓ | — | ✓ (`init --probe` config, recompiled 2026-10-13) |  |
+| `joblib:load` | ✓ | — | ✓ (`init --probe` config, recompiled 2026-10-13) | **Compiled: needs `scikit-learn` added to `[model] requirements` by hand**: the model is unpickled, so nothing imports scikit-learn by name. Uncompiled, it needs nothing extra. |
 | `librosa:hz_to_mel` | ✓ | — | ✓ (`init --probe` config, 108.5 MB) |  |
 | `mendeleev:element` | ✓ | — | ✓ (`init --probe` config, recompiled 2026-10-13) | `init --probe`: 79 variables; Fe gives atomic_number 26, atomic_weight 55.845. |
 | `mesa.examples:BoltzmannWealth` | ✓ | — | ✓ (`init --probe` config, 111.4 MB) |  |
@@ -187,7 +187,7 @@ Errors such as `y is an array of shape […], not a single value` in the `init` 
 | `shapely:Point` | ✓ | — | ✓ (`init --probe` config, 26.2 MB) |  |
 | `simglucose.patient.t1dpatient:T1DPatient` | ✓ | — | ✓ (`init --probe` config, recompiled 2026-10-13) |  |
 | `simpy:Environment` | ✗ simulate fails | — | ✗ simulate fails (`init --probe` config, 24.7 MB) | ValueError: until (1.0) must be greater than the current simulation time |
-| `skfuzzy:interp_membership` | ✓ | — | ✓ (`init --probe` config, 52.3 MB) |  |
+| `skfuzzy:interp_membership` | ✓ | — | ✓ (`init --probe` config, 52.3 MB) | **Needs scipy, packaging and networkx installed by hand**: scikit-fuzzy imports them without declaring them. 0.7 = a direct call. |
 | `skimage.color:rgb2hsv` | ✓ | — | ✓ (`init --probe` config, 52.8 MB) |  |
 | `statsmodels.stats.proportion:proportion_confint` | ✓ | — | ✓ (`init --probe` config, 71.3 MB) |  |
 | `tclab:TCLabModel` | ✓ | — | ✓ (`init --probe` config, 128.8 MB) |  |
@@ -219,14 +219,14 @@ Each was installed as published (`pip install <package>`) into its own venv toge
 
 ## GEKKO models
 
-Dynamic optimization and simulation models built on GEKKO, FMI 2, run on 2026-10-13/14 and checked against each model's published results where it has them. On 2026-10-14 GEKKO's distillation script (nothing to call) was reworked into a class (first row), and lighter published models (the debutanizer, MPC and FOPDT rows) were added next to those that fail for reasons of their own (the last 6 rows). Only the CFTOC model was compiled: the Nuitka builds were stopped after 30 minutes (see below).
+Dynamic optimization and simulation models built on GEKKO, FMI 2, run on 2026-10-13/14 and checked against each model's published results where it has them. On 2026-10-14 GEKKO's distillation script (nothing to call) was wrapped in a class (first row), and lighter published models (the debutanizer, MPC and FOPDT rows) were added next to those that fail for reasons of their own (the last 6 rows). Only the CFTOC model was compiled: the Nuitka builds were stopped after 30 minutes (see below).
 
 | Model | Source | Entry and `init` options | `init` / `init --probe` | Hand config | Compiled (PyInstaller) | Notes |
 |---|---|---|---|---|---|---|
-| Distillation column (GEKKO's example, reworked into a class; equations unchanged) | GEKKO [`examples/distillation.py`](https://github.com/BYU-PRISM/GEKKO/blob/master/examples/distillation.py) | `distillation_column.py:DistillationColumn`, `--call step` | ✓ | — | — | 7 outputs. At reflux 3.0 the condenser goes 0.785721, 0.837391, 0.867374 and the reboiler 0.190012, 0.145341, 0.120733: the script's own values. The original module-level script has nothing to call. |
+| Distillation column (GEKKO's example, wrapped in a class) | GEKKO [`examples/distillation.py`](https://github.com/BYU-PRISM/GEKKO/blob/master/examples/distillation.py) | `distillation_column.py:DistillationColumn`, `--call step` | ✓ | — | — | The script's code wrapped in a class, since a module-level script has nothing to call (equations unchanged). 7 outputs. At reflux 3.0 the condenser goes 0.785721, 0.837391, 0.867374 and the reboiler 0.190012, 0.145341, 0.120733: the script's own values. |
 | Distillation column as a Gym environment | [Kalpesh-RL/DistillationColumn](https://github.com/Kalpesh-RL/DistillationColumn) `f2b9966` | `DistColEnvDynInc_altrewards.py:DistColEnvDynInc`, `--start "Action=[0.0, 0.0, 0.0]" --setup reset` | ✓ | — | — | State, reward, `done` and message change every step; `D`, `B`, `FL` are outputs too (D = 1.133, B = 0.873). |
 | Batch bioreactor (Monod growth) | [Bartosz1280/Bioreactor-modeling](https://github.com/Bartosz1280/Bioreactor-modeling) `3112aba` | `Bioreactor.py:SimpleBioreactor`, `--call solve`, `time_arr` and `simulation_input` from the repo notebook | ✓ | — | — | 5 outputs (`X`, `S`, `mu`, `dXdt`, `dSdt`) read from the GEKKO variables at the end of the horizon; X goes 0.0451 → 0.0444 g/L over 3 steps. |
-| Computable general equilibrium economy | [konradarchicinski/cge_model_python](https://github.com/konradarchicinski/cge_model_python) `60d611d` | `Code/model.py:CGE`, `--call results --start capital=0.1 --start labour=0.0` | ✓ | — | — | **Needs its `Code/model.py` renamed** (any other name): `build` refuses a model file named `model.py`, which clashes with UniFMU's backend module. Renamed: 27 outputs, the first step = the direct run (x3 supply 72.076, price 1.119). Needs pandas 2 (with pandas 3 the model itself fails). |
+| Computable general equilibrium economy | [konradarchicinski/cge_model_python](https://github.com/konradarchicinski/cge_model_python) `60d611d` | `Code/model.py:CGE`, `--call results --start capital=0.1 --start labour=0.0` | ✓ | — | — | **Needs its `Code/model.py` renamed** (any other name) **and pandas 2**: `build` refuses a model file named `model.py`, which clashes with UniFMU's backend module. Renamed: 27 outputs, the first step = the direct run (x3 supply 72.076, price 1.119). With pandas 3 the model itself fails (its chained `df[a][b] = …` assignments don't write under copy-on-write). |
 | Constrained finite-time optimal control | [ollyme102b/ros_workspace](https://github.com/ollyme102b/ros_workspace) `03f5938` | `CFTOCSolverV2.py:CFTOCSolverV2`, `--call calculate_optimal_actuation`, the repo test's starts, `--start calculate_optimal_actuation_x0=…` | ✓ | — | ✓ (`init --probe` config, 43 MB, 2 min) | y = (−0.09546, −0.02481, 0), then (−0.09521, −0.02558, 0) twice = the class called directly; the compiled FMU gives the same values. `--compile nuitka`: stopped after 30 min. |
 | Debutanizer column, steady state (30 stages) | [Arushan45/Debutanizer-Project](https://github.com/Arushan45/Debutanizer-Project) `f6fe813` | `debutanizer.model:solve_steady_state`, `--start reflux_ratio=2.5 --start alpha=1.9717789099` | ✓ | — | — | C4 0.96999957519, vapor 133.0 kmol/h, duty 0.84972 MW: the repo's `results/summary.json` to all digits. |
 | Debutanizer reflux optimization | same | `debutanizer.model:optimize_reflux`, `--start alpha=1.9717789099` | ✓ | — | — | Reflux 2.7602061381, purity 0.991, vapor 142.8878332478: the repo's optimum to all digits. |
