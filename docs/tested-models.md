@@ -145,7 +145,7 @@ Errors such as `y is an array of shape […], not a single value` in the `init` 
 | `pandapower:runpp` | ✗ no useful outputs | — | ✗ no useful outputs | Outputs are only solver settings (`tolerance_mva`, `calculate_voltage_angles`): the results are DataFrames written onto the network argument. |
 | `pedon:Genuchten` | ✓ | — | ✓ (`init --probe` config, 83.7 MB) |  |
 | `ppigrf:igrf` | ✓ | — | ✓ (`init --probe` config, 101.5 MB) |  |
-| `psychrolib:GetHumRatioFromRelHum` | ✓ | — | — | **Fails when numba is installed**: psychrolib then turns its functions into numba ufuncs, which reject the keyword arguments fmugen passes (`unexpected keyword arguments to ufunc`; an fmugen bug). Without numba (2026-10-21, psychrolib 2.5.0), both configs match the direct call. |
+| `psychrolib:GetHumRatioFromRelHum` | ✓ | — | — | **Fails when numba is installed**: psychrolib then turns its functions into numba ufuncs, which reject the keyword arguments fmugen passes (`unexpected keyword arguments to ufunc`; an fmugen bug). Without numba (2026-10-21, psychrolib 2.5.0), both configs match the direct call. Fixed 2026-10-21: ufunc arguments are now passed by position (`to = "pos:N"`), and with numba installed the FMU gives 0.00988104 = the direct call. |
 | pvlib `get_total_irradiance` → `sapm_cell` → `pvwatts_dc` (**composite FMU**) | ✓ (each part) | — | ✓ (2026-10-14) | 2026-10-14: the three parts made with `init --probe`: three weather cases give values identical to calling pvlib in a chain. |
 | `pvlib.atmosphere:alt2pres` | ✓ | — | ✓ (`init --probe` config, 133.0 MB) |  |
 | `pvlib.iotools:read_tmy3` | ✓ | — | ✓ (`init --probe` config, 133.0 MB) |  |
@@ -188,7 +188,7 @@ Errors such as `y is an array of shape […], not a single value` in the `init` 
 | `sgp4.api:Satrec` | ✗ no config | ✗ not written yet | — | C built-ins with no signature: `--start fr, jd, line1, line2: cannot tell which arguments these are …`. |
 | `shapely:Point` | ✓ | — | ✓ (`init --probe` config, 26.2 MB) |  |
 | `simglucose.patient.t1dpatient:T1DPatient` | ✓ | — | ✓ (`init --probe` config, recompiled 2026-10-13) |  |
-| `simpy:Environment` | ✗ simulate fails | — | ✗ simulate fails (`init --probe` config, 24.7 MB) | ValueError: until (1.0) must be greater than the current simulation time |
+| `simpy:Environment` | ✗ simulate fails | — | ✗ simulate fails (`init --probe` config, 24.7 MB) | ValueError: until (1.0) must be greater than the current simulation time. **Caused by the test's `--start until=1.0`**, which makes `until` a fixed input (`init` warns about it). Without it (2026-10-21, simpy 4.1.2), `until` is bound to the step's end time and `init --probe` gives `now` = the simulation time. |
 | `skfuzzy:interp_membership` | ✓ | — | ✓ (`init --probe` config, 52.3 MB) | **Needs scipy, packaging and networkx installed by hand**: scikit-fuzzy imports them without declaring them. 0.7 = a direct call. |
 | `skimage.color:rgb2hsv` | ✓ | — | ✓ (`init --probe` config, 52.8 MB) |  |
 | `statsmodels.stats.proportion:proportion_confint` | ✓ | — | ✓ (`init --probe` config, 71.3 MB) |  |
@@ -323,17 +323,24 @@ Still open:
 
 - **The backend outlives a failed FMU.** FMPy's `simulate_fmu` raises without calling `freeInstance`, so the UniFMU backend (`main.py`, 2 processes) keeps running and holds the importer's stdout/stderr; anything reading it through a pipe hangs. Not fmugen's: [fmpy-limitations.md §1](fmpy-limitations.md#1-simulate_fmu-doesnt-free-the-instance-after-an-fmu-error), and UniFMU's part in [unifmu-limitations.md §2](unifmu-limitations.md#2-the-backend-keeps-running-after-an-fmu-error). Workaround: free the instance yourself (`simulate_fmu(…, fmu_instance=fmu)`, then `fmu.freeInstance()` in a `finally`).
 - **`fmpy simulate` shows no reason for a failure**, only the failed FMI call. The traceback shows with `simulate_fmu(…, debug_logging=True, logger=print)`. With FMI 2, a log message containing `%` (a URL, a traceback, Pyomo's log) can then crash FMPy: [unifmu-limitations.md §12](unifmu-limitations.md#12-fmi-2-log-messages-are-used-as-printf-format-strings).
-- **Outputs whose type or size changes at run time fail the step** (a value that becomes `None`, an array whose length varies). `init --probe` comments them out with the reason, but only when it sees the change: pyloudnorm's `blockwise_loudness` is empty at initialization and has 17 values when probed, and the `--probe` config fails.
+- **`init --probe` misses an output that is empty only at initialization**: pyloudnorm's `blockwise_loudness` is empty before the first step and has 17 values after it, so the `--probe` config fails.
 - **`to = "call:…"` setters run once more than the steps**: harmless for setters that store a value, not for ones that accumulate ([PyTCI](#pytci)).
-- **Methods that need simulation time aren't bound to it** (simpy `Environment.run(until)`).
 - **An `*args` constructor gets the step method's `--start` values too** (pyquaternion).
-- **`init` doesn't write `[model] requirements`**, which deployment images need.
-- **Numba-compiled functions** reject the keyword arguments fmugen passes (psychrolib, when numba is installed).
-- **`attr:` paths index lists but not numpy arrays**: `from = "attr:t_core.0"` fails on a numpy array; read the whole array instead.
 - **Module-level scripts can't be models**: a script that solves at import time has nothing to call (GEKKO's distillation example, the ethanol bioreactor). Wrapping its code in a class works.
 - **Methods written without `self`**, to be called on the class (`Model.building(df, …)`), get the instance as their first argument (needforheat).
-- **Model files named `model.py`** are refused by `build` (intended: rename the file); `init` warns about it.
 - **Windows long paths:** cantera and pybamm failed to import from a venv in a deeply nested folder. The FMU runs with the build venv, so deeply nested project folders may hit this.
+
+Limitations (not bugs):
+
+- **An output's size can't change during the simulation.** FMI variables have fixed sizes (FMI 3 arrays resize only through structural parameters), so an output that becomes `None` or changes length fails the step instead of giving wrong values. `init --probe` comments out the ones it sees change.
+- **Model files named `model.py`** are refused by `build`: the name clashes with UniFMU's backend module. Rename the file; `init` warns about it.
+
+Fixed (2026-10-21):
+
+- `attr:` paths index numpy arrays (`from = "attr:t_core.0"`, `"…-1"`), not only lists and tuples.
+- ufuncs (numba `@vectorize`, psychrolib with numba) get their arguments by position.
+- `init` warns about a model file named `model.py`.
+- Not bugs after all: `init` does write `[model] requirements` (pinned to the installed versions), and simpy's `until` is bound to the step's end time unless `--start until=…` makes it a fixed input, which `init` warns about.
 
 ---
 
