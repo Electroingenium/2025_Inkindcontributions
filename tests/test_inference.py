@@ -651,3 +651,30 @@ def test_model_files_named_like_standard_library_modules_are_refused(tmp_path):
                                           '[inputs]\nx = { start = 1.0 }\n[outputs]\ny = {}\n')
     with pytest.raises(InterfaceError, match="queue.*standard library"):
         build(tmp_path / "fmugen.toml", tmp_path / "out", output_format="folder")
+
+
+def test_ufunc_arguments_go_by_position(tmp_path):
+    # like numba's DUFunc (psychrolib with numba installed): named parameters, but no keyword arguments
+    (tmp_path / "vec.py").write_text(textwrap.dedent("""
+        import inspect
+
+        class DUFunc:
+            nin = 2
+
+            def __init__(self, fn):
+                self.fn, self.__signature__ = fn, inspect.signature(fn)
+
+            def __call__(self, *args, **kwargs):
+                if kwargs:
+                    raise TypeError("unexpected keyword arguments to ufunc")
+                return self.fn(*args)
+
+        DUFunc.__module__ = "numba.np.ufunc.dufunc"
+
+        def _ratio(dry=25.0, rh=0.5):
+            return dry * rh
+
+        ratio = DUFunc(_ratio)
+    """))
+    data, _ = infer(f"{tmp_path / 'vec.py'}:ratio", probe=False)
+    assert data["inputs"]["dry"]["to"] == "pos:0" and data["inputs"]["rh"]["to"] == "pos:1"

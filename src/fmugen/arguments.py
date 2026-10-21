@@ -325,6 +325,18 @@ def _assign_starts(init, method, starts):
     return init_starts, call_starts
 
 
+def _keywordless(fn):
+    """Whether ``fn`` is a ufunc, which takes its arguments only by position.
+
+    numpy ufuncs and numba ``@vectorize`` functions (``DUFunc``; psychrolib's with numba installed)
+    report named parameters but reject keyword arguments.
+
+    :param fn: a callable.
+    :rtype: bool
+    """
+    return hasattr(fn, "nin") and type(fn).__module__.split(".")[0] in ("numpy", "numba")
+
+
 def _only_varargs(fn, skip_self=True):
     """Whether ``fn`` declares no named arguments, only ``*args`` (and maybe ``**kwargs``).
 
@@ -390,6 +402,7 @@ def _arguments(fn, section, data, comments, skip_self=False, allow_time=True, co
     if skip_self and params:
         params = params[1:]
     params = [_unwrap_descriptor(p) for p in params]
+    keywordless = _keywordless(fn)
     position = 0
     for p in params:
         if p.kind in (p.VAR_POSITIONAL, p.VAR_KEYWORD):
@@ -459,7 +472,7 @@ def _arguments(fn, section, data, comments, skip_self=False, allow_time=True, co
             elif converter:
                 variables[p.name]["convert"] = converter
                 comments.setdefault((section, p.name), f"passed as {converter.replace(':', '.')}(...)")
-        if p.kind is p.POSITIONAL_ONLY and len(variables) > before:
+        if (p.kind is p.POSITIONAL_ONLY or keywordless) and len(variables) > before:
             variables[p.name]["to"] = f"pos:{position}"
             position += 1
     names = {p.name for p in params}
