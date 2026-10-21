@@ -841,6 +841,15 @@ def test_warning_names_only_outputs_of_unknown_type(tmp_path, capsys):
     assert "count" not in err and "y" not in err.split(":")[1]
 
 
+def test_init_warns_about_a_file_named_like_a_backend_module(tmp_path, capsys):
+    write(tmp_path, "model.py", """
+        def area(r=1.0):
+            return 3.14 * r * r
+    """)
+    init(f"{tmp_path / 'model.py'}:area")
+    assert "warning: model.py clashes with a UniFMU backend module" in capsys.readouterr().err
+
+
 def test_numeric_strings_still_become_numbers(tmp_path, make_fmu, adapter):
     write(tmp_path, "text.py", """
         def reading(x=1.0):

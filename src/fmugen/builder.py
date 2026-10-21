@@ -14,7 +14,7 @@ import zipfile
 from pathlib import Path
 
 from fmugen.compose import PARTS_DIR, Composite, combine, is_composite
-from fmugen.config import MODEL_DIR, Config, InterfaceError, load_config, normalize
+from fmugen.config import MODEL_DIR, RESERVED_MODULES, Config, InterfaceError, load_config, normalize
 from fmugen.description import build_time, stamp_guid, write_model_description
 from fmugen.distribute import (
     COMPILERS,
@@ -685,7 +685,11 @@ def init(target, output=None, call=None, force=False, fmi_version=None, starts=N
         data, comments = infer_config(target, call=call, config_dir=output.parent, fmi_version=fmi_version,
                                       starts=starts, setup=setup, kind=kind, create=create, probe=probe,
                                       converts=converts)
-    for warning in _init_warnings(data, comments, probe):
+    warnings = _init_warnings(data, comments, probe)
+    if model_path and model_path.stem in RESERVED_MODULES:
+        warnings.insert(0, f"{model_path.name} clashes with a UniFMU backend module, so build will refuse it; "
+                           "rename the file")
+    for warning in warnings:
         print(f"warning: {warning}", file=sys.stderr)
     text = render_toml(data, comments)
     if to_stdout:

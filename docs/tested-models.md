@@ -332,7 +332,7 @@ Still open:
 - **`attr:` paths index lists but not numpy arrays**: `from = "attr:t_core.0"` fails on a numpy array; read the whole array instead.
 - **Module-level scripts can't be models**: a script that solves at import time has nothing to call (GEKKO's distillation example, the ethanol bioreactor). Wrapping its code in a class works.
 - **Methods written without `self`**, to be called on the class (`Model.building(df, …)`), get the instance as their first argument (needforheat).
-- **Model files named `model.py`** are refused by `build` (intended: rename the file); `init` doesn't warn.
+- **Model files named `model.py`** are refused by `build` (intended: rename the file); `init` warns about it.
 - **Windows long paths:** cantera and pybamm failed to import from a venv in a deeply nested folder. The FMU runs with the build venv, so deeply nested project folders may hit this.
 
 ---
