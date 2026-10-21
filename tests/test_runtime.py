@@ -355,6 +355,70 @@ def test_setter_method_inputs_and_property_outputs(tmp_path, make_fmu, adapter):
     assert fmu.get("temperature") == 22.0
 
 
+def test_accumulating_setter_runs_once_per_step(tmp_path, make_fmu, adapter):
+    # like PyTCI's give_drug: each call adds a dose, so an extra call is an extra dose
+    write(tmp_path, "pump.py", '''
+        class Pump:
+            def __init__(self):
+                self.total, self.calls = 0.0, 0
+
+            def give(self, dose):
+                self.total += dose
+                self.calls += 1
+
+            def wait(self, dt):
+                return self.total
+    ''')
+    (tmp_path / "fmugen.toml").write_text(textwrap.dedent('''
+        [model]
+        entry = "pump.py:Pump"
+        call = "wait"
+        [time]
+        dt = "step_size"
+        [inputs]
+        dose = { start = 2.0, to = "call:give" }
+        [outputs]
+        total = {}
+        calls = { type = "Integer" }
+    '''))
+    fmu = adapter(make_fmu(tmp_path))
+    fmu.initialize()
+    for k in range(3):
+        assert fmu.fmi2DoStep(float(k), 1.0, False) == OK
+    assert fmu.get("calls", "total") == [3, 6.0]   # 3 steps, 3 doses (not 4)
+    fmu.set("dose", 5.0)
+    assert fmu.fmi2DoStep(3.0, 1.0, False) == OK
+    assert fmu.get("calls", "total") == [4, 11.0]
+
+
+def test_setter_changed_after_initialization_reaches_the_first_step(tmp_path, make_fmu, adapter):
+    write(tmp_path, "pump.py", '''
+        class Pump:
+            def __init__(self):
+                self.doses = []
+
+            def give(self, dose):
+                self.doses.append(dose)
+
+            def wait(self):
+                return sum(self.doses)
+    ''')
+    (tmp_path / "fmugen.toml").write_text(textwrap.dedent('''
+        [model]
+        entry = "pump.py:Pump"
+        call = "wait"
+        [inputs]
+        dose = { start = 2.0, to = "call:give" }
+        [outputs]
+        y = { from = "return" }
+    '''))
+    fmu = adapter(make_fmu(tmp_path))
+    fmu.initialize()
+    fmu.set("dose", 7.0)
+    assert fmu.fmi2DoStep(0.0, 1.0, False) == OK
+    assert fmu.get("y") == 9.0   # 2 at initialization, then the new 7
+
+
 def test_build_does_not_run_the_model(tmp_path, make_fmu):
     # like tclab: constructing the model needs hardware (or a network) that isn't there at build time
     write(tmp_path, "hw.py", '''

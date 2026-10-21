@@ -274,6 +274,8 @@ class Engine:
         self.mode = "instantiated"
         self.time = self.experiment.get("start_time", 0.0)
         self.start_time, self.stop_time, self.tolerance = self.time, None, None
+        # call: setters: value last passed, run at initialization and not yet by a step, run this step
+        self._setter_last, self._setter_fresh, self._setter_called = {}, set(), set()
         self.clock_active = {name: False for name in self.clocks}
         self.clock_interval = {name: c.get("interval") for name, c in self.clocks.items()}
         self.clock_shift = {name: c.get("shift", 0.0) for name, c in self.clocks.items()}
@@ -353,9 +355,10 @@ class Engine:
                 self.obj = self._invoke(getattr(self.entry, create) if create else self.entry,
                                         *self._positional(kind="initpos"), **kwargs)
                 self._run_setup(after_construction=True)
-                self._apply_attributes(clock=None)
+                self._setter_last, self._setter_fresh, self._setter_called = {}, set(), set()
+                self._apply_attributes(clock=None, initial=True)
                 for name in self.clocks:
-                    self._apply_attributes(clock=name)
+                    self._apply_attributes(clock=name, initial=True)
             if self.interface["entry"].get("init_call"):
                 result = self._call(self.time, self.experiment.get("step_size", 0.0))
                 self._read_results(result, have_result=True, update_states=False, missing_ok=True)
@@ -404,6 +407,7 @@ class Engine:
         saved = self.serialize()[1] if self.discard_on and self.interface.get("save_state", True) else None
 
         ticked = []
+        self._setter_called.clear()   # setters run once in this step
 
         def advance():
             """Run one step of the user's code and collect its results.
@@ -552,6 +556,7 @@ class Engine:
                 last = self.clock_last_tick.get(name)
                 step_size = self.time - last if last is not None else (self.clock_interval.get(name) or 0.0)
                 self.clock_last_tick[name] = self.time
+                self._setter_called.clear()   # setters run once in this tick
                 result = self._call(self.time, step_size, clock=name)
                 self._read_results(result, have_result=True, update_states=False, missing_ok=False, clock=name)
                 # the clock's code may also have changed attributes behind unclocked outputs
@@ -1451,23 +1456,42 @@ class Engine:
         objects = any("." in name and "[" not in name for name in bound)
         return assemble_items(bound, self._bound_target(kind, clock) if objects else None)
 
-    def _apply_attributes(self, clock=None):
+    def _apply_attributes(self, clock=None, initial=False):
         """Write variables bound to attributes or setter methods onto the model object.
 
         ``to = "attr:path"`` sets the attribute; ``to = "call:method"`` calls the method with the
         value. Runs after construction and before every call of that clock (or of the step).
 
+        A setter method runs once per model call, as setters that accumulate need (PyTCI's
+        ``give_drug`` adds a dose each call): the first call after initialization skips it when the
+        value hasn't changed since initialization ran it, and the integration stages of one step
+        skip it unless the value changed.
+
         :param clock: only variables of this clock (None: unclocked ones).
         :type clock: str or None
+        :param initial: the run right after construction.
+        :type initial: bool
         """
         for v in self.variables:
             kind = v.get("to", {}).get("kind")
-            if kind in ("attr", "call") and _clock_of(v) == clock:
-                value = self._to_python(v, self.values[v["name"]])
-                if kind == "attr":
-                    set_path(self.obj, v["to"]["name"], value)
-                else:
-                    get_path(self.obj, v["to"]["name"])(value)
+            if kind not in ("attr", "call") or _clock_of(v) != clock:
+                continue
+            if kind == "attr":
+                set_path(self.obj, v["to"]["name"], self._to_python(v, self.values[v["name"]]))
+                continue
+            name, raw = v["name"], self.values[v["name"]]
+            unchanged = name in self._setter_last and self._setter_last[name] == raw
+            fresh = name in self._setter_fresh
+            self._setter_fresh.discard(name)
+            if not initial and unchanged and (fresh or name in self._setter_called):
+                self._setter_called.add(name)
+                continue
+            get_path(self.obj, v["to"]["name"])(self._to_python(v, raw))
+            self._setter_last[name] = copy.deepcopy(raw)
+            if initial:
+                self._setter_fresh.add(name)
+            else:
+                self._setter_called.add(name)
 
     def _call(self, time, step_size, clock=None):
         """Call the model once: the step method/function, or a clock's call.
