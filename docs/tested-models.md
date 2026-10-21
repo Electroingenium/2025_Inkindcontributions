@@ -324,7 +324,6 @@ Still open:
 - **The backend outlives a failed FMU.** FMPy's `simulate_fmu` raises without calling `freeInstance`, so the UniFMU backend (`main.py`, 2 processes) keeps running and holds the importer's stdout/stderr; anything reading it through a pipe hangs. Not fmugen's: [fmpy-limitations.md §1](fmpy-limitations.md#1-simulate_fmu-doesnt-free-the-instance-after-an-fmu-error), and UniFMU's part in [unifmu-limitations.md §2](unifmu-limitations.md#2-the-backend-keeps-running-after-an-fmu-error). Workaround: free the instance yourself (`simulate_fmu(…, fmu_instance=fmu)`, then `fmu.freeInstance()` in a `finally`).
 - **`fmpy simulate` shows no reason for a failure**, only the failed FMI call. The traceback shows with `simulate_fmu(…, debug_logging=True, logger=print)`. With FMI 2, a log message containing `%` (a URL, a traceback, Pyomo's log) can then crash FMPy: [unifmu-limitations.md §12](unifmu-limitations.md#12-fmi-2-log-messages-are-used-as-printf-format-strings).
 - **Module-level scripts can't be models**: a script that solves at import time has nothing to call (GEKKO's distillation example, the ethanol bioreactor). Wrapping its code in a class works.
-- **Methods written without `self`**, to be called on the class (`Model.building(df, …)`), get the instance as their first argument (needforheat).
 - **Windows long paths:** cantera and pybamm failed to import from a venv in a deeply nested folder. The FMU runs with the build venv, so deeply nested project folders may hit this.
 
 Limitations (not bugs):
@@ -337,6 +336,7 @@ Fixed (2026-10-21):
 - `attr:` paths index numpy arrays (`from = "attr:t_core.0"`, `"…-1"`), not only lists and tuples.
 - ufuncs (numba `@vectorize`, psychrolib with numba) get their arguments by position.
 - `init` warns about a model file named `model.py`.
+- Methods written without `self`, to be called on the class (needforheat's `Model.building(df_learn, …)`): `init` detects them and writes `[model] call_on_class = true`, so the runtime calls `Model.building(…)` and `df_learn` is kept as an input instead of being dropped as `self`. needforheat still can't run: its data isn't published.
 - `to = "call:…"` setters run once per model call: the first step skips the call when the value hasn't changed since initialization ran it, and integration stages don't repeat it. [PyTCI](#pytci): 60 steps give 60 doses, and x1, x2, x3, xeo = the model called directly.
 - A `(*args, **kwargs)` constructor that needs its `--start` values as keywords (pyquaternion's `Quaternion(axis=…, angle=…)`) gets them so with `--probe`; before, they always went by position. (The old entry said the step's values went to the constructor; they didn't: `vector` already went to `rotate`.) Without `--probe` they still go by position, as `StateSpace(A, B, C, D)` needs.
 - An array output that has the wrong size before the first step (pyloudnorm's `blockwise_loudness`, empty until the first call) is skipped at initialization instead of failing it; steps still check the size. The pyloudnorm `--probe` config now simulates and matches the direct call.

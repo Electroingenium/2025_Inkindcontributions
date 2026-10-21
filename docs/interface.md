@@ -77,6 +77,7 @@ The notes `config.normalize()` produces (e.g. "the FMU has no outputs") are prin
 | `factory` | bool | The entry is a function called once with the parameters; `call` runs on what it returns |
 | `call` | string or null | Method run on each step. null for functions and when `step` is false |
 | `step` | bool | `false` (`[model] call = false`): `doStep` runs no model code, only clocks do |
+| `call_on_class` | bool | Call `call` on the class, not on the object (a method written without `self`) |
 | `init_call` | bool | Call the model once on leaving initialization mode, so outputs are valid at the start time |
 | `terminate` | string or null | Method called on `fmiTerminate` |
 

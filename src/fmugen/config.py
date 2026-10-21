@@ -65,7 +65,7 @@ SECTIONS = {
 MODEL_KEYS = {
     "entry", "call", "name", "description", "author", "sources", "requirements",
     "constants", "call_constants", "init_call", "terminate", "fmi_version", "setup", "kind", "create",
-    "save_state", "cwd", "globals", "discard_on", "integrate", "substeps", "annotations",
+    "save_state", "cwd", "globals", "discard_on", "integrate", "substeps", "annotations", "call_on_class",
 }
 #: Keys allowed in ``[experiment]`` (the default experiment).
 EXPERIMENT_KEYS = {"start_time", "stop_time", "step_size", "tolerance", "fixed_step"}
@@ -658,6 +658,7 @@ def normalize(config, entry_obj, module_name, sys_path, model_name=None, author=
             "create": create,
             "factory": factory,
             "call": call if is_class and step_call else None,
+            "call_on_class": bool(model.get("call_on_class")) and is_class,
             "step": step_call,
             "init_call": init_call,
             "terminate": model.get("terminate"),

@@ -28,7 +28,7 @@ from fmugen.toml_output import render_toml
 from fmugen.arguments import (
     SCALARS, POSITIONAL_STARTS, START_ERRORS, NO_SIGNATURE, PROBED,
     _number_like, _array_info, _dotted_names, _arguments, _apply_converts,
-    _assign_starts, assumptions, guessed_outputs, unfit_outputs,
+    _assign_starts, assumptions, guessed_outputs, unfit_outputs, class_called,
 )
 from fmugen.probe import (
     ConstantError, _run_setup, _probe_call, _probe_class,
@@ -760,6 +760,11 @@ def _infer_class(cls, call, data, comments, arrays=False, starts=None, create=No
         data["model"]["call"] = method_name
     if not factory and not callable(getattr(cls, method_name, None)):
         raise InterfaceError(f"{cls.__name__} has no method {method_name!r}")
+    on_class = not factory and class_called(cls, method_name)
+    if on_class:
+        data["model"]["call_on_class"] = True
+        comments[("model", "call_on_class")] = (f"{method_name}() has no self: it's called as {cls.__name__}."
+                                                f"{method_name}(...); remove this if it's a normal method")
 
     seen_returns, seen_attrs, obj = set(), set(), None
     if probe:
@@ -771,7 +776,8 @@ def _infer_class(cls, call, data, comments, arrays=False, starts=None, create=No
     else:
         method = inspect.getattr_static(cls, method_name)
         _arguments(getattr(cls, method_name), "inputs", data, comments,
-                   skip_self=not isinstance(method, (staticmethod, classmethod)), constants_key="call_constants",
+                   skip_self=not isinstance(method, (staticmethod, classmethod)) and not on_class,
+                   constants_key="call_constants",
                    arrays=arrays, starts=call_starts)
         _apply_converts(data, converts)
         copies = static.init_copies(cls) if not factory and not create else set()

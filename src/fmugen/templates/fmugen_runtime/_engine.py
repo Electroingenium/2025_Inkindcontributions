@@ -1617,7 +1617,10 @@ class Engine:
         :rtype: callable
         """
         if clock is None:
-            return getattr(self.obj, self.interface["entry"]["call"]) if self.is_class else self.entry
+            if not self.is_class:
+                return self.entry
+            owner = type(self.obj) if self.interface["entry"].get("call_on_class") else self.obj
+            return getattr(owner, self.interface["entry"]["call"])
         call = self.clocks[clock]["call"]
         if ":" in call:
             return resolve_reference(call)

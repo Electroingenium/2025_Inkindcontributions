@@ -91,7 +91,8 @@ def _probe_class(cls, method_name, data, comments, arrays, call_starts, create, 
     except Exception as e:
         comments[("outputs", None)] = f"probe construction failed ({e!r}); outputs below are read from the code"
         if cls is not None:
-            _arguments(getattr(cls, method_name), "inputs", data, comments, skip_self=True,
+            _arguments(getattr(cls, method_name), "inputs", data, comments,
+                       skip_self=not data["model"].get("call_on_class"),
                        constants_key="call_constants", arrays=arrays, starts=call_starts)
             _apply_converts(data, converts)
         return None, set(), set()
@@ -108,12 +109,13 @@ def _probe_class(cls, method_name, data, comments, arrays, call_starts, create, 
         if _writable_attribute(obj, name) and _same(getattr(obj, name), data["parameters"][name].get("start")):
             comments.setdefault(("parameters", name), "kept as an attribute: add variability = \"tunable\" if the step reads it")
 
-    _arguments(method, "inputs", data, comments, skip_self=not factory, constants_key="call_constants",
+    _arguments(method, "inputs", data, comments, skip_self=not factory and not data["model"].get("call_on_class"),
+               constants_key="call_constants",
                arrays=arrays, starts=call_starts)
     _apply_converts(data, converts)
     before, state_before = _numeric_attributes(obj, arrays), _state_bytes(obj)
     try:
-        result = _probe_call(getattr(obj, method_name), data, comments, constants_key="call_constants")
+        result = _probe_call(_step_method(obj, method_name, data), data, comments, constants_key="call_constants")
     except ConstantError:
         raise
     except Exception as e:
@@ -267,7 +269,7 @@ def _check_sizes(obj, method_name, data, comments):
         return
     from fmugen.templates.fmugen_runtime import get_path, pick
     try:
-        result = _call_with_probe_inputs(getattr(obj, method_name), data, "call_constants")
+        result = _call_with_probe_inputs(_step_method(obj, method_name, data), data, "call_constants")
     except Exception:
         return
     for section, name, info in sized:
@@ -700,6 +702,19 @@ def _check_picklable(obj, data, comments):
         data["model"]["save_state"] = False
         comments[("model", "save_state")] = f"the model object can't be pickled ({error}): " \
                                             "the FMU can't save and restore its state"
+
+def _step_method(obj, method_name, data):
+    """The step method to call: bound to ``obj``, or taken from its class with ``call_on_class``.
+
+    :param obj: the model object.
+    :param method_name: the step method.
+    :type method_name: str
+    :param data: the config being inferred.
+    :type data: dict
+    :rtype: callable
+    """
+    return getattr(type(obj) if data["model"].get("call_on_class") else obj, method_name)
+
 
 def _varargs_by_keyword(constructor, init_starts, data, probe):
     """Whether a ``(*args, **kwargs)`` constructor needs its ``--start`` values as keywords.

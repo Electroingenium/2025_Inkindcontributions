@@ -4,6 +4,7 @@ import dataclasses
 import datetime
 import enum
 import inspect
+import types
 import json
 import keyword
 import math
@@ -323,6 +324,26 @@ def _assign_starts(init, method, starts):
             continue  # reported as unused
         target[name] = value
     return init_starts, call_starts
+
+
+def class_called(cls, name):
+    """Whether method ``name`` of ``cls`` is written to be called on the class, without an instance.
+
+    A plain function in the class body whose first parameter isn't ``self``:
+    ``def building(df_learn, ...)``, called as ``Model.building(df, ...)`` (needforheat). Called on
+    an instance, it would get the instance as ``df_learn``. A ``staticmethod`` doesn't need this.
+
+    :param cls: the model class, or None.
+    :param name: the step method.
+    :type name: str
+    :rtype: bool
+    """
+    raw = inspect.getattr_static(cls, name, None) if cls is not None else None
+    if not isinstance(raw, types.FunctionType):
+        return False
+    params = list(inspect.signature(raw).parameters.values())
+    return not params or (params[0].name != "self"
+                          and params[0].kind in (params[0].POSITIONAL_ONLY, params[0].POSITIONAL_OR_KEYWORD))
 
 
 def _keywordless(fn):

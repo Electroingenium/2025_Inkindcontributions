@@ -419,6 +419,28 @@ def test_setter_changed_after_initialization_reaches_the_first_step(tmp_path, ma
     assert fmu.get("y") == 9.0   # 2 at initialization, then the new 7
 
 
+def test_call_on_class_passes_no_instance(tmp_path, make_fmu, adapter):
+    write(tmp_path, "heat.py", '''
+        class Model:
+            def building(load, gain=3.0):
+                return load * gain
+    ''')
+    (tmp_path / "fmugen.toml").write_text(textwrap.dedent('''
+        [model]
+        entry = "heat.py:Model"
+        call = "building"
+        call_on_class = true
+        [inputs]
+        load = { start = 2.0 }
+        [outputs]
+        y = { from = "return" }
+    '''))
+    fmu = adapter(make_fmu(tmp_path))
+    fmu.initialize()
+    assert fmu.fmi2DoStep(0.0, 1.0, False) == OK
+    assert fmu.get("y") == 6.0
+
+
 def test_build_does_not_run_the_model(tmp_path, make_fmu):
     # like tclab: constructing the model needs hardware (or a network) that isn't there at build time
     write(tmp_path, "hw.py", '''

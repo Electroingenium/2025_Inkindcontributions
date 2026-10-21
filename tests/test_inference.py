@@ -695,3 +695,26 @@ def test_star_args_kwargs_constructor_gets_keywords_when_the_probe_needs_them(tm
     data, _ = infer(f"{tmp_path / 'rot.py'}:Turn", call="rotate", starts={"angle": 0.5, "scale": 2.0, "x": 3.0})
     assert data["parameters"]["angle"] == {"start": 0.5} and data["parameters"]["scale"] == {"start": 2.0}
     assert "x" in data["inputs"]
+
+
+@pytest.mark.parametrize("probe", [False, True])
+def test_method_without_self_is_called_on_the_class(tmp_path, probe):
+    # like needforheat's Model.building(df_learn, ...): a plain function in the class body
+    (tmp_path / "heat.py").write_text(textwrap.dedent("""
+        class Model:
+            def building(load=2.0, gain=3.0):
+                return load * gain
+    """))
+    data, comments = infer(f"{tmp_path / 'heat.py'}:Model", call="building", probe=probe)
+    assert data["model"]["call_on_class"] is True and "has no self" in comments[("model", "call_on_class")]
+    assert set(data["inputs"]) == {"load", "gain"}   # load isn't dropped as if it were self
+
+
+def test_normal_method_is_not_called_on_the_class(tmp_path):
+    (tmp_path / "heat.py").write_text(textwrap.dedent("""
+        class Model:
+            def building(self, load=2.0):
+                return load
+    """))
+    data, _ = infer(f"{tmp_path / 'heat.py'}:Model", call="building")
+    assert "call_on_class" not in data["model"]

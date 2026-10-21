@@ -199,6 +199,7 @@
         "create": { "description": "Classmethod that builds the object, e.g. from_pretrained.", "type": ["string", "null"] },
         "factory": { "description": "A function called once that returns the object stepped by call.", "type": "boolean" },
         "call": { "description": "Method run on each step; null for functions and when step is false.", "type": ["string", "null"] },
+        "call_on_class": { "description": "Call the step method on the class, without the object (a method written without self).", "type": "boolean" },
         "step": { "description": "false: doStep runs no model code, only clocks do.", "type": "boolean" },
         "init_call": { "description": "Call the model once when leaving initialization mode.", "type": "boolean" },
         "terminate": { "description": "Method called at fmiTerminate.", "type": ["string", "null"] }
