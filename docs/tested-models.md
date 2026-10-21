@@ -25,7 +25,7 @@ Each model went through:
 3. `fmugen build --capture-output` on each config `init` wrote (and on the committed `fmugen.toml` for the repository examples), then `fmpy.simulate_fmu` for 3 s with 1 s outputs
 4. `fmugen build --capture-output --compile pyinstaller` on the best config (the `--probe` one when it simulated), then the same simulation
 
-**FMI 2 by default.** A model was run with FMI 3 only when no FMI 2 config simulated ("2 → 3" in the tables). Errors were recorded first and fixed afterwards; rows show the result after the fixes, with the date when it is later than the main run.
+**FMI 2 by default.** A model was run with FMI 3 only when no FMI 2 config simulated; the results below combine both. Errors were recorded first and fixed afterwards; rows show the result after the fixes, with the date when it is later than the main run.
 
 Setup: Windows 11, Python 3.13, `uv` venvs, fmugen editable from this checkout, FMPy 0.3.32, PyInstaller 6.22.3, UniFMU 0.14. The library and neural-network models were run on 2026-10-09 at `0e0b670`, with fixes and reruns up to 2026-10-13; the GEKKO models on 2026-10-13 and 2026-10-14 (gekko 1.3.2, local solver).
 
@@ -35,18 +35,25 @@ Columns: **init / init --probe**: config written. **build + simulate**: per conf
 
 ## Summary
 
-Libraries, neural networks and repository examples (116 `init` runs; the 2 FMI 3 examples have no `init` run):
+Libraries, neural networks and repository examples: 118 models, each with an `init` run. FMI 2 and FMI 3 results are combined: a model counts as passing if it passes with either.
 
 | | Count |
 |---|---|
-| `init` writes a config | 111 |
-| `init --probe` writes a config | 115 |
-| **Simulate correctly with FMI 2** (at least one config) | **108** |
-| Pass only with FMI 3 | 0 |
-| Fail with FMI 2 and FMI 3 | 10 |
+| `init` writes a config | 113 |
+| `init --probe` writes a config | 117 |
+| **Simulates correctly** (a config from `init`, `init --probe` or the repository) | **108** |
+| Fails | 10 |
 | **Compiled FMU simulates** | **108**: every model that simulates uncompiled |
 
-The code-only config is enough for about 60 % of models. The rest return arrays, tuples, strings or objects, which only `--probe` types correctly; the error message points to it.
+How far each step gets:
+
+| Config | Simulates correctly | Success |
+|---|---|---|
+| `init` (code only) | 67 of 118 | 57 % |
+| `init --probe` (or `init`, when it already works; or the repository's config) | 108 of 118 | 92 % |
+| `init --probe` + a hand-written config | 112 of 118 | 95 % |
+
+The code-only config fails mostly on models that return arrays, tuples, strings or objects, which only `--probe` types correctly; the error message points to it. The hand configs add `PropsSI`, `fluids.units` ×2 and metpy ([Hand configs](#hand-configs)); they were checked on 2026-10-06/07, not in the 2026-10-09 rerun. The other 6 have no working config yet.
 
 The 10 failures: `PropsSI` and sgp4 (C built-ins with no signature: hand config needed), `fluids.units` ×2 and metpy (pint quantities: hand config needed), pyet (needs pandas Series), psychrolib (a numba ufunc takes no keyword arguments), simpy (`until` not bound to time), pyquaternion (`*args` constructor gets the step's arguments), nashpy (the method returns a generator).
 
@@ -56,13 +63,13 @@ GEKKO: 10 of 16 simulate correctly (CGE once its `model.py` is renamed). The oth
 
 ## Repository examples
 
-| Model | FMI | init | init --probe | build + simulate (per config) | compiled (PyInstaller) + simulate | Notes |
-|---|---|---|---|---|---|---|
-| [examples/psychrometry](../examples/psychrometry) (`compute_balances_simplified`) | 2 | ✓ | ✓ | plain ✓ / probe ✓ / repo ✓ | repo: ✓, 128.7 MB | 6 outputs. `init -o` outside the model's folder now stops with a `fmugen: error` naming where to write the config. |
-| [examples/simple_pid](../examples/simple_pid) (`simple_pid:PID`) | 2 | ✓ | ✓ | plain ✓ / probe ✓ / repo ✓ | probe: ✓, 128.7 MB |  |
-| [examples/rc_building](../examples/rc_building) (`Zone`) | 2 | ✓ | ✓ | plain ✓ / probe ✓ / repo ✓† | repo: ✓†, 128.7 MB | †The repo config fixes `step_size = 3600`, so the generic 1 s run is refused (correct); simulated at 3600 s steps, plain and compiled give the same values. |
-| [examples/kalman](../examples/kalman) (`filterpy.kalman:KalmanFilter`; repo config FMI 3: structural parameters, clock) | 2 / 3 | ✓ | ✓ | plain ✓ / probe ✓ (FMI 2) / repo ✓ | repo: ✓ (rebuilt 2026-10-13) | Plain and probe: the `filterpy.kalman:KalmanFilter` FMI 2 configs simulate. The repo config fails the generic run (the clock is never ticked); `examples/kalman/run.py` runs it correctly, compiled too. |
-| [examples/sampled_pid](../examples/sampled_pid) (FMI 3: clocks) | 3 | — | — | repo ✓ | repo: ✓, 128.7 MB |  |
+| Model | init | init --probe | build + simulate (per config) | compiled (PyInstaller) + simulate | Notes |
+|---|---|---|---|---|---|
+| [examples/psychrometry](../examples/psychrometry) (`compute_balances_simplified`) | ✓ | ✓ | plain ✓ / probe ✓ / repo ✓ | repo: ✓, 128.7 MB | 6 outputs. `init -o` outside the model's folder now stops with a `fmugen: error` naming where to write the config. |
+| [examples/simple_pid](../examples/simple_pid) (`simple_pid:PID`) | ✓ | ✓ | plain ✓ / probe ✓ / repo ✓ | probe: ✓, 128.7 MB |  |
+| [examples/rc_building](../examples/rc_building) (`Zone`) | ✓ | ✓ | plain ✓ / probe ✓ / repo ✓† | repo: ✓†, 128.7 MB | †The repo config fixes `step_size = 3600`, so the generic 1 s run is refused (correct); simulated at 3600 s steps, plain and compiled give the same values. |
+| [examples/kalman](../examples/kalman) (`filterpy.kalman:KalmanFilter`; repo config FMI 3: structural parameters, clock) | ✓ | ✓ | plain ✓ / probe ✓ / repo ✓ | repo: ✓ (rebuilt 2026-10-13) | Plain and probe: the `filterpy.kalman:KalmanFilter` FMI 2 configs simulate. The repo config fails the generic run (the clock is never ticked); `examples/kalman/run.py` runs it correctly, compiled too. |
+| [examples/sampled_pid](../examples/sampled_pid) (`simple_pid:PID`; repo config: clocks) | ✓ | ✓ | plain ✓ / probe ✓ / repo ✓ | repo: ✓, 128.7 MB | 2026-10-21: the repo config driven by `run.py` (clock ticked every 0.1 s, first-order plant) brings the output to 0.78 → 1.0 setpoint; the `init` and `init --probe` configs of `simple_pid:PID` build and simulate. |
 
 ---
 
@@ -70,118 +77,118 @@ GEKKO: 10 of 16 simulate correctly (CGE once its `model.py` is renamed). The oth
 
 Errors such as `y is an array of shape […], not a single value` in the code-only config are expected: `--probe` finds the shape.
 
-| Model | FMI | init | init --probe | build + simulate (per config) | compiled (PyInstaller) + simulate | Notes |
-|---|---|---|---|---|---|---|
-| `ahrs.filters:Madgwick` | 2 | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓ (recompiled 2026-10-13) |  |
-| `ahrs.filters:Mahony` | 2 | ✓ | ✓ | plain build ✓, sim ✗ / probe ✓ | probe: ✓ (recompiled 2026-10-13) | TypeError: b is an array of shape [3], not a single value: give it dimensions = [3] (FMI 3) or read one element (from = "...:0"); fmugen init --probe finds them |
-| `ambiance:Atmosphere` | 2 | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 101.5 MB |  |
-| `anastruct:SystemElements` | 2 | ✓ | ✓ | plain build ✓, sim ✗ / probe ✓ | probe: ✓, 52.5 MB | TypeError: buckling_factor is None |
-| `antropy:perm_entropy` | 2 | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 105.7 MB |  |
-| `astral.sun:elevation` | 2 | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 101.9 MB |  |
-| `astropy.cosmology:FlatLambdaCDM` | 2 | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 37.7 MB |  |
-| `Bio.SeqUtils:gc_fraction` | 2 | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 29.8 MB |  |
-| `blackscholes:BlackScholesCall` | 2 | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 24.7 MB |  |
-| `cantera:Solution` | 2 | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓ (recompiled 2026-10-13) |  |
-| `chaospy:Normal` | — | — | — | — | — | Not installable on Windows / Python 3.13 (2026-10-07): its dependency `numpoly` has no wheel and needs MSVC. Replaced by openturns. |
-| `chemicals.vapor_pressure:Antoine` | 2 | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 134.6 MB |  |
-| `colour.temperature:CCT_to_xy_CIE_D` | 2 | ✓ | ✓ | plain build ✓, sim ✗ / probe ✓ | probe: ✓, 113.1 MB | TypeError: y is an array of shape [2], not a single value: give it dimensions = [2] (FMI 3) or read one element (from = "...:0"); fmugen init --probe finds them |
-| `commpy.modulation:QAMModem` | 2 | ✓ | ✓ | plain build ✓, sim ✗ / probe ✓ | probe: ✓, 78.2 MB | TypeError: y is an array of shape [2], not a single value: give it dimensions = [2] (FMI 3) or read one element (from = "...:0"); fmugen init --probe finds them |
-| `control:StateSpace` | 2 | ✓ | ✓ | plain build ✓, sim ✗ / probe ✓ | probe: ✓ (2026-10-13) | y = (0, −2) = A·x with `--start x=[1.0, 0.0] --start u=[0.0]`. Code-only: the array result is assumed a single Real. |
-| `CoolProp.CoolProp:PropsSI` | 2 → 3 | ✓ | ✓ | plain ✗ / probe ✗ | probe: ✗ | C extension with no signature: no variables inferred. Needs a hand config ([below](#hand-configs)). |
-| `cv2:KalmanFilter` | 2 | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 66.3 MB |  |
-| `dysts:Lorenz` (`call = "rhs"`, `[model] integrate`) | 2, 3 | — | — | ✓ | — | 2026-10-14: dysts 0.96's `Lorenz().rhs(X, t)` integrated by the FMU, 20 steps of 0.05 s, against `solve_ivp` at 1e-11: largest difference 1.3 × 10⁻⁶ with `"scipy:DOP853"` (FMI 3) and 3.3 × 10⁻⁸ with `"rk4"`, 50 substeps (FMI 2). |
-| `electricpy:powerset` | 2 | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 71.2 MB |  |
-| `erfa:gmst06` | 2 | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 101.8 MB |  |
-| `filterpy.common:Q_discrete_white_noise` | 2 | ✓ | ✓ | plain build ✓, sim ✗ / probe ✓ | probe: ✓, 128.8 MB | TypeError: y is an array of shape [2, 2], not a single value: give it dimensions = [2, 2] (FMI 3) or read one element (from = "...:0"); fmugen init --probe finds them |
-| `filterpy.gh:GHFilter` | 2 | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 128.8 MB |  |
-| `fluids.core:Reynolds` | 2 | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 133.8 MB |  |
-| `fluids.friction:friction_factor` | 2 | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 133.8 MB |  |
-| `fluids.units:head_from_P` | 2 → 3 | ✓ | ✓ | plain build ✓, sim ✗ / probe build ✓, sim ✗ | probe: build ✓, sim ✗, 133.8 MB | FMI 2: TypeError: 100000.0 has no quantity — FMI 3: TypeError: 100000.0 has no quantity |
-| `fluids.units:Reynolds` | 2 → 3 | ✓ | ✓ | plain build ✓, sim ✗ / probe build ✓, sim ✗ | probe: build ✓, sim ✗, 133.8 MB | FMI 2: TypeError: 1.0 has no quantity — FMI 3: TypeError: 1.0 has no quantity |
-| `gsw:rho` | 2 | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 103.3 MB |  |
-| `gymnasium.envs.classic_control.cartpole:CartPoleEnv` | 2 | ✓ | ✓ | plain build ✓, sim ✗ / probe ✓ | probe: ✓, 135.6 MB | ValueError: 147626572821865577400907706530850663577 is out of range for Integer |
-| `gymnasium.envs.classic_control.pendulum:PendulumEnv` | 2 | ✓ | ✓ | plain build ✓, sim ✗ / probe ✓ | probe: ✓, 135.6 MB | ValueError: 172939238529957257140098871392319507192 is out of range for Integer |
-| `haversine:haversine` | 2 | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 24.6 MB |  |
-| `heartpy:process` | 2 | ✓ | ✓ | probe ✓ | probe: ✓ (2026-10-13) | With its `data/data.csv` given by full path: 20 variables, bpm 58.9 (compiled too). Imports `pkg_resources`: needs `setuptools<81`. |
-| `highway_env.envs.highway_env:HighwayEnv` | 2 | ✓ | ✓ | plain build ✓, sim ✗ / probe ✓ | probe: ✓, 135.8 MB | TypeError: y0 is an array of shape [5, 5], not a single value: give it dimensions = [5, 5] (FMI 3) or read one element (from = "...:0"); fmugen init --probe finds them |
-| `hplib.hplib:HeatPump` | 2 | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓ (recompiled 2026-10-13) |  |
-| `ht.conv_internal:Nu_conv_internal` | 2 | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 134.1 MB |  |
-| `ht.hx:effectiveness_from_NTU` | 2 | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 134.1 MB |  |
-| `iapws.iapws97:_TSat_P` | 2 | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓ (recompiled 2026-10-13) | 2026-10-14: with `discard_on = ["builtins:NotImplementedError"]`, a step at 30 MPa returns `discard`; the output keeps 453.04 K, and the step retried at 2 MPa succeeds (485.53 K). |
-| `iapws:IAPWS97` | 2 | ✓ | ✓ | plain build ✓, sim ✗ / probe ✓ | probe: ✓ (recompiled 2026-10-13) | TypeError: float() argument must be a string or a real number, not 'dict' |
-| `impedance.models.circuits:Randles` | 2 | ✓ | ✓ | plain build ✓, sim ✗ / probe ✓ | probe: ✓, 103.7 MB | TypeError: y is an array of shape [4], not a single value: give it dimensions = [4] (FMI 3) or read one element (from = "...:0"); fmugen init --probe finds them |
-| `joblib:load` | 2 | ✗ | ✓ | probe ✓ | probe: ✓ (recompiled 2026-10-13) | fmugen: error: --start names that are not arguments of the model: ['X'] |
-| `librosa:hz_to_mel` | 2 | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 108.5 MB |  |
-| `mendeleev:element` | 2 | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓ (recompiled 2026-10-13) | `--probe`: 79 variables; Fe gives atomic_number 26, atomic_weight 55.845. |
-| `mesa.examples:BoltzmannWealth` | 2 | ✓ | ✓ | plain ✗ / probe ✓ | probe: ✓, 111.4 MB | fmugen: error: the config defines no FMU variables: add [inputs]/[parameters] and [outputs] (the model's arguments and results could not be inferred) |
-| `meteocalc:heat_index` | 2 | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 24.6 MB |  |
-| `metpy.calc:dewpoint_from_relative_humidity` | 2 → 3 | ✓ | ✓ | plain build ✓, sim ✗ / probe build ✓, sim ✗ | probe: build ✓, sim ✗, 111.0 MB | FMI 2: ValueError: This function changed in version(s) ['1.0']--double check that the function is being called properly. — FMI 3: ValueError: This function changed in version(s) ['1.0']--double check that the function is being called properly. |
-| `nashpy:Game` | 2 → 3 | ✓ | ✓ | plain build ✓, sim ✗ / probe: no outputs | — | 0.0.43 has no `is_zero_sum`; with `support_enumeration` the method returns a generator: `--probe` finds no outputs, the code-only config fails (`float() argument must be … not 'generator'`). |
-| `neurokit2:ecg_simulate` | 2 | ✓ | ✓ | plain build ✓, sim ✗ / probe ✓ | probe: ✓, 114.1 MB | TypeError: y is an array of shape [100], not a single value: give it dimensions = [100] (FMI 3) or read one element (from = "...:0"); fmugen init --probe finds them |
-| `numdifftools:Derivative` | 2 | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 52.3 MB |  |
-| `numpy_financial:pmt` | 2 | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 24.7 MB |  |
-| `obspy.geodetics:gps2dist_azimuth` | 2 | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 77.0 MB |  |
-| `openap:Thrust` | 2 | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓ (recompiled 2026-10-13) |  |
-| `openturns:Normal` | 2 | ✓ | ✓ | plain build ✓, sim ✗ / probe ✓ | probe: ✓, 79.9 MB | TypeError: Wrong number or type of arguments for overloaded function 'new_Normal'. |
-| `pandapower:runpp` | 2 | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 127.9 MB |  |
-| `pedon:Genuchten` | 2 | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 83.7 MB |  |
-| `ppigrf:igrf` | 2 | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 101.5 MB |  |
-| `psychrolib:GetHumRatioFromRelHum` | 2 → 3 | ✓ | ✓ | plain build ✓, sim ✗ / probe build ✓, sim ✗ | probe: build ✓, sim ✗, 128.7 MB | FMI 2: OSError('exception: access violation reading 0x00000000000009AA') — FMI 3: TypeError: unexpected keyword arguments to ufunc: 'Pressure', 'RelHum', 'TDryBulb' |
-| pvlib `get_total_irradiance` → `sapm_cell` → `pvwatts_dc` (**composite FMU**) | 2, 3 | ✓ (each part) | ✓ (each part) | ✓ | ✓ (2026-10-14) | 2026-10-14: the three parts made with `init --probe`, built with `--compile pyinstaller`: the FMU holds no `.py` file, and three weather cases give values identical to calling pvlib in a chain. |
-| `pvlib.atmosphere:alt2pres` | 2 | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 133.0 MB |  |
-| `pvlib.iotools:read_tmy3` | 2 | ✓ | ✓ | plain build ✓, sim ✗ / probe ✓ | probe: ✓, 133.0 MB | TypeError: float() argument must be a string or a real number, not 'DataFrame' |
-| `pvlib.irradiance:aoi` | 2 | ✓ | ✓ | plain build ✓, sim ✗ / probe ✓ | probe: ✓, 133.0 MB | Exception('Failed to instantiate model') |
-| `pvlib.pvsystem:pvwatts_dc` | 2 | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 133.0 MB |  |
-| `pvlib.solarposition:get_solarposition` | 2 | ✓ | ✓ | plain build ✓, sim ✗ / probe ✓ | probe: ✓, 133.0 MB | TypeError: float() argument must be a string or a real number, not 'DataFrame' |
-| `pvlib.temperature:sapm_cell` | 2 | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 133.0 MB |  |
-| `py_vollib.black_scholes:black_scholes` | 2 | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓ (recompiled 2026-10-13) |  |
-| `pybamm:Simulation` | 2 | ✓ | ✓ | plain build ✓, sim ✗ / probe ✓ | probe: ✓ (recompiled 2026-10-13) | TypeError: float() argument must be a string or a real number, not 'Solution' |
-| `PyCO2SYS:sys` | 2 | ✓ | ✓ | plain build ✓, sim ✗ / probe ✓ | probe: ✓, 24.8 MB | TypeError: float() argument must be a string or a real number, not 'dict' |
-| `pyet:pm_fao56` | 2 → 3 | ✓ | ✓ | plain build ✓, sim ✗ / probe build ✓, sim ✗ | probe: build ✓, sim ✗, 111.1 MB | FMI 2: AttributeError: 'float' object has no attribute 'time' — FMI 3: AttributeError: 'float' object has no attribute 'time' |
-| `pyfluids:Fluid` | 2 | ✓ | ✓ | plain build ✓, sim ✗ / probe ✓ | probe: ✓, 29.4 MB | ValueError: Invalid or not defined state! |
-| `pygfunction.heat_transfer:finite_line_source` | 2 | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 52.8 MB |  |
-| `pykalman:KalmanFilter` | 2 | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 52.5 MB |  |
-| `pyloudnorm:Meter` | 2 | ✓ | ✓ | plain ✓ / probe build ✓, sim ✗ | plain: ✓, 53.2 MB | ValueError: blockwise_loudness has 0 values, expected 17 |
-| `pymap3d:geodetic2enu` | 2 | ✓ | ✓ | plain build ✓, sim ✗ / probe ✓ | probe: ✓, 24.7 MB | TypeError: y is a tuple of shape [3], not a single value: give it dimensions = [3] (FMI 3) or read one element (from = "...:0"); fmugen init --probe finds them |
-| `pymsis:calculate` | 2 | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓ (recompiled 2026-10-13) |  |
-| `pymunk:Space` | 2 | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 26.3 MB |  |
-| `pyorbital.astronomy:sun_zenith_angle` | 2 | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 25.0 MB |  |
-| `pyproj:Transformer` | 2 | ✓ | ✓ | plain build ✓, sim ✗ / probe ✓ | probe: ✓, 107.9 MB | TypeError: y is a tuple of shape [2], not a single value: give it dimensions = [2] (FMI 3) or read one element (from = "...:0"); fmugen init --probe finds them |
-| `pyquaternion:Quaternion` | 2 → 3 | ✓ | ✓ | plain build ✓, sim ✗ / probe build ✓, sim ✗ | probe: build ✓, sim ✗, 24.6 MB | FMI 2: ValueError: Unexpected number of elements in sequence. Got: 2, Expected: 4. — FMI 3: ValueError: Unexpected number of elements in sequence. Got: 2, Expected: 4. |
-| `pyromat:get` | 2 | ✗ | ✓ | probe ✓ | probe: ✓ (recompiled 2026-10-13) | fmugen: error: --start names that are not arguments of the model: ['T'] |
-| `pysolar.solar:get_altitude` | 2 | ✓ | ✓ | plain build ✓, sim ✗ / probe ✓ | probe: ✓, 101.5 MB | pysolar.tzinfo_check.NoTimeZoneInfoError: datetime value '2026-10-09 00:00:00' given for arg 'when' should be made timezone-aware. |
-| `PyTCI.models.propofol:Marsh` | 2 | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 101.5 MB |  |
-| `pyteomics.mass:calculate_mass` | 2 | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 28.4 MB |  |
-| `pythermalcomfort.models.jos3:JOS3` | 2 | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 128.9 MB |  |
-| `pythermalcomfort.models:pmv_ppd_iso` | 2 | ✓ | ✓ | plain build ✓, sim ✗ / probe ✓ | probe: ✓, 97.0 MB | TypeError: tsv is a string ('Neutral'), not a Real: set type = "String" for it in the config |
-| `pythermalcomfort.models:sports_heat_stress_risk` | 2 | ✓ | ✓ | plain build ✓, sim ✗ / probe ✓ | probe: ✓, 128.9 MB | ValueError: could not convert string to float: 'Increase frequency and/or duration of rest breaks' |
-| `pywt:dwt` | 2 | ✓ | ✓ | plain build ✓, sim ✗ / probe ✓ | probe: ✓, 25.2 MB | TypeError: y0 is an array of shape [9], not a single value: give it dimensions = [9] (FMI 3) or read one element (from = "...:0"); fmugen init --probe finds them |
-| `pyxirr:npv` | 2 | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 25.0 MB |  |
-| `quantecon:LinearStateSpace` | 2 | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 98.8 MB |  |
-| `QuantLib:blackFormula` | 2 | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 37.2 MB |  |
-| `radioactivedecay:Inventory` | 2 | ✓ | ✓ | plain build ✓, sim ✗ / probe ✓ | probe: ✓ (recompiled 2026-10-13) | TypeError: float() argument must be a string or a real number, not 'Inventory' |
-| `rainflow:count_cycles` | 2 | ✓ | ✓ | plain build ✓, sim ✗ / probe ✓ | probe: ✓, 24.6 MB | TypeError: y is a list of shape [4], not a single value: give it dimensions = [4] (FMI 3) or read one element (from = "...:0"); fmugen init --probe finds them |
-| `rdkit.Chem.Descriptors:MolWt` | 2 | ✓ | ✓ | plain ✗ / probe ✓ | probe: ✓, 44.7 MB | fmugen: error: the config defines no FMU variables: add [inputs]/[parameters] and [outputs] (the model's arguments and results could not be inferred) |
-| `river.linear_model:LinearRegression` | 2 | ✓ | ✓ | plain build ✓, sim ✗ / probe ✓ | probe: ✓, 102.9 MB | LookupError: max_cum_l1: cannot read attribute 'max_cum_l1' (AttributeError("'LinearRegression' object has no attribute 'max_cum_l1'")) |
-| `roboticstoolbox.models.DH:Panda` | 2 | ✓ | ✓ | plain build ✓, sim ✗ / probe ✓ | probe: ✓ (recompiled 2026-10-13) | TypeError: float() argument must be a string or a real number, not 'SE3' |
-| `scipy.signal:lfilter` | 2 | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 53.2 MB |  |
-| `seirsplus.models:SEIRSModel` | 2 | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 111.2 MB |  |
-| `sgp4.api:Satrec` | 2 → 3 | ✗ | ✗ |  | — | C built-ins with no signature: `--start fr, jd, line1, line2: cannot tell which arguments these are …`. Needs a hand config. |
-| `shapely:Point` | 2 | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 26.2 MB |  |
-| `simglucose.patient.t1dpatient:T1DPatient` | 2 | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓ (recompiled 2026-10-13) |  |
-| `simpy:Environment` | 2 → 3 | ✓ | ✓ | plain build ✓, sim ✗ / probe build ✓, sim ✗ | probe: build ✓, sim ✗, 24.7 MB | FMI 2: ValueError: until (1.0) must be greater than the current simulation time — FMI 3: ValueError: until (1.0) must be greater than the current simulation time |
-| `skfuzzy:interp_membership` | 2 | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 52.3 MB |  |
-| `skimage.color:rgb2hsv` | 2 | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 52.8 MB |  |
-| `statsmodels.stats.proportion:proportion_confint` | 2 | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 71.3 MB |  |
-| `tclab:TCLabModel` | 2 | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 128.8 MB |  |
-| `tellurium:loada` | 2 | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓ (recompiled 2026-10-13) |  |
-| `thermo:Chemical` | 2 | ✓ | ✓ | plain build ✓, sim ✗ / probe ✓ | probe: ✓ (recompiled 2026-10-13) | TypeError: CAS is a string ('7732-18-5'), not a Real: set type = "String" for it in the config |
-| `thermofeel:calculate_heat_index_simplified` | 2 | ✓ | ✓ | plain build ✓, sim ✗ / probe ✓ | probe: ✓, 24.7 MB | ValueError: Calling nonzero on 0d arrays is not allowed. Use np.atleast_1d(scalar).nonzero() instead. If the context of this error is of the form `arr[nonzero(cond)]`, just use `arr[cond]`. |
-| `timezonefinder:TimezoneFinder` | 2 | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 58.0 MB |  |
-| `tmm:coh_tmm` | 2 | ✓ | ✓ | plain build ✓, sim ✗ / probe ✓ | probe: ✓, 24.6 MB | TypeError: kz_list is an array of shape [3], not a single value: give it dimensions = [3] (FMI 3) or read one element (from = "...:0"); fmugen init --probe finds them |
-| `transforms3d.euler:euler2quat` | 2 | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 24.7 MB |  |
-| `uncertainties:ufloat` | 2 | ✓ | ✓ | plain build ✓, sim ✗ / probe ✓ | probe: ✓, 24.7 MB | TypeError: can't convert an affine function (<class 'uncertainties.core.Variable'>) to float; use x.nominal_value |
-| `windpowerlib.wind_speed:logarithmic_profile` | 2 | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 101.5 MB |  |
+| Model | init | init --probe | build + simulate (per config) | compiled (PyInstaller) + simulate | Notes |
+|---|---|---|---|---|---|
+| `ahrs.filters:Madgwick` | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓ (recompiled 2026-10-13) |  |
+| `ahrs.filters:Mahony` | ✓ | ✓ | plain build ✓, sim ✗ / probe ✓ | probe: ✓ (recompiled 2026-10-13) | TypeError: b is an array of shape [3], not a single value: give it dimensions = [3] (FMI 3) or read one element (from = "...:0"); fmugen init --probe finds them |
+| `ambiance:Atmosphere` | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 101.5 MB |  |
+| `anastruct:SystemElements` | ✓ | ✓ | plain build ✓, sim ✗ / probe ✓ | probe: ✓, 52.5 MB | TypeError: buckling_factor is None |
+| `antropy:perm_entropy` | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 105.7 MB |  |
+| `astral.sun:elevation` | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 101.9 MB |  |
+| `astropy.cosmology:FlatLambdaCDM` | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 37.7 MB |  |
+| `Bio.SeqUtils:gc_fraction` | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 29.8 MB |  |
+| `blackscholes:BlackScholesCall` | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 24.7 MB |  |
+| `cantera:Solution` | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓ (recompiled 2026-10-13) |  |
+| `chaospy:Normal` | — | — | — | — | Not installable on Windows / Python 3.13 (2026-10-07): its dependency `numpoly` has no wheel and needs MSVC. Replaced by openturns. |
+| `chemicals.vapor_pressure:Antoine` | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 134.6 MB |  |
+| `colour.temperature:CCT_to_xy_CIE_D` | ✓ | ✓ | plain build ✓, sim ✗ / probe ✓ | probe: ✓, 113.1 MB | TypeError: y is an array of shape [2], not a single value: give it dimensions = [2] (FMI 3) or read one element (from = "...:0"); fmugen init --probe finds them |
+| `commpy.modulation:QAMModem` | ✓ | ✓ | plain build ✓, sim ✗ / probe ✓ | probe: ✓, 78.2 MB | TypeError: y is an array of shape [2], not a single value: give it dimensions = [2] (FMI 3) or read one element (from = "...:0"); fmugen init --probe finds them |
+| `control:StateSpace` | ✓ | ✓ | plain build ✓, sim ✗ / probe ✓ | probe: ✓ (2026-10-13) | y = (0, −2) = A·x with `--start x=[1.0, 0.0] --start u=[0.0]`. Code-only: the array result is assumed a single Real. |
+| `CoolProp.CoolProp:PropsSI` | ✓ | ✓ | plain ✗ / probe ✗ | probe: ✗ | C extension with no signature: no variables inferred. Needs a hand config ([below](#hand-configs)). |
+| `cv2:KalmanFilter` | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 66.3 MB |  |
+| `dysts:Lorenz` (`call = "rhs"`, `[model] integrate`) | — | — | ✓ | — | 2026-10-14: dysts 0.96's `Lorenz().rhs(X, t)` integrated by the FMU, 20 steps of 0.05 s, against `solve_ivp` at 1e-11: largest difference 1.3 × 10⁻⁶ with `"scipy:DOP853"` (FMI 3) and 3.3 × 10⁻⁸ with `"rk4"`, 50 substeps (FMI 2). |
+| `electricpy:powerset` | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 71.2 MB |  |
+| `erfa:gmst06` | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 101.8 MB |  |
+| `filterpy.common:Q_discrete_white_noise` | ✓ | ✓ | plain build ✓, sim ✗ / probe ✓ | probe: ✓, 128.8 MB | TypeError: y is an array of shape [2, 2], not a single value: give it dimensions = [2, 2] (FMI 3) or read one element (from = "...:0"); fmugen init --probe finds them |
+| `filterpy.gh:GHFilter` | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 128.8 MB |  |
+| `fluids.core:Reynolds` | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 133.8 MB |  |
+| `fluids.friction:friction_factor` | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 133.8 MB |  |
+| `fluids.units:head_from_P` | ✓ | ✓ | plain build ✓, sim ✗ / probe build ✓, sim ✗ | probe: build ✓, sim ✗, 133.8 MB | TypeError: 100000.0 has no quantity |
+| `fluids.units:Reynolds` | ✓ | ✓ | plain build ✓, sim ✗ / probe build ✓, sim ✗ | probe: build ✓, sim ✗, 133.8 MB | TypeError: 1.0 has no quantity |
+| `gsw:rho` | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 103.3 MB |  |
+| `gymnasium.envs.classic_control.cartpole:CartPoleEnv` | ✓ | ✓ | plain build ✓, sim ✗ / probe ✓ | probe: ✓, 135.6 MB | ValueError: 147626572821865577400907706530850663577 is out of range for Integer |
+| `gymnasium.envs.classic_control.pendulum:PendulumEnv` | ✓ | ✓ | plain build ✓, sim ✗ / probe ✓ | probe: ✓, 135.6 MB | ValueError: 172939238529957257140098871392319507192 is out of range for Integer |
+| `haversine:haversine` | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 24.6 MB |  |
+| `heartpy:process` | ✓ | ✓ | probe ✓ | probe: ✓ (2026-10-13) | With its `data/data.csv` given by full path: 20 variables, bpm 58.9 (compiled too). Imports `pkg_resources`: needs `setuptools<81`. |
+| `highway_env.envs.highway_env:HighwayEnv` | ✓ | ✓ | plain build ✓, sim ✗ / probe ✓ | probe: ✓, 135.8 MB | TypeError: y0 is an array of shape [5, 5], not a single value: give it dimensions = [5, 5] (FMI 3) or read one element (from = "...:0"); fmugen init --probe finds them |
+| `hplib.hplib:HeatPump` | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓ (recompiled 2026-10-13) |  |
+| `ht.conv_internal:Nu_conv_internal` | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 134.1 MB |  |
+| `ht.hx:effectiveness_from_NTU` | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 134.1 MB |  |
+| `iapws.iapws97:_TSat_P` | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓ (recompiled 2026-10-13) | 2026-10-14: with `discard_on = ["builtins:NotImplementedError"]`, a step at 30 MPa returns `discard`; the output keeps 453.04 K, and the step retried at 2 MPa succeeds (485.53 K). |
+| `iapws:IAPWS97` | ✓ | ✓ | plain build ✓, sim ✗ / probe ✓ | probe: ✓ (recompiled 2026-10-13) | TypeError: float() argument must be a string or a real number, not 'dict' |
+| `impedance.models.circuits:Randles` | ✓ | ✓ | plain build ✓, sim ✗ / probe ✓ | probe: ✓, 103.7 MB | TypeError: y is an array of shape [4], not a single value: give it dimensions = [4] (FMI 3) or read one element (from = "...:0"); fmugen init --probe finds them |
+| `joblib:load` | ✗ | ✓ | probe ✓ | probe: ✓ (recompiled 2026-10-13) | fmugen: error: --start names that are not arguments of the model: ['X'] |
+| `librosa:hz_to_mel` | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 108.5 MB |  |
+| `mendeleev:element` | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓ (recompiled 2026-10-13) | `--probe`: 79 variables; Fe gives atomic_number 26, atomic_weight 55.845. |
+| `mesa.examples:BoltzmannWealth` | ✓ | ✓ | plain ✗ / probe ✓ | probe: ✓, 111.4 MB | fmugen: error: the config defines no FMU variables: add [inputs]/[parameters] and [outputs] (the model's arguments and results could not be inferred) |
+| `meteocalc:heat_index` | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 24.6 MB |  |
+| `metpy.calc:dewpoint_from_relative_humidity` | ✓ | ✓ | plain build ✓, sim ✗ / probe build ✓, sim ✗ | probe: build ✓, sim ✗, 111.0 MB | ValueError: This function changed in version(s) ['1.0']--double check that the function is being called properly. |
+| `nashpy:Game` | ✓ | ✓ | plain build ✓, sim ✗ / probe: no outputs | — | 0.0.43 has no `is_zero_sum`; with `support_enumeration` the method returns a generator: `--probe` finds no outputs, the code-only config fails (`float() argument must be … not 'generator'`). |
+| `neurokit2:ecg_simulate` | ✓ | ✓ | plain build ✓, sim ✗ / probe ✓ | probe: ✓, 114.1 MB | TypeError: y is an array of shape [100], not a single value: give it dimensions = [100] (FMI 3) or read one element (from = "...:0"); fmugen init --probe finds them |
+| `numdifftools:Derivative` | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 52.3 MB |  |
+| `numpy_financial:pmt` | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 24.7 MB |  |
+| `obspy.geodetics:gps2dist_azimuth` | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 77.0 MB |  |
+| `openap:Thrust` | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓ (recompiled 2026-10-13) |  |
+| `openturns:Normal` | ✓ | ✓ | plain build ✓, sim ✗ / probe ✓ | probe: ✓, 79.9 MB | TypeError: Wrong number or type of arguments for overloaded function 'new_Normal'. |
+| `pandapower:runpp` | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 127.9 MB |  |
+| `pedon:Genuchten` | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 83.7 MB |  |
+| `ppigrf:igrf` | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 101.5 MB |  |
+| `psychrolib:GetHumRatioFromRelHum` | ✓ | ✓ | plain build ✓, sim ✗ / probe build ✓, sim ✗ | probe: build ✓, sim ✗, 128.7 MB | TypeError: unexpected keyword arguments to ufunc: 'Pressure', 'RelHum', 'TDryBulb' (a numba ufunc). With FMI 2 and logging on, FMPy then crashes on the `%s` in the traceback ([UniFMU §12](unifmu-limitations.md#12-fmi-2-log-messages-are-used-as-printf-format-strings)). |
+| pvlib `get_total_irradiance` → `sapm_cell` → `pvwatts_dc` (**composite FMU**) | ✓ (each part) | ✓ (each part) | ✓ | ✓ (2026-10-14) | 2026-10-14: the three parts made with `init --probe`, built with `--compile pyinstaller`: the FMU holds no `.py` file, and three weather cases give values identical to calling pvlib in a chain. |
+| `pvlib.atmosphere:alt2pres` | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 133.0 MB |  |
+| `pvlib.iotools:read_tmy3` | ✓ | ✓ | plain build ✓, sim ✗ / probe ✓ | probe: ✓, 133.0 MB | TypeError: float() argument must be a string or a real number, not 'DataFrame' |
+| `pvlib.irradiance:aoi` | ✓ | ✓ | plain build ✓, sim ✗ / probe ✓ | probe: ✓, 133.0 MB | Exception('Failed to instantiate model') |
+| `pvlib.pvsystem:pvwatts_dc` | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 133.0 MB |  |
+| `pvlib.solarposition:get_solarposition` | ✓ | ✓ | plain build ✓, sim ✗ / probe ✓ | probe: ✓, 133.0 MB | TypeError: float() argument must be a string or a real number, not 'DataFrame' |
+| `pvlib.temperature:sapm_cell` | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 133.0 MB |  |
+| `py_vollib.black_scholes:black_scholes` | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓ (recompiled 2026-10-13) |  |
+| `pybamm:Simulation` | ✓ | ✓ | plain build ✓, sim ✗ / probe ✓ | probe: ✓ (recompiled 2026-10-13) | TypeError: float() argument must be a string or a real number, not 'Solution' |
+| `PyCO2SYS:sys` | ✓ | ✓ | plain build ✓, sim ✗ / probe ✓ | probe: ✓, 24.8 MB | TypeError: float() argument must be a string or a real number, not 'dict' |
+| `pyet:pm_fao56` | ✓ | ✓ | plain build ✓, sim ✗ / probe build ✓, sim ✗ | probe: build ✓, sim ✗, 111.1 MB | AttributeError: 'float' object has no attribute 'time' |
+| `pyfluids:Fluid` | ✓ | ✓ | plain build ✓, sim ✗ / probe ✓ | probe: ✓, 29.4 MB | ValueError: Invalid or not defined state! |
+| `pygfunction.heat_transfer:finite_line_source` | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 52.8 MB |  |
+| `pykalman:KalmanFilter` | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 52.5 MB |  |
+| `pyloudnorm:Meter` | ✓ | ✓ | plain ✓ / probe build ✓, sim ✗ | plain: ✓, 53.2 MB | ValueError: blockwise_loudness has 0 values, expected 17 |
+| `pymap3d:geodetic2enu` | ✓ | ✓ | plain build ✓, sim ✗ / probe ✓ | probe: ✓, 24.7 MB | TypeError: y is a tuple of shape [3], not a single value: give it dimensions = [3] (FMI 3) or read one element (from = "...:0"); fmugen init --probe finds them |
+| `pymsis:calculate` | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓ (recompiled 2026-10-13) |  |
+| `pymunk:Space` | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 26.3 MB |  |
+| `pyorbital.astronomy:sun_zenith_angle` | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 25.0 MB |  |
+| `pyproj:Transformer` | ✓ | ✓ | plain build ✓, sim ✗ / probe ✓ | probe: ✓, 107.9 MB | TypeError: y is a tuple of shape [2], not a single value: give it dimensions = [2] (FMI 3) or read one element (from = "...:0"); fmugen init --probe finds them |
+| `pyquaternion:Quaternion` | ✓ | ✓ | plain build ✓, sim ✗ / probe build ✓, sim ✗ | probe: build ✓, sim ✗, 24.6 MB | ValueError: Unexpected number of elements in sequence. Got: 2, Expected: 4. |
+| `pyromat:get` | ✗ | ✓ | probe ✓ | probe: ✓ (recompiled 2026-10-13) | fmugen: error: --start names that are not arguments of the model: ['T'] |
+| `pysolar.solar:get_altitude` | ✓ | ✓ | plain build ✓, sim ✗ / probe ✓ | probe: ✓, 101.5 MB | pysolar.tzinfo_check.NoTimeZoneInfoError: datetime value '2026-10-09 00:00:00' given for arg 'when' should be made timezone-aware. |
+| `PyTCI.models.propofol:Marsh` | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 101.5 MB |  |
+| `pyteomics.mass:calculate_mass` | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 28.4 MB |  |
+| `pythermalcomfort.models.jos3:JOS3` | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 128.9 MB |  |
+| `pythermalcomfort.models:pmv_ppd_iso` | ✓ | ✓ | plain build ✓, sim ✗ / probe ✓ | probe: ✓, 97.0 MB | TypeError: tsv is a string ('Neutral'), not a Real: set type = "String" for it in the config |
+| `pythermalcomfort.models:sports_heat_stress_risk` | ✓ | ✓ | plain build ✓, sim ✗ / probe ✓ | probe: ✓, 128.9 MB | ValueError: could not convert string to float: 'Increase frequency and/or duration of rest breaks' |
+| `pywt:dwt` | ✓ | ✓ | plain build ✓, sim ✗ / probe ✓ | probe: ✓, 25.2 MB | TypeError: y0 is an array of shape [9], not a single value: give it dimensions = [9] (FMI 3) or read one element (from = "...:0"); fmugen init --probe finds them |
+| `pyxirr:npv` | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 25.0 MB |  |
+| `quantecon:LinearStateSpace` | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 98.8 MB |  |
+| `QuantLib:blackFormula` | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 37.2 MB |  |
+| `radioactivedecay:Inventory` | ✓ | ✓ | plain build ✓, sim ✗ / probe ✓ | probe: ✓ (recompiled 2026-10-13) | TypeError: float() argument must be a string or a real number, not 'Inventory' |
+| `rainflow:count_cycles` | ✓ | ✓ | plain build ✓, sim ✗ / probe ✓ | probe: ✓, 24.6 MB | TypeError: y is a list of shape [4], not a single value: give it dimensions = [4] (FMI 3) or read one element (from = "...:0"); fmugen init --probe finds them |
+| `rdkit.Chem.Descriptors:MolWt` | ✓ | ✓ | plain ✗ / probe ✓ | probe: ✓, 44.7 MB | fmugen: error: the config defines no FMU variables: add [inputs]/[parameters] and [outputs] (the model's arguments and results could not be inferred) |
+| `river.linear_model:LinearRegression` | ✓ | ✓ | plain build ✓, sim ✗ / probe ✓ | probe: ✓, 102.9 MB | LookupError: max_cum_l1: cannot read attribute 'max_cum_l1' (AttributeError("'LinearRegression' object has no attribute 'max_cum_l1'")) |
+| `roboticstoolbox.models.DH:Panda` | ✓ | ✓ | plain build ✓, sim ✗ / probe ✓ | probe: ✓ (recompiled 2026-10-13) | TypeError: float() argument must be a string or a real number, not 'SE3' |
+| `scipy.signal:lfilter` | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 53.2 MB |  |
+| `seirsplus.models:SEIRSModel` | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 111.2 MB |  |
+| `sgp4.api:Satrec` | ✗ | ✗ |  | — | C built-ins with no signature: `--start fr, jd, line1, line2: cannot tell which arguments these are …`. Needs a hand config. |
+| `shapely:Point` | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 26.2 MB |  |
+| `simglucose.patient.t1dpatient:T1DPatient` | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓ (recompiled 2026-10-13) |  |
+| `simpy:Environment` | ✓ | ✓ | plain build ✓, sim ✗ / probe build ✓, sim ✗ | probe: build ✓, sim ✗, 24.7 MB | ValueError: until (1.0) must be greater than the current simulation time |
+| `skfuzzy:interp_membership` | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 52.3 MB |  |
+| `skimage.color:rgb2hsv` | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 52.8 MB |  |
+| `statsmodels.stats.proportion:proportion_confint` | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 71.3 MB |  |
+| `tclab:TCLabModel` | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 128.8 MB |  |
+| `tellurium:loada` | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓ (recompiled 2026-10-13) |  |
+| `thermo:Chemical` | ✓ | ✓ | plain build ✓, sim ✗ / probe ✓ | probe: ✓ (recompiled 2026-10-13) | TypeError: CAS is a string ('7732-18-5'), not a Real: set type = "String" for it in the config |
+| `thermofeel:calculate_heat_index_simplified` | ✓ | ✓ | plain build ✓, sim ✗ / probe ✓ | probe: ✓, 24.7 MB | ValueError: Calling nonzero on 0d arrays is not allowed. Use np.atleast_1d(scalar).nonzero() instead. If the context of this error is of the form `arr[nonzero(cond)]`, just use `arr[cond]`. |
+| `timezonefinder:TimezoneFinder` | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 58.0 MB |  |
+| `tmm:coh_tmm` | ✓ | ✓ | plain build ✓, sim ✗ / probe ✓ | probe: ✓, 24.6 MB | TypeError: kz_list is an array of shape [3], not a single value: give it dimensions = [3] (FMI 3) or read one element (from = "...:0"); fmugen init --probe finds them |
+| `transforms3d.euler:euler2quat` | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 24.7 MB |  |
+| `uncertainties:ufloat` | ✓ | ✓ | plain build ✓, sim ✗ / probe ✓ | probe: ✓, 24.7 MB | TypeError: can't convert an affine function (<class 'uncertainties.core.Variable'>) to float; use x.nominal_value |
+| `windpowerlib.wind_speed:logarithmic_profile` | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 101.5 MB |  |
 
 ---
 
@@ -189,14 +196,14 @@ Errors such as `y is an array of shape […], not a single value` in the code-on
 
 Each was installed as published (`pip install <package>`) into its own venv together with fmugen. Neural networks need `--probe`: their result sizes depend on the weights, and their code is mostly compiled or framework code. Weights from Hugging Face are downloaded on first use, unless the FMU is built with `--hf-weights` (automatic with `--vendor` / `--compile`). `--capture-output` is needed whenever a model prints while loading, which hangs UniFMU 0.14 otherwise.
 
-| Model | FMI | init | init --probe | build + simulate (per config) | compiled (PyInstaller) + simulate | Notes |
-|---|---|---|---|---|---|---|
-| `chronos:ChronosBoltPipeline` | 2 | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 322.8 MB |  |
-| `silero_vad:load_silero_vad` | 2 | ✗ | ✓ | probe ✓ | probe: ✓ (recompiled 2026-10-13) | fmugen: error: --start names that are not arguments of the model: ['sr', 'x'] |
-| `tsfm_public.toolkit.get_model:get_model` | 2 | ✗ | ✓ | probe ✓ | probe: ✓ (recompiled 2026-10-13) | fmugen: error: --start names that are not arguments of the model: ['past_values'] |
-| `stable_baselines3:PPO` | 2 | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓ (recompiled 2026-10-13) |  |
-| `surfaces.test_functions.machine_learning.hyperparameter_optimization.tabular.regression.test_functions.gradient_boosting_regressor:GradientBoostingRegressorFunction` | 2 | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 294 MB (recompiled 2026-10-13) |  |
-| `torchani.models:ANI2x` | 2 | ✓ | ✓ | plain build ✓, sim ✗ / probe ✓ | probe: ✓ (recompiled 2026-10-13) | TypeError: species is an array of shape [1, 5], not a single value: give it dimensions = [1, 5] (FMI 3) or read one element (from = "...:0"); fmugen init --probe finds them |
+| Model | init | init --probe | build + simulate (per config) | compiled (PyInstaller) + simulate | Notes |
+|---|---|---|---|---|---|
+| `chronos:ChronosBoltPipeline` | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 322.8 MB |  |
+| `silero_vad:load_silero_vad` | ✗ | ✓ | probe ✓ | probe: ✓ (recompiled 2026-10-13) | fmugen: error: --start names that are not arguments of the model: ['sr', 'x'] |
+| `tsfm_public.toolkit.get_model:get_model` | ✗ | ✓ | probe ✓ | probe: ✓ (recompiled 2026-10-13) | fmugen: error: --start names that are not arguments of the model: ['past_values'] |
+| `stable_baselines3:PPO` | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓ (recompiled 2026-10-13) |  |
+| `surfaces.test_functions.machine_learning.hyperparameter_optimization.tabular.regression.test_functions.gradient_boosting_regressor:GradientBoostingRegressorFunction` | ✓ | ✓ | plain ✓ / probe ✓ | probe: ✓, 294 MB (recompiled 2026-10-13) |  |
+| `torchani.models:ANI2x` | ✓ | ✓ | plain build ✓, sim ✗ / probe ✓ | probe: ✓ (recompiled 2026-10-13) | TypeError: species is an array of shape [1, 5], not a single value: give it dimensions = [1, 5] (FMI 3) or read one element (from = "...:0"); fmugen init --probe finds them |
 
 ---
 
