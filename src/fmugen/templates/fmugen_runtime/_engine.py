@@ -1637,8 +1637,8 @@ class Engine:
         :param update_states: also read ``next`` sources into the state variables (normal steps;
             not with ``integrate``, which updates the states itself).
         :type update_states: bool
-        :param missing_ok: skip outputs that can't be read or are None (initialization, before the
-            model set them) instead of failing.
+        :param missing_ok: skip outputs that can't be read, are None or are arrays of the wrong size
+            (initialization, before the model set them) instead of failing.
         :type missing_ok: bool
         :param clock: read the variables of this clock, or None for unclocked ones.
         :type clock: str or None
@@ -1655,7 +1655,12 @@ class Engine:
                 raise LookupError(f"{v['name']}: cannot read {describe(v['from'])} ({e!r})") from e
             if found and value is None and missing_ok:
                 continue  # e.g. an attribute the model only sets after its first step
-            if found:
+            if found and missing_ok and v.get("dimensions"):
+                try:
+                    self.values[v["name"]] = self._from_python(v, value)
+                except ValueError:
+                    continue   # e.g. an array that stays empty until the first step (pyloudnorm's blockwise_loudness)
+            elif found:
                 self.values[v["name"]] = self._from_python(v, value)
         if update_states:
             for v in self.variables:

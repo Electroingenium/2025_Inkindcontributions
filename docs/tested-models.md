@@ -160,7 +160,7 @@ Errors such as `y is an array of shape […], not a single value` in the `init` 
 | `pyfluids:Fluid` | ✓ | — | ✓ (`init --probe` config, 29.4 MB) |  |
 | `pygfunction.heat_transfer:finite_line_source` | ✓ | — | ✓ (`init --probe` config, 52.8 MB) |  |
 | `pykalman:KalmanFilter` | ✓ | — | ✓ (`init --probe` config, 52.5 MB) |  |
-| `pyloudnorm:Meter` | ✓ | — | ✓ (`init` config, 53.2 MB) | `init --probe`: ValueError: blockwise_loudness has 0 values, expected 17 (an fmugen bug: the probe saw 17 values, but at initialization the array is still empty, so the output should have been commented out). |
+| `pyloudnorm:Meter` | ✓ | — | ✓ (`init` config, 53.2 MB) | `init --probe`: ValueError: blockwise_loudness has 0 values, expected 17 (an fmugen bug: the probe saw 17 values, but at initialization the array is still empty). Fixed 2026-10-21: the `--probe` config simulates; y and the 17 values = the direct call. |
 | `pymap3d:geodetic2enu` | ✓ | — | ✓ (`init --probe` config, 24.7 MB) |  |
 | `pymsis:calculate` | ✓ | — | ✓ (`init --probe` config, recompiled 2026-10-13) |  |
 | `pymunk:Space` | ✗ no useful outputs | — | ✗ no useful outputs | Outputs are only constant settings (`damping`, `collision_slop`, …); `gravity` (a `Vec2d`), `bodies` and `shapes` are left out. |
@@ -323,7 +323,6 @@ Still open:
 
 - **The backend outlives a failed FMU.** FMPy's `simulate_fmu` raises without calling `freeInstance`, so the UniFMU backend (`main.py`, 2 processes) keeps running and holds the importer's stdout/stderr; anything reading it through a pipe hangs. Not fmugen's: [fmpy-limitations.md §1](fmpy-limitations.md#1-simulate_fmu-doesnt-free-the-instance-after-an-fmu-error), and UniFMU's part in [unifmu-limitations.md §2](unifmu-limitations.md#2-the-backend-keeps-running-after-an-fmu-error). Workaround: free the instance yourself (`simulate_fmu(…, fmu_instance=fmu)`, then `fmu.freeInstance()` in a `finally`).
 - **`fmpy simulate` shows no reason for a failure**, only the failed FMI call. The traceback shows with `simulate_fmu(…, debug_logging=True, logger=print)`. With FMI 2, a log message containing `%` (a URL, a traceback, Pyomo's log) can then crash FMPy: [unifmu-limitations.md §12](unifmu-limitations.md#12-fmi-2-log-messages-are-used-as-printf-format-strings).
-- **`init --probe` misses an output that is empty only at initialization**: pyloudnorm's `blockwise_loudness` is empty before the first step and has 17 values after it, so the `--probe` config fails.
 - **`to = "call:…"` setters run once more than the steps**: harmless for setters that store a value, not for ones that accumulate ([PyTCI](#pytci)).
 - **An `*args` constructor gets the step method's `--start` values too** (pyquaternion).
 - **Module-level scripts can't be models**: a script that solves at import time has nothing to call (GEKKO's distillation example, the ethanol bioreactor). Wrapping its code in a class works.
@@ -340,6 +339,7 @@ Fixed (2026-10-21):
 - `attr:` paths index numpy arrays (`from = "attr:t_core.0"`, `"…-1"`), not only lists and tuples.
 - ufuncs (numba `@vectorize`, psychrolib with numba) get their arguments by position.
 - `init` warns about a model file named `model.py`.
+- An array output that has the wrong size before the first step (pyloudnorm's `blockwise_loudness`, empty until the first call) is skipped at initialization instead of failing it; steps still check the size. The pyloudnorm `--probe` config now simulates and matches the direct call.
 - Not bugs after all: `init` does write `[model] requirements` (pinned to the installed versions), and simpy's `until` is bound to the step's end time unless `--start until=…` makes it a fixed input, which `init` warns about.
 
 ---
