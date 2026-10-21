@@ -37,24 +37,24 @@ Columns: **`init` / `init --probe`**: ✓ if the config of either one builds, si
 
 131 models: 118 from libraries, neural networks and the repository examples, and 13 built on GEKKO. FMI 2 and FMI 3 results are combined: a model counts as passing if it passes with either.
 
-| | Libraries, networks, examples | GEKKO | All |
-|---|---|---|---|
-| `init` writes a config | 113 of 118 | 12 of 13 | 125 of 131 |
-| `init --probe` writes a config | 117 of 118 | 12 of 13 | 129 of 131 |
-| **Simulates with useful results** (a config from `init` or `init --probe`) | **98** | **11** | **109** |
-| …or with a hand-written config | **113** | **13** | **126** |
-| Fails | 5 | 0 | 5 |
-| **Compiled FMU simulates** | **96**: every model that simulated with an `init`, `init --probe` or repository config when compiling was last tested (2026-10-13) | 1 (the only one compiled) | 97 |
+| | Models (131) |
+|---|---|
+| `init` writes a config | 125 |
+| `init --probe` writes a config | 129 |
+| **Simulates with useful results** (a config from `init` or `init --probe`) | **109** |
+| …or with a hand-written config | **126** |
+| Fails | 5 |
+| **Compiled FMU simulates** | **97**: every model compiled when compiling was last tested (2026-10-13; one GEKKO model, CFTOC, was compiled) |
 
 A config only counts as a success if the FMU simulates **and** gives the model's results. An FMU that runs but only outputs its own parameters, settings or constants counts as a failure.
 
 How far each step gets:
 
-| Config | Libraries, networks, examples | GEKKO | All | Success |
-|---|---|---|---|---|
-| `init` (code only) | 44 | 1 | 45 of 131 | 34 % |
-| `init --probe` (or `init`, when it already works) | 98 | 11 | 109 of 131 | 83 % |
-| `init --probe` + a hand-written config (for the examples, the repository's `fmugen.toml`) | 113 | 13 | 126 of 131 | 96 % |
+| Config | Models | Success |
+|---|---|---|
+| `init` (code only) | 45 of 131 | 34 % |
+| `init --probe` (or `init`, when it already works) | 109 of 131 | 83 % |
+| `init --probe` + a hand-written config (for the examples, the repository's `fmugen.toml`) | 126 of 131 | 96 % |
 
 The `init` config fails mostly on models that return arrays, tuples, strings or objects, which only `--probe` types correctly; the error message points to it. Of the 67 `init` configs of the first group that simulate, 23 only output parameters, settings or constants. GEKKO models keep their results in GEKKO variables, which only `--probe` finds. The hand configs add `PropsSI`, `fluids.units` ×2, metpy, cantera, PyTCI and the kalman example ([Hand configs](#hand-configs)), and since 2026-10-22 ambiance, pandapower, seirsplus, impedance, commpy, river, tellurium, uncertainties and the GEKKO models CFTOC and OpenHENS ([configs](match-testing-rerun/configs/)). All were checked against a direct run on 2026-10-22.
 

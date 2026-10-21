@@ -21,13 +21,13 @@ The models of `docs/tested-models.md`, rebuilt into FMUs with the current `dev` 
 
 Per model (a model counts as **match** if at least one config matches and none mismatches):
 
-| Verdict | Libraries, networks, examples (121) | GEKKO (13) | All (134) |
-|---|---|---|---|
-| **match** | 117 | 13 | **130** |
-| mismatch | 1: pytci (t = 0 only, see below) | 0 | 1 |
-| not comparable | 1: nashpy | 0 | 1 |
-| FMU fails | 1: pyet | 0 | 1 |
-| no config | 1: sgp4 | 0 | 1 |
+| Verdict | Models (134) |
+|---|---|
+| **match** | **130** |
+| mismatch | 1: pytci (t = 0 only, see below) |
+| not comparable | 1: nashpy |
+| FMU fails | 1: pyet |
+| no config | 1: sgp4 |
 
 Per config: 188 match, 1 mismatch, 38 not comparable, 60 FMU fails, 8 no config.
 
