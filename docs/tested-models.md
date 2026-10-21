@@ -29,7 +29,7 @@ Each model went through:
 
 Setup: Windows 11, Python 3.13, `uv` venvs, fmugen editable from this checkout, FMPy 0.3.32, PyInstaller 6.22.3, UniFMU 0.14. The library and neural-network models were run on 2026-10-09 at `0e0b670`, with fixes and reruns up to 2026-10-13; the GEKKO models on 2026-10-13 and 2026-10-14 (gekko 1.3.2, local solver).
 
-Columns: **`init` / `init --probe`**: ✓ if the config of either one builds and simulates; otherwise how they failed. **Hand config**: a config written by hand (for the examples, the repository's `fmugen.toml`), whether it builds and simulates, with a link to it; — when the model needs none: ✓, ✗ no config (`init` stopped), ✗ build fails, ✗ simulate fails, or — (not run). **Compiled**: the best config compiled with PyInstaller, built and simulated. **Notes**: what was checked, or the error of each config that failed ("`init`:", "`init --probe`:").
+Columns: **`init` / `init --probe`**: ✓ if the config of either one builds, simulates and outputs the model's results; otherwise how they failed (✗ no useful outputs: it runs, but only outputs parameters, settings or constants). **Hand config**: a config written by hand (for the examples, the repository's `fmugen.toml`), ✓ if it builds, simulates and outputs the model's results, with a link to it; — when the model needs none: ✓, ✗ no config (`init` stopped), ✗ build fails, ✗ simulate fails, or — (not run). **Compiled**: the best config compiled with PyInstaller, built and simulated. **Notes**: what was checked, or the error of each config that failed ("`init`:", "`init --probe`:").
 
 ---
 
@@ -41,21 +41,24 @@ Libraries, neural networks and repository examples: 118 models, each with an `in
 |---|---|
 | `init` writes a config | 113 |
 | `init --probe` writes a config | 117 |
-| **Simulates correctly** (a config from `init`, `init --probe` or the repository) | **108** |
-| Fails | 10 |
-| **Compiled FMU simulates** | **108**: every model that simulates uncompiled |
+| **Simulates with useful results** (a config from `init` or `init --probe`) | **95** |
+| …or with a hand-written config | **102** |
+| Fails | 16 |
+| **Compiled FMU simulates** | **96**: every model that simulates with an `init`, `init --probe` or repository config |
+
+A config only counts as a success if the FMU simulates **and** gives the model's results. An FMU that runs but only outputs its own parameters, settings or constants counts as a failure.
 
 How far each step gets:
 
 | Config | Simulates correctly | Success |
 |---|---|---|
-| `init` (code only) | 67 of 118 | 57 % |
-| `init --probe` (or `init`, when it already works; or the repository's config) | 108 of 118 | 92 % |
-| `init --probe` + a hand-written config | 112 of 118 | 95 % |
+| `init` (code only) | 44 of 118 | 37 % |
+| `init --probe` (or `init`, when it already works) | 95 of 118 | 81 % |
+| `init --probe` + a hand-written config (for the examples, the repository's `fmugen.toml`) | 102 of 118 | 86 % |
 
-The `init` config fails mostly on models that return arrays, tuples, strings or objects, which only `--probe` types correctly; the error message points to it. The hand configs add `PropsSI`, `fluids.units` ×2 and metpy ([Hand configs](#hand-configs)); they were checked on 2026-10-06/07, not in the 2026-10-09 rerun. The other 6 have no working config yet.
+The `init` config fails mostly on models that return arrays, tuples, strings or objects, which only `--probe` types correctly; the error message points to it. Of the 67 `init` configs that simulate, 23 only output parameters, settings or constants. The hand configs add `PropsSI`, `fluids.units` ×2, metpy, cantera, PyTCI and the kalman example ([Hand configs](#hand-configs)); they were checked on 2026-10-06/07, not in the 2026-10-09 rerun.
 
-The 10 failures: `PropsSI` and sgp4 (C built-ins with no signature: hand config needed), `fluids.units` ×2 and metpy (pint quantities: hand config needed), pyet (needs pandas Series), psychrolib (a numba ufunc takes no keyword arguments), simpy (`until` not bound to time), pyquaternion (`*args` constructor gets the step's arguments), nashpy (the method returns a generator).
+The 16 failures: sgp4 (a C built-in with no signature: hand config not written yet), pyet (needs pandas Series), psychrolib (a numba ufunc takes no keyword arguments), simpy (`until` not bound to time), pyquaternion (`*args` constructor gets the step's arguments), nashpy (the method returns a generator), and 10 that simulate but give no useful results: ambiance, pandapower, pymunk, seirsplus, impedance, pybamm, river, commpy, tellurium and uncertainties.
 
 GEKKO: 10 of 16 simulate correctly (CGE once its `model.py` is renamed). The other 6 fail for reasons of their own: two can't be called or crash without fmugen, and four need inputs, data or solvers that aren't available.
 
@@ -68,7 +71,7 @@ GEKKO: 10 of 16 simulate correctly (CGE once its `model.py` is renamed). The oth
 | [examples/psychrometry](../examples/psychrometry) (`compute_balances_simplified`) | ✓ | ✓ | ✓ (hand config, 128.7 MB) | 6 outputs. `init -o` outside the model's folder now stops with a `fmugen: error` naming where to write the config. |
 | [examples/simple_pid](../examples/simple_pid) (`simple_pid:PID`) | ✓ | ✓ | ✓ (`init --probe` config, 128.7 MB) |  |
 | [examples/rc_building](../examples/rc_building) (`Zone`) | ✓ | ✓† | ✓† (hand config, 128.7 MB) | †The repo config fixes `step_size = 3600`, so the generic 1 s run is refused (correct); simulated at 3600 s steps, plain and compiled give the same values. |
-| [examples/kalman](../examples/kalman) (`filterpy.kalman:KalmanFilter`; repo config FMI 3: structural parameters, clock) | ✓ | ✓ | ✓ (hand config, rebuilt 2026-10-13) | Plain and probe: the `filterpy.kalman:KalmanFilter` FMI 2 configs simulate. The repo config fails the generic run (the clock is never ticked); `examples/kalman/run.py` runs it correctly, compiled too. |
+| [examples/kalman](../examples/kalman) (`filterpy.kalman:KalmanFilter`; repo config FMI 3: structural parameters, clock) | ✗ no useful outputs | ✓ | ✓ (hand config, rebuilt 2026-10-13) | The `init` configs output only filter settings and likelihoods (`dim_x`, …, `alpha`, `likelihood`), not the state estimate. The repository config drives the filter correctly with `examples/kalman/run.py`, compiled too. |
 | [examples/sampled_pid](../examples/sampled_pid) (`simple_pid:PID`; repo config: clocks) | ✓ | ✓ | ✓ (hand config, 128.7 MB) | 2026-10-21: the repo config driven by `run.py` (clock ticked every 0.1 s, first-order plant) brings the output to 0.78 → 1.0 setpoint; the `init` and `init --probe` configs of `simple_pid:PID` build and simulate. |
 
 ---
@@ -81,17 +84,17 @@ Errors such as `y is an array of shape […], not a single value` in the `init` 
 |---|---|---|---|---|
 | `ahrs.filters:Madgwick` | ✓ | — | ✓ (`init --probe` config, recompiled 2026-10-13) |  |
 | `ahrs.filters:Mahony` | ✓ | — | ✓ (`init --probe` config, recompiled 2026-10-13) |  |
-| `ambiance:Atmosphere` | ✓ | — | ✓ (`init --probe` config, 101.5 MB) |  |
+| `ambiance:Atmosphere` | ✗ no useful outputs | — | ✗ no useful outputs | Outputs only echo the inputs (`h`, `check_bounds`); the results are properties returning 1-element arrays, which `init` doesn't see. |
 | `anastruct:SystemElements` | ✓ | — | ✓ (`init --probe` config, 52.5 MB) |  |
 | `antropy:perm_entropy` | ✓ | — | ✓ (`init --probe` config, 105.7 MB) |  |
 | `astral.sun:elevation` | ✓ | — | ✓ (`init --probe` config, 101.9 MB) |  |
 | `astropy.cosmology:FlatLambdaCDM` | ✓ | — | ✓ (`init --probe` config, 37.7 MB) |  |
 | `Bio.SeqUtils:gc_fraction` | ✓ | — | ✓ (`init --probe` config, 29.8 MB) |  |
 | `blackscholes:BlackScholesCall` | ✓ | — | ✓ (`init --probe` config, 24.7 MB) |  |
-| `cantera:Solution` | ✓ | ✓ ([config](#cantera)) | ✓ (`init --probe` config, recompiled 2026-10-13) |  |
+| `cantera:Solution` | ✗ no useful outputs | ✓ ([config](#cantera)) | ✗ no useful outputs | Outputs are only solver settings (`rtol`, `max_steps`): the results are Cython properties, and the gas state can't be set from inputs. The hand config works. |
 | `chemicals.vapor_pressure:Antoine` | ✓ | — | ✓ (`init --probe` config, 134.6 MB) |  |
 | `colour.temperature:CCT_to_xy_CIE_D` | ✓ | — | ✓ (`init --probe` config, 113.1 MB) |  |
-| `commpy.modulation:QAMModem` | ✓ | — | ✓ (`init --probe` config, 78.2 MB) |  |
+| `commpy.modulation:QAMModem` | ✗ no useful outputs | — | ✗ no useful outputs | Only output: `m = 4`. The modulated symbols are complex, so they're left out. |
 | `control:StateSpace` | ✓ | — | ✓ (`init --probe` config, 2026-10-13) | y = (0, −2) = A·x with `--start x=[1.0, 0.0] --start u=[0.0]`. |
 | `CoolProp.CoolProp:PropsSI` | ✗ build fails | ✓ ([config](models.md#positional-only-arguments)) | ✗ build fails (`init --probe` config) | C extension with no signature: no variables inferred. Needs a hand config ([below](#hand-configs)). |
 | `cv2:KalmanFilter` | ✓ | — | ✓ (`init --probe` config, 66.3 MB) |  |
@@ -115,7 +118,7 @@ Errors such as `y is an array of shape […], not a single value` in the `init` 
 | `ht.hx:effectiveness_from_NTU` | ✓ | — | ✓ (`init --probe` config, 134.1 MB) |  |
 | `iapws.iapws97:_TSat_P` | ✓ | — | ✓ (`init --probe` config, recompiled 2026-10-13) | 2026-10-14: with `discard_on = ["builtins:NotImplementedError"]`, a step at 30 MPa returns `discard`; the output keeps 453.04 K, and the step retried at 2 MPa succeeds (485.53 K). |
 | `iapws:IAPWS97` | ✓ | — | ✓ (`init --probe` config, recompiled 2026-10-13) |  |
-| `impedance.models.circuits:Randles` | ✓ | — | ✓ (`init --probe` config, 103.7 MB) |  |
+| `impedance.models.circuits:Randles` | ✗ no useful outputs | — | ✗ no useful outputs | Outputs only echo `initial_guess`; the complex prediction is left out (commented as real/imaginary parts). |
 | `joblib:load` | ✓ | — | ✓ (`init --probe` config, recompiled 2026-10-13) |  |
 | `librosa:hz_to_mel` | ✓ | — | ✓ (`init --probe` config, 108.5 MB) |  |
 | `mendeleev:element` | ✓ | — | ✓ (`init --probe` config, recompiled 2026-10-13) | `init --probe`: 79 variables; Fe gives atomic_number 26, atomic_weight 55.845. |
@@ -129,7 +132,7 @@ Errors such as `y is an array of shape […], not a single value` in the `init` 
 | `obspy.geodetics:gps2dist_azimuth` | ✓ | — | ✓ (`init --probe` config, 77.0 MB) |  |
 | `openap:Thrust` | ✓ | — | ✓ (`init --probe` config, recompiled 2026-10-13) |  |
 | `openturns:Normal` | ✓ | — | ✓ (`init --probe` config, 79.9 MB) |  |
-| `pandapower:runpp` | ✓ | — | ✓ (`init --probe` config, 127.9 MB) |  |
+| `pandapower:runpp` | ✗ no useful outputs | — | ✗ no useful outputs | Outputs are only solver settings (`tolerance_mva`, `calculate_voltage_angles`): the results are DataFrames written onto the network argument. |
 | `pedon:Genuchten` | ✓ | — | ✓ (`init --probe` config, 83.7 MB) |  |
 | `ppigrf:igrf` | ✓ | — | ✓ (`init --probe` config, 101.5 MB) |  |
 | `psychrolib:GetHumRatioFromRelHum` | ✗ simulate fails | — | ✗ simulate fails (`init --probe` config, 128.7 MB) | TypeError: unexpected keyword arguments to ufunc: 'Pressure', 'RelHum', 'TDryBulb' (a numba ufunc). With FMI 2 and logging on, FMPy then crashes on the `%s` in the traceback ([UniFMU §12](unifmu-limitations.md#12-fmi-2-log-messages-are-used-as-printf-format-strings)). |
@@ -141,7 +144,7 @@ Errors such as `y is an array of shape […], not a single value` in the `init` 
 | `pvlib.solarposition:get_solarposition` | ✓ | — | ✓ (`init --probe` config, 133.0 MB) |  |
 | `pvlib.temperature:sapm_cell` | ✓ | — | ✓ (`init --probe` config, 133.0 MB) |  |
 | `py_vollib.black_scholes:black_scholes` | ✓ | — | ✓ (`init --probe` config, recompiled 2026-10-13) |  |
-| `pybamm:Simulation` | ✓ | — | ✓ (`init --probe` config, recompiled 2026-10-13) |  |
+| `pybamm:Simulation` | ✗ no useful outputs | — | ✗ no useful outputs | Outputs are only solver flags; the voltage can't be expressed as an output. |
 | `PyCO2SYS:sys` | ✓ | — | ✓ (`init --probe` config, 24.8 MB) |  |
 | `pyet:pm_fao56` | ✗ simulate fails | — | ✗ simulate fails (`init --probe` config, 111.1 MB) | AttributeError: 'float' object has no attribute 'time' |
 | `pyfluids:Fluid` | ✓ | — | ✓ (`init --probe` config, 29.4 MB) |  |
@@ -150,13 +153,13 @@ Errors such as `y is an array of shape […], not a single value` in the `init` 
 | `pyloudnorm:Meter` | ✓ | — | ✓ (`init` config, 53.2 MB) | `init --probe`: ValueError: blockwise_loudness has 0 values, expected 17 |
 | `pymap3d:geodetic2enu` | ✓ | — | ✓ (`init --probe` config, 24.7 MB) |  |
 | `pymsis:calculate` | ✓ | — | ✓ (`init --probe` config, recompiled 2026-10-13) |  |
-| `pymunk:Space` | ✓ | — | ✓ (`init --probe` config, 26.3 MB) |  |
+| `pymunk:Space` | ✗ no useful outputs | — | ✗ no useful outputs | Outputs are only constant settings (`damping`, `collision_slop`, …); `gravity` (a `Vec2d`), `bodies` and `shapes` are left out. |
 | `pyorbital.astronomy:sun_zenith_angle` | ✓ | — | ✓ (`init --probe` config, 25.0 MB) |  |
 | `pyproj:Transformer` | ✓ | — | ✓ (`init --probe` config, 107.9 MB) |  |
 | `pyquaternion:Quaternion` | ✗ simulate fails | — | ✗ simulate fails (`init --probe` config, 24.6 MB) | ValueError: Unexpected number of elements in sequence. Got: 2, Expected: 4. |
 | `pyromat:get` | ✓ | — | ✓ (`init --probe` config, recompiled 2026-10-13) |  |
 | `pysolar.solar:get_altitude` | ✓ | — | ✓ (`init --probe` config, 101.5 MB) |  |
-| `PyTCI.models.propofol:Marsh` | ✓ | ✓ ([config](#pytci)) | ✓ (`init --probe` config, 101.5 MB) |  |
+| `PyTCI.models.propofol:Marsh` | ✗ no useful outputs | ✓ ([config](#pytci)) | ✗ no useful outputs | Outputs only echo the parameters (`weight`, `time_seconds`): the state is in a nested function. The hand config works. |
 | `pyteomics.mass:calculate_mass` | ✓ | — | ✓ (`init --probe` config, 28.4 MB) |  |
 | `pythermalcomfort.models.jos3:JOS3` | ✓ | ✓ ([config](#jos3)) | ✓ (`init --probe` config, 128.9 MB) |  |
 | `pythermalcomfort.models:pmv_ppd_iso` | ✓ | — | ✓ (`init --probe` config, 97.0 MB) |  |
@@ -168,10 +171,10 @@ Errors such as `y is an array of shape […], not a single value` in the `init` 
 | `radioactivedecay:Inventory` | ✓ | — | ✓ (`init --probe` config, recompiled 2026-10-13) |  |
 | `rainflow:count_cycles` | ✓ | — | ✓ (`init --probe` config, 24.6 MB) |  |
 | `rdkit.Chem.Descriptors:MolWt` | ✓ | — | ✓ (`init --probe` config, 44.7 MB) |  |
-| `river.linear_model:LinearRegression` | ✓ | — | ✓ (`init --probe` config, 102.9 MB) |  |
+| `river.linear_model:LinearRegression` | ✗ no useful outputs | — | ✗ no useful outputs | Outputs are only hyperparameters (`l1`, `l2`, …), no prediction or weights. |
 | `roboticstoolbox.models.DH:Panda` | ✓ | — | ✓ (`init --probe` config, recompiled 2026-10-13) |  |
 | `scipy.signal:lfilter` | ✓ | — | ✓ (`init --probe` config, 53.2 MB) |  |
-| `seirsplus.models:SEIRSModel` | ✓ | — | ✓ (`init --probe` config, 111.2 MB) |  |
+| `seirsplus.models:SEIRSModel` | ✗ no useful outputs | — | ✗ no useful outputs | Outputs only echo the parameters (`beta`, `sigma`, `gamma`, …); the epidemic state arrays change size and are left out. |
 | `sgp4.api:Satrec` | ✗ no config | ✗ not written yet | — | C built-ins with no signature: `--start fr, jd, line1, line2: cannot tell which arguments these are …`. Needs a hand config. |
 | `shapely:Point` | ✓ | — | ✓ (`init --probe` config, 26.2 MB) |  |
 | `simglucose.patient.t1dpatient:T1DPatient` | ✓ | — | ✓ (`init --probe` config, recompiled 2026-10-13) |  |
@@ -180,13 +183,13 @@ Errors such as `y is an array of shape […], not a single value` in the `init` 
 | `skimage.color:rgb2hsv` | ✓ | — | ✓ (`init --probe` config, 52.8 MB) |  |
 | `statsmodels.stats.proportion:proportion_confint` | ✓ | — | ✓ (`init --probe` config, 71.3 MB) |  |
 | `tclab:TCLabModel` | ✓ | — | ✓ (`init --probe` config, 128.8 MB) |  |
-| `tellurium:loada` | ✓ | — | ✓ (`init --probe` config, recompiled 2026-10-13) |  |
+| `tellurium:loada` | ✗ no useful outputs | — | ✗ no useful outputs | Only output: `oneStep`'s return (always 0.1, the step size), not the species. |
 | `thermo:Chemical` | ✓ | — | ✓ (`init --probe` config, recompiled 2026-10-13) |  |
 | `thermofeel:calculate_heat_index_simplified` | ✓ | — | ✓ (`init --probe` config, 24.7 MB) |  |
 | `timezonefinder:TimezoneFinder` | ✓ | — | ✓ (`init --probe` config, 58.0 MB) |  |
 | `tmm:coh_tmm` | ✓ | — | ✓ (`init --probe` config, 24.6 MB) |  |
 | `transforms3d.euler:euler2quat` | ✓ | — | ✓ (`init --probe` config, 24.7 MB) |  |
-| `uncertainties:ufloat` | ✓ | — | ✓ (`init --probe` config, 24.7 MB) |  |
+| `uncertainties:ufloat` | ✗ no useful outputs | — | ✗ no useful outputs | Only output: `s`, the standard deviation given as input; the nominal value is missing. |
 | `windpowerlib.wind_speed:logarithmic_profile` | ✓ | — | ✓ (`init --probe` config, 101.5 MB) |  |
 
 ---
@@ -205,6 +208,7 @@ Each was installed as published (`pip install <package>`) into its own venv toge
 | `torchani.models:ANI2x` | ✓ | ✓ (`init --probe` config, recompiled 2026-10-13) |  |
 
 ---
+
 
 ## GEKKO models
 
