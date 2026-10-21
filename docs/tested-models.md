@@ -41,9 +41,9 @@ Columns: **`init` / `init --probe`**: ✓ if the config of either one builds, si
 |---|---|---|---|
 | `init` writes a config | 113 of 118 | 14 of 15 | 127 of 133 |
 | `init --probe` writes a config | 117 of 118 | 15 of 15 | 132 of 133 |
-| **Simulates with useful results** (a config from `init` or `init --probe`) | **95** | **12** | **107** |
-| …or with a hand-written config | **102** | **13** | **115** |
-| Fails | 16 | 2 | 18 |
+| **Simulates with useful results** (a config from `init` or `init --probe`) | **96** | **12** | **108** |
+| …or with a hand-written config | **103** | **13** | **116** |
+| Fails | 15 | 2 | 17 |
 | **Compiled FMU simulates** | **96**: every model that simulates with an `init`, `init --probe` or repository config | 1 (the only one compiled) | 97 |
 
 A config only counts as a success if the FMU simulates **and** gives the model's results. An FMU that runs but only outputs its own parameters, settings or constants counts as a failure.
@@ -53,23 +53,25 @@ How far each step gets:
 | Config | Libraries, networks, examples | GEKKO | All | Success |
 |---|---|---|---|---|
 | `init` (code only) | 44 | 1 | 45 of 133 | 34 % |
-| `init --probe` (or `init`, when it already works) | 95 | 12 | 107 of 133 | 80 % |
-| `init --probe` + a hand-written config (for the examples, the repository's `fmugen.toml`) | 102 | 13 | 115 of 133 | 86 % |
+| `init --probe` (or `init`, when it already works) | 96 | 12 | 108 of 133 | 81 % |
+| `init --probe` + a hand-written config (for the examples, the repository's `fmugen.toml`) | 103 | 13 | 116 of 133 | 87 % |
 
 The `init` config fails mostly on models that return arrays, tuples, strings or objects, which only `--probe` types correctly; the error message points to it. Of the 67 `init` configs of the first group that simulate, 23 only output parameters, settings or constants. GEKKO models keep their results in GEKKO variables, which only `--probe` finds. The hand configs add `PropsSI`, `fluids.units` ×2, metpy, cantera, PyTCI and the kalman example ([Hand configs](#hand-configs)); they were checked on 2026-10-06/07, not in the 2026-10-09 rerun.
 
-The 18 failures, by cause:
+The 17 failures, by cause:
 
 | Cause | Models | What it means |
 |---|---|---|
-| **fmugen bug**: fmugen calls a model it accepts in the wrong way | psychrolib (`GetHumRatioFromRelHum` is a numba ufunc, and fmugen passes its arguments by keyword, which ufuncs reject), pyquaternion (the step method's `--start` values also go to the `*args` constructor), needforheat (a function stored on a class, called as `Model.building(df, …)`, gets the instance as its first argument; also missing data, below) | Fixable in fmugen. |
+| **fmugen bug**: fmugen calls a model it accepts in the wrong way | pyquaternion (the step method's `--start` values also go to the `*args` constructor), needforheat (a function stored on a class, called as `Model.building(df, …)`, gets the instance as its first argument; also missing data, below) | Fixable in fmugen. |
 | **Not supported by fmugen**: the model's inputs or results have a shape fmugen can't map to FMU variables | sgp4 (C built-ins with no signature), pyet (needs a pandas Series with a date index), simpy (`until` must follow simulation time), nashpy (the method returns a generator), ambiance (results are properties returning 1-element arrays), pandapower (results are DataFrames written onto the network argument), pymunk (`Vec2d` and lists of bodies), seirsplus (arrays that change size), impedance and commpy (complex results), pybamm (the voltage is inside a solution object), river (no prediction or weights exposed), tellurium (the species aren't the step's result), uncertainties (the nominal value of a `ufloat` isn't read) | Each needs a hand config (some may work with one; not tried, except sgp4, where none is written yet) or a new fmugen feature. |
 | **Missing data**: the input data isn't published | needforheat (a home's measured history; the datasets the repository uses hold only data-management documents) | Synthetic data could stand in, once the fmugen bug above is fixed. |
 | **External service**: the model depends on a service that refuses it | drilling MPC (hard-codes APMonitor's public solver server, which answers HTTP 403) | Works only if the server accepts it again. |
 | **Model bug**: the published model doesn't run on its own | none (transmembrane, whose GEKKO class was dead code, is no longer listed) | |
-| **Output mismatch**: the FMU runs but gives different values than the model run directly | none found | Checked for every model with a recorded comparison: the GEKKO models, NHES, OpenHENS, ethanol, and the values in the notes. Most library models were only checked to simulate with real results, not compared value by value. |
+| **Output mismatch**: the FMU runs but gives different values than the model run directly | none | Every model was compared value by value with a direct run: see below. |
 
-The 18 failures: sgp4 (a C built-in with no signature: hand config not written yet), pyet (needs pandas Series), psychrolib (a numba ufunc takes no keyword arguments), simpy (`until` not bound to time), pyquaternion (`*args` constructor gets the step's arguments), nashpy (the method returns a generator); 10 that simulate but give no useful results: ambiance, pandapower, pymunk, seirsplus, impedance, pybamm, river, commpy, tellurium and uncertainties; and 2 GEKKO models: needforheat (its methods are written to be called on the class, which fmugen doesn't do, and its data isn't published) and the drilling MPC (it solves on APMonitor's public server, which refuses requests). CGE counts as a success after renaming its `model.py`, NHES with synthetic input data, OpenHENS with a hand-added output and the COIN-OR couenne solver.
+**FMU vs direct run** (2026-10-21, [full report](match-testing/report.md)): every model of the repository examples, Python libraries and neural networks was built into FMUs (`init --probe`, plain `init`, and the repository or hand config; no `--compile`) and compared, output by output and step by step, with the model called directly in plain Python without fmugen. **No mismatch**: 109 of 120 match (230,341 values; largest relative difference 1.3 × 10⁻¹⁶, otherwise identical), and the other 11 are failures listed above (no outputs to compare, or the FMU fails). Models random by design were compared seeded. The GEKKO models were compared one by one (their notes). This run used Linux (WSL 2, Python 3.13) with the latest library versions; the results above are from Windows.
+
+The 17 failures: sgp4 (a C built-in with no signature: hand config not written yet), pyet (needs pandas Series), simpy (`until` not bound to time), pyquaternion (`*args` constructor gets the step's arguments), nashpy (the method returns a generator); 10 that simulate but give no useful results: ambiance, pandapower, pymunk, seirsplus, impedance, pybamm, river, commpy, tellurium and uncertainties; and 2 GEKKO models: needforheat (its methods are written to be called on the class, which fmugen doesn't do, and its data isn't published) and the drilling MPC (it solves on APMonitor's public server, which refuses requests). CGE counts as a success after renaming its `model.py`, NHES with synthetic input data, OpenHENS with a hand-added output and the COIN-OR couenne solver.
 
 ---
 
@@ -144,7 +146,7 @@ Errors such as `y is an array of shape […], not a single value` in the `init` 
 | `pandapower:runpp` | ✗ no useful outputs | — | ✗ no useful outputs | Outputs are only solver settings (`tolerance_mva`, `calculate_voltage_angles`): the results are DataFrames written onto the network argument. |
 | `pedon:Genuchten` | ✓ | — | ✓ (`init --probe` config, 83.7 MB) |  |
 | `ppigrf:igrf` | ✓ | — | ✓ (`init --probe` config, 101.5 MB) |  |
-| `psychrolib:GetHumRatioFromRelHum` | ✗ simulate fails | — | ✗ simulate fails (`init --probe` config, 128.7 MB) | TypeError: unexpected keyword arguments to ufunc: 'Pressure', 'RelHum', 'TDryBulb' (a numba ufunc). With FMI 2 and logging on, FMPy then crashes on the `%s` in the traceback ([UniFMU §12](unifmu-limitations.md#12-fmi-2-log-messages-are-used-as-printf-format-strings)). |
+| `psychrolib:GetHumRatioFromRelHum` | ✓ | — | — | **Fails when numba is installed**: psychrolib then turns its functions into numba ufuncs, which reject the keyword arguments fmugen passes (`unexpected keyword arguments to ufunc`; an fmugen bug). Without numba (2026-10-21, psychrolib 2.5.0), both configs match the direct call. |
 | pvlib `get_total_irradiance` → `sapm_cell` → `pvwatts_dc` (**composite FMU**) | ✓ (each part) | — | ✓ (2026-10-14) | 2026-10-14: the three parts made with `init --probe`, built with `--compile pyinstaller`: the FMU holds no `.py` file, and three weather cases give values identical to calling pvlib in a chain. |
 | `pvlib.atmosphere:alt2pres` | ✓ | — | ✓ (`init --probe` config, 133.0 MB) |  |
 | `pvlib.iotools:read_tmy3` | ✓ | — | ✓ (`init --probe` config, 133.0 MB) |  |
@@ -250,7 +252,7 @@ Configs written by hand where `init` can't infer everything. They are linked fro
 
 ### fluids.units
 
-`Reynolds` and `head_from_P` take and return pint quantities: each input gets `convert = "pint"` and a `unit`, and `head_from_P`'s output `unit = "cm"`. Checked: `Reynolds` gives 76401.3 and `head_from_P` 1019.7 cm, the values of `fluids.units` called directly.
+`Reynolds` and `head_from_P` take and return pint quantities: each input gets `convert = "pint"` and a `unit`, and `head_from_P`'s output `unit = "cm"`. Write the units the way pint reads them (`kg/m**3`, `Pa*s`, `m/s**2`): pint rejects the Modelica spelling (`kg/m3`, `Pa.s`), and fmugen then writes no `<BaseUnit>` for them. Checked: `Reynolds` gives 76401.3 and `head_from_P` 1019.7 cm, the values of `fluids.units` called directly.
 
 ### JOS3
 
@@ -328,6 +330,8 @@ Still open:
 - **Methods that need simulation time aren't bound to it** (simpy `Environment.run(until)`).
 - **An `*args` constructor gets the step method's `--start` values too** (pyquaternion).
 - **`init` doesn't write `[model] requirements`**, which deployment images need.
+- **Numba-compiled functions** reject the keyword arguments fmugen passes (psychrolib, when numba is installed).
+- **`attr:` paths index lists but not numpy arrays**: `from = "attr:t_core.0"` fails on a numpy array; read the whole array instead.
 - **Module-level scripts can't be models**: a script that solves at import time has nothing to call (GEKKO's distillation example, the ethanol bioreactor). Wrapping its code in a class works.
 - **Methods written without `self`**, to be called on the class (`Model.building(df, …)`), get the instance as their first argument (needforheat).
 - **Model files named `model.py`** are refused by `build` (intended: rename the file); `init` doesn't warn.
