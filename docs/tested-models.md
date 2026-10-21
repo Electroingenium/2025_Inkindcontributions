@@ -65,10 +65,10 @@ GEKKO models (16), counted the same way:
 | Config | Simulates correctly | Success |
 |---|---|---|
 | `init` (code only) | 1 of 16 | 6 % |
-| `init --probe` (or `init`, when it already works) | 9 of 16 | 56 % |
-| `init --probe` + a hand-written config | 9 of 16 | 56 % |
+| `init --probe` (or `init`, when it already works) | 10 of 16 | 63 % |
+| `init --probe` + a hand-written config | 10 of 16 | 63 % |
 
-GEKKO models keep their results in GEKKO variables, which only `--probe` finds. Of the 7 failures, CGE only needs its `model.py` renamed; ethanol and transmembrane fail without fmugen too; drilling, NHES, needforheat and OpenHENS need inputs, data or solvers that aren't available.
+GEKKO models keep their results in GEKKO variables, which only `--probe` finds. CGE counts as a success, but only after renaming its `model.py`. Of the 6 failures, ethanol and transmembrane fail without fmugen too; drilling, NHES, needforheat and OpenHENS need inputs, data or solvers that aren't available.
 
 ---
 
@@ -226,7 +226,7 @@ Dynamic optimization and simulation models built on GEKKO, FMI 2, run on 2026-10
 | Distillation column (GEKKO's example, reworked into a class; equations unchanged) | GEKKO [`examples/distillation.py`](https://github.com/BYU-PRISM/GEKKO/blob/master/examples/distillation.py) | `distillation_column.py:DistillationColumn`, `--call step` | ✓ | — | — | 7 outputs. At reflux 3.0 the condenser goes 0.785721, 0.837391, 0.867374 and the reboiler 0.190012, 0.145341, 0.120733: the script's own values. The original module-level script has nothing to call. |
 | Distillation column as a Gym environment | [Kalpesh-RL/DistillationColumn](https://github.com/Kalpesh-RL/DistillationColumn) `f2b9966` | `DistColEnvDynInc_altrewards.py:DistColEnvDynInc`, `--start "Action=[0.0, 0.0, 0.0]" --setup reset` | ✓ | — | — | State, reward, `done` and message change every step; `D`, `B`, `FL` are outputs too (D = 1.133, B = 0.873). |
 | Batch bioreactor (Monod growth) | [Bartosz1280/Bioreactor-modeling](https://github.com/Bartosz1280/Bioreactor-modeling) `3112aba` | `Bioreactor.py:SimpleBioreactor`, `--call solve`, `time_arr` and `simulation_input` from the repo notebook | ✓ | — | — | 5 outputs (`X`, `S`, `mu`, `dXdt`, `dSdt`) read from the GEKKO variables at the end of the horizon; X goes 0.0451 → 0.0444 g/L over 3 steps. |
-| Computable general equilibrium economy | [konradarchicinski/cge_model_python](https://github.com/konradarchicinski/cge_model_python) `60d611d` | `Code/model.py:CGE`, `--call results --start capital=0.1 --start labour=0.0` | ✗ build fails | — | — | `build` refuses a model file named `model.py` (it clashes with UniFMU's backend; intended: rename the file). From a renamed copy: 27 outputs, the first step = the direct run (x3 supply 72.076, price 1.119). Needs pandas 2 (with pandas 3 the model itself fails). |
+| Computable general equilibrium economy | [konradarchicinski/cge_model_python](https://github.com/konradarchicinski/cge_model_python) `60d611d` | `Code/model.py:CGE`, `--call results --start capital=0.1 --start labour=0.0` | ✓ | — | — | **Needs its `Code/model.py` renamed** (any other name): `build` refuses a model file named `model.py`, which clashes with UniFMU's backend module. Renamed: 27 outputs, the first step = the direct run (x3 supply 72.076, price 1.119). Needs pandas 2 (with pandas 3 the model itself fails). |
 | Constrained finite-time optimal control | [ollyme102b/ros_workspace](https://github.com/ollyme102b/ros_workspace) `03f5938` | `CFTOCSolverV2.py:CFTOCSolverV2`, `--call calculate_optimal_actuation`, the repo test's starts, `--start calculate_optimal_actuation_x0=…` | ✓ | — | ✓ (`init --probe` config, 43 MB, 2 min) | y = (−0.09546, −0.02481, 0), then (−0.09521, −0.02558, 0) twice = the class called directly; the compiled FMU gives the same values. `--compile nuitka`: stopped after 30 min. |
 | Debutanizer column, steady state (30 stages) | [Arushan45/Debutanizer-Project](https://github.com/Arushan45/Debutanizer-Project) `f6fe813` | `debutanizer.model:solve_steady_state`, `--start reflux_ratio=2.5 --start alpha=1.9717789099` | ✓ | — | — | C4 0.96999957519, vapor 133.0 kmol/h, duty 0.84972 MW: the repo's `results/summary.json` to all digits. |
 | Debutanizer reflux optimization | same | `debutanizer.model:optimize_reflux`, `--start alpha=1.9717789099` | ✓ | — | — | Reflux 2.7602061381, purity 0.991, vapor 142.8878332478: the repo's optimum to all digits. |
