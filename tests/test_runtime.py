@@ -554,6 +554,14 @@ def test_dotted_path_reads_the_last_element():
         get_path({"x": Wrapper(4.0)}, "x.-1")
 
 
+def test_dotted_path_indexes_numpy_arrays():
+    np = pytest.importorskip("numpy")
+    from fmugen.templates.fmugen_runtime import get_path
+    model = {"t_core": np.array([20.0, 21.0, 22.0]), "grid": np.array([[1.0, 2.0], [3.0, 4.0]])}
+    assert get_path(model, "t_core.0") == 20.0 and get_path(model, "t_core.-1") == 22.0
+    assert get_path(model, "grid.1.0") == 3.0
+
+
 COUNTER = """
 CALLS = 0
 SCALE = 2.0

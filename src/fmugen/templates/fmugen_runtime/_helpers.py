@@ -541,6 +541,22 @@ def plain_number(value, unit=None):
     return value
 
 
+def _indexable(obj):
+    """Whether a path part like ``"0"`` or ``"-1"`` indexes ``obj`` by position.
+
+    Lists, tuples and arrays (numpy, torch: anything with ``ndim`` of 1 or more), but not pandas or
+    xarray objects, whose ``[0]`` is a label.
+
+    :param obj: any object.
+    :rtype: bool
+    """
+    if isinstance(obj, (tuple, list)):
+        return True
+    module = type(obj).__module__.split(".")[0]
+    return module not in ("pandas", "xarray") and (getattr(obj, "ndim", 0) or 0) >= 1 \
+        and hasattr(obj, "__getitem__")
+
+
 def get_path(obj, path):
     """Follow a dotted path through attributes, mapping keys and sequence indexes.
 
@@ -556,7 +572,7 @@ def get_path(obj, path):
     for part in path.split("."):
         if isinstance(obj, Mapping) and (part in obj or not hasattr(obj, part)) or _labelled(obj) and part in obj:   # "options.update": the method
             obj = obj[part]
-        elif part.lstrip("-").isdigit() and part.count("-") <= 1 and isinstance(obj, (tuple, list)):
+        elif part.lstrip("-").isdigit() and part.count("-") <= 1 and _indexable(obj):
             try:
                 obj = obj[int(part)]
             except TypeError as e:   # a list-like wrapping a single value (a GEKKO variable before its first solve)
