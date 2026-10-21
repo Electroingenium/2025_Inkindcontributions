@@ -60,7 +60,15 @@ The `init` config fails mostly on models that return arrays, tuples, strings or 
 
 The 16 failures: sgp4 (a C built-in with no signature: hand config not written yet), pyet (needs pandas Series), psychrolib (a numba ufunc takes no keyword arguments), simpy (`until` not bound to time), pyquaternion (`*args` constructor gets the step's arguments), nashpy (the method returns a generator), and 10 that simulate but give no useful results: ambiance, pandapower, pymunk, seirsplus, impedance, pybamm, river, commpy, tellurium and uncertainties.
 
-GEKKO: 10 of 16 simulate correctly (CGE once its `model.py` is renamed). The other 6 fail for reasons of their own: two can't be called or crash without fmugen, and four need inputs, data or solvers that aren't available.
+GEKKO models (16), counted the same way:
+
+| Config | Simulates correctly | Success |
+|---|---|---|
+| `init` (code only) | 1 of 16 | 6 % |
+| `init --probe` (or `init`, when it already works) | 9 of 16 | 56 % |
+| `init --probe` + a hand-written config | 9 of 16 | 56 % |
+
+GEKKO models keep their results in GEKKO variables, which only `--probe` finds. Of the 7 failures, CGE only needs its `model.py` renamed; ethanol and transmembrane fail without fmugen too; drilling, NHES, needforheat and OpenHENS need inputs, data or solvers that aren't available.
 
 ---
 
@@ -198,40 +206,39 @@ Errors such as `y is an array of shape […], not a single value` in the `init` 
 
 Each was installed as published (`pip install <package>`) into its own venv together with fmugen. Neural networks need `--probe`: their result sizes depend on the weights, and their code is mostly compiled or framework code. Weights from Hugging Face are downloaded on first use, unless the FMU is built with `--hf-weights` (automatic with `--vendor` / `--compile`). `--capture-output` is needed whenever a model prints while loading, which hangs UniFMU 0.14 otherwise.
 
-| Model | `init` / `init --probe` | Compiled (PyInstaller) | Notes |
-|---|---|---|---|
-| `chronos:ChronosBoltPipeline` | ✓ | ✓ (`init --probe` config, 322.8 MB) |  |
-| `silero_vad:load_silero_vad` | ✓ | ✓ (`init --probe` config, recompiled 2026-10-13) |  |
-| `tsfm_public.toolkit.get_model:get_model` | ✓ | ✓ (`init --probe` config, recompiled 2026-10-13) |  |
-| `stable_baselines3:PPO` | ✓ | ✓ (`init --probe` config, recompiled 2026-10-13) |  |
-| `surfaces.test_functions.machine_learning.hyperparameter_optimization.tabular.regression.test_functions.gradient_boosting_regressor:GradientBoostingRegressorFunction` | ✓ | ✓, 294 MB (recompiled 2026-10-13) (`init --probe` config) |  |
-| `torchani.models:ANI2x` | ✓ | ✓ (`init --probe` config, recompiled 2026-10-13) |  |
+| Model | `init` / `init --probe` | Hand config | Compiled (PyInstaller) | Notes |
+|---|---|---|---|---|
+| `chronos:ChronosBoltPipeline` | ✓ | — | ✓ (`init --probe` config, 322.8 MB) |  |
+| `silero_vad:load_silero_vad` | ✓ | — | ✓ (`init --probe` config, recompiled 2026-10-13) |  |
+| `tsfm_public.toolkit.get_model:get_model` | ✓ | — | ✓ (`init --probe` config, recompiled 2026-10-13) |  |
+| `stable_baselines3:PPO` | ✓ | — | ✓ (`init --probe` config, recompiled 2026-10-13) |  |
+| `surfaces.test_functions.machine_learning.hyperparameter_optimization.tabular.regression.test_functions.gradient_boosting_regressor:GradientBoostingRegressorFunction` | ✓ | — | ✓, 294 MB (recompiled 2026-10-13) (`init --probe` config) |  |
+| `torchani.models:ANI2x` | ✓ | — | ✓ (`init --probe` config, recompiled 2026-10-13) |  |
 
 ---
 
-
 ## GEKKO models
 
-Dynamic optimization and simulation models built on GEKKO, FMI 2. The last 6 rows fail for reasons of their own; on 2026-10-14 the distillation script was reworked into a class (first row) and the others were complemented by lighter published models (the debutanizer, MPC and FOPDT rows).
+Dynamic optimization and simulation models built on GEKKO, FMI 2, run on 2026-10-13/14 and checked against each model's published results where it has them. On 2026-10-14 GEKKO's distillation script (nothing to call) was reworked into a class (first row), and lighter published models (the debutanizer, MPC and FOPDT rows) were added next to those that fail for reasons of their own (the last 6 rows). Only the CFTOC model was compiled: the Nuitka builds were stopped after 30 minutes (see below).
 
-| Model | Source | Entry and `init` options | init | init --probe | build + simulate (FMI 2) | Notes |
+| Model | Source | Entry and `init` options | `init` / `init --probe` | Hand config | Compiled (PyInstaller) | Notes |
 |---|---|---|---|---|---|---|
-| Distillation column (GEKKO's example, reworked into a class; equations unchanged) | GEKKO [`examples/distillation.py`](https://github.com/BYU-PRISM/GEKKO/blob/master/examples/distillation.py) | `distillation_column.py:DistillationColumn`, `--call step` | ✓ | ✓ | plain ✓ / probe ✓ | 7 outputs. At reflux 3.0 the condenser goes 0.785721, 0.837391, 0.867374 and the reboiler 0.190012, 0.145341, 0.120733: the script's own values. The original module-level script has nothing to call. |
-| Distillation column as a Gym environment | [Kalpesh-RL/DistillationColumn](https://github.com/Kalpesh-RL/DistillationColumn) `f2b9966` | `DistColEnvDynInc_altrewards.py:DistColEnvDynInc`, `--start "Action=[0.0, 0.0, 0.0]" --setup reset` | ✓ | ✓ | plain build ✓, sim ✗ / **probe ✓** | State, reward, `done` and message change every step; `D`, `B`, `FL` are outputs too (D = 1.133, B = 0.873). |
-| Batch bioreactor (Monod growth) | [Bartosz1280/Bioreactor-modeling](https://github.com/Bartosz1280/Bioreactor-modeling) `3112aba` | `Bioreactor.py:SimpleBioreactor`, `--call solve`, `time_arr` and `simulation_input` from the repo notebook | ✓ | ✓ | probe ✓ | 5 outputs (`X`, `S`, `mu`, `dXdt`, `dSdt`) read from the GEKKO variables at the end of the horizon; X goes 0.0451 → 0.0444 g/L over 3 steps. |
-| Computable general equilibrium economy | [konradarchicinski/cge_model_python](https://github.com/konradarchicinski/cge_model_python) `60d611d` | `Code/model.py:CGE`, `--call results --start capital=0.1 --start labour=0.0` | ✓ | ✓ | ✗ unless renamed | `build` refuses a model file named `model.py` (clashes with UniFMU's backend; intended). From a renamed copy: 27 outputs, first step = the direct run (x3 supply 72.076, price 1.119). Needs pandas 2 (with pandas 3 the model itself fails). |
-| Constrained finite-time optimal control | [ollyme102b/ros_workspace](https://github.com/ollyme102b/ros_workspace) `03f5938` | `CFTOCSolverV2.py:CFTOCSolverV2`, `--call calculate_optimal_actuation`, the repo test's starts, `--start calculate_optimal_actuation_x0=…` | — | ✓ | probe ✓ | y = (−0.09546, −0.02481, 0), then (−0.09521, −0.02558, 0) twice = the class called directly. `--compile pyinstaller`: ✓, 2 min, 43 MB, same values. `--compile nuitka`: stopped after 30 min. |
-| Debutanizer column, steady state (30 stages) | [Arushan45/Debutanizer-Project](https://github.com/Arushan45/Debutanizer-Project) `f6fe813` | `debutanizer.model:solve_steady_state`, `--start reflux_ratio=2.5 --start alpha=1.9717789099` | ✓ | ✓ | plain build ✓, sim ✗ / **probe ✓** | C4 0.96999957519, vapor 133.0 kmol/h, duty 0.84972 MW: the repo's `results/summary.json` to all digits. |
-| Debutanizer reflux optimization | same | `debutanizer.model:optimize_reflux`, `--start alpha=1.9717789099` | ✓ | ✓ | plain build ✓, sim ✗ / **probe ✓** | Reflux 2.7602061381, purity 0.991, vapor 142.8878332478: the repo's optimum to all digits. |
-| Linear MPC | [dhruvhaldar/apsis](https://github.com/dhruvhaldar/apsis) `a171cf1` | `apsis/mpc.py:solve_mpc`, the app's defaults | ✓ | ✓ | plain build ✓, sim ✗ / **probe ✓** | (time, states, inputs) over the horizon: 21 + 42 + 21 outputs. |
-| 2×2 FOPDT process (a `GEKKO` subclass) | [BYU-PRISM/Transformer_MPC](https://github.com/BYU-PRISM/Transformer_MPC) `7686735` | `process_fopdt.py:ProcessModel`, `--call run --start "u=[1.0, 0.5]"` | ✓ | ✓ | plain build ✓, sim ✗ / **probe ✓** | y = (0.3333, 0.0833), (0.6111, 0.1528), (0.8426, 0.2106): K₁₁ = 2, K₂₂ = 1, τ = 5. Outputs list only the GEKKO variables, not GEKKO's own state (fixed 2026-10-14). |
-| MPC controller for that process (a `GEKKO` subclass) | same repo | `mpc_gekko.py:MPCModel`, `--call solve` | ✓ | ✓ | plain build ✓, sim ✗ / **probe ✓** | Runs, but with no setpoints its moves stay near 0. The setpoints are attributes (`y1.SP`): bind an input with `to = "attr:y1.SP"` by hand. |
-| Ethanol fed-batch bioreactor | [APMonitor](https://apmonitor.com/do/index.php/Main/EthanolBioreactor) | `ethanol_bioreactor.py` | ✗ | ✗ | — | A script: importing it runs its own solve, and GEKKO's local solver crashes (`Access Violation … ace.f90`), also when run directly. **Not fmugen's.** Now shown as a `fmugen: error` naming the line. |
-| Cell transmembrane potential | [0xDBFB7/transmembrane_potential](https://github.com/0xDBFB7/transmembrane_potential) `165c86f` | `transmembrane_lib.py:gekko_sim_method`, `--kind function` | ✓ | ✓ | ✗ | `NameError: name 'GEKKO' is not defined`: dead code upstream. **Not fmugen's.** |
-| Directional drilling MPC | [Xiang-Gu/CS394R_RL_Directional_Drilling](https://github.com/Xiang-Gu/CS394R_RL_Directional_Drilling) `12a45cf` | `mpc/mpc.py:solveMPC`, `--call action --start "state=[0.0, 0.0, 0.0, 0.0]"` | ✓ | ✓ | ✗ | The constructor takes a Gym environment object, which no FMU input can give; it also solves on APMonitor's server (`remote=True`). |
-| Nuclear-renewable hybrid energy system | [BYU-PRISM/NHES-opt-sensitivity](https://github.com/BYU-PRISM/NHES-opt-sensitivity) `5e9a6f2` | `simple_nhes.py:model`, `--start params=<nom_params>` | ✓ | ✓ | ✗ | Reads `grid_data/more_data_scaled.csv`, which isn't published. |
-| Residential heat diagnosis | [energietransitie/needforheat-diagnosis-software](https://github.com/energietransitie/needforheat-diagnosis-software) `48d3a85` | `analysis/rhc_analysis.py:Model`, `--call building` | ✓ | ✓ | ✗ | Methods written without `self`, and the input is a pandas DataFrame of measurements, which no FMU input can give. |
-| Heat exchanger network synthesis | [waikato-ahuora-smart-energy-systems/OpenHENS](https://github.com/waikato-ahuora-smart-energy-systems/OpenHENS) `5081bab` | `openhens:OpenHENS`, `--call solve`, the README's options | ✓ | ✓ | ✗ | `couenne solver not found`: needs the COIN-OR binaries on PATH. |
+| Distillation column (GEKKO's example, reworked into a class; equations unchanged) | GEKKO [`examples/distillation.py`](https://github.com/BYU-PRISM/GEKKO/blob/master/examples/distillation.py) | `distillation_column.py:DistillationColumn`, `--call step` | ✓ | — | — | 7 outputs. At reflux 3.0 the condenser goes 0.785721, 0.837391, 0.867374 and the reboiler 0.190012, 0.145341, 0.120733: the script's own values. The original module-level script has nothing to call. |
+| Distillation column as a Gym environment | [Kalpesh-RL/DistillationColumn](https://github.com/Kalpesh-RL/DistillationColumn) `f2b9966` | `DistColEnvDynInc_altrewards.py:DistColEnvDynInc`, `--start "Action=[0.0, 0.0, 0.0]" --setup reset` | ✓ | — | — | State, reward, `done` and message change every step; `D`, `B`, `FL` are outputs too (D = 1.133, B = 0.873). |
+| Batch bioreactor (Monod growth) | [Bartosz1280/Bioreactor-modeling](https://github.com/Bartosz1280/Bioreactor-modeling) `3112aba` | `Bioreactor.py:SimpleBioreactor`, `--call solve`, `time_arr` and `simulation_input` from the repo notebook | ✓ | — | — | 5 outputs (`X`, `S`, `mu`, `dXdt`, `dSdt`) read from the GEKKO variables at the end of the horizon; X goes 0.0451 → 0.0444 g/L over 3 steps. |
+| Computable general equilibrium economy | [konradarchicinski/cge_model_python](https://github.com/konradarchicinski/cge_model_python) `60d611d` | `Code/model.py:CGE`, `--call results --start capital=0.1 --start labour=0.0` | ✗ build fails | — | — | `build` refuses a model file named `model.py` (it clashes with UniFMU's backend; intended: rename the file). From a renamed copy: 27 outputs, the first step = the direct run (x3 supply 72.076, price 1.119). Needs pandas 2 (with pandas 3 the model itself fails). |
+| Constrained finite-time optimal control | [ollyme102b/ros_workspace](https://github.com/ollyme102b/ros_workspace) `03f5938` | `CFTOCSolverV2.py:CFTOCSolverV2`, `--call calculate_optimal_actuation`, the repo test's starts, `--start calculate_optimal_actuation_x0=…` | ✓ | — | ✓ (`init --probe` config, 43 MB, 2 min) | y = (−0.09546, −0.02481, 0), then (−0.09521, −0.02558, 0) twice = the class called directly; the compiled FMU gives the same values. `--compile nuitka`: stopped after 30 min. |
+| Debutanizer column, steady state (30 stages) | [Arushan45/Debutanizer-Project](https://github.com/Arushan45/Debutanizer-Project) `f6fe813` | `debutanizer.model:solve_steady_state`, `--start reflux_ratio=2.5 --start alpha=1.9717789099` | ✓ | — | — | C4 0.96999957519, vapor 133.0 kmol/h, duty 0.84972 MW: the repo's `results/summary.json` to all digits. |
+| Debutanizer reflux optimization | same | `debutanizer.model:optimize_reflux`, `--start alpha=1.9717789099` | ✓ | — | — | Reflux 2.7602061381, purity 0.991, vapor 142.8878332478: the repo's optimum to all digits. |
+| Linear MPC | [dhruvhaldar/apsis](https://github.com/dhruvhaldar/apsis) `a171cf1` | `apsis/mpc.py:solve_mpc`, the app's defaults | ✓ | — | — | (time, states, inputs) over the horizon: 21 + 42 + 21 outputs. |
+| 2×2 FOPDT process (a `GEKKO` subclass) | [BYU-PRISM/Transformer_MPC](https://github.com/BYU-PRISM/Transformer_MPC) `7686735` | `process_fopdt.py:ProcessModel`, `--call run --start "u=[1.0, 0.5]"` | ✓ | — | — | y = (0.3333, 0.0833), (0.6111, 0.1528), (0.8426, 0.2106): K₁₁ = 2, K₂₂ = 1, τ = 5. Outputs list only the GEKKO variables, not GEKKO's own state (fixed 2026-10-14). |
+| MPC controller for that process (a `GEKKO` subclass) | same repo | `mpc_gekko.py:MPCModel`, `--call solve` | ✓ | — | — | Runs, but with no setpoints its moves stay near 0. The setpoints are attributes (`y1.SP`): bind an input with `to = "attr:y1.SP"` by hand. |
+| Ethanol fed-batch bioreactor | [APMonitor](https://apmonitor.com/do/index.php/Main/EthanolBioreactor) | `ethanol_bioreactor.py` | ✗ no config | — | — | A script: importing it runs its own solve, and GEKKO's local solver crashes (`Access Violation … ace.f90`), also when run directly. **Not fmugen's.** Now shown as a `fmugen: error` naming the line. |
+| Cell transmembrane potential | [0xDBFB7/transmembrane_potential](https://github.com/0xDBFB7/transmembrane_potential) `165c86f` | `transmembrane_lib.py:gekko_sim_method`, `--kind function` | ✗ simulate fails | — | — | `NameError: name 'GEKKO' is not defined`: dead code upstream. **Not fmugen's.** |
+| Directional drilling MPC | [Xiang-Gu/CS394R_RL_Directional_Drilling](https://github.com/Xiang-Gu/CS394R_RL_Directional_Drilling) `12a45cf` | `mpc/mpc.py:solveMPC`, `--call action --start "state=[0.0, 0.0, 0.0, 0.0]"` | ✗ simulate fails | — | — | The constructor takes a Gym environment object, which no FMU input can give; it also solves on APMonitor's server (`remote=True`). |
+| Nuclear-renewable hybrid energy system | [BYU-PRISM/NHES-opt-sensitivity](https://github.com/BYU-PRISM/NHES-opt-sensitivity) `5e9a6f2` | `simple_nhes.py:model`, `--start params=<nom_params>` | ✗ simulate fails | — | — | Reads `grid_data/more_data_scaled.csv`, which isn't published. |
+| Residential heat diagnosis | [energietransitie/needforheat-diagnosis-software](https://github.com/energietransitie/needforheat-diagnosis-software) `48d3a85` | `analysis/rhc_analysis.py:Model`, `--call building` | ✗ simulate fails | — | — | Methods written without `self`, and the input is a pandas DataFrame of measurements, which no FMU input can give. |
+| Heat exchanger network synthesis | [waikato-ahuora-smart-energy-systems/OpenHENS](https://github.com/waikato-ahuora-smart-energy-systems/OpenHENS) `5081bab` | `openhens:OpenHENS`, `--call solve`, the README's options | ✗ simulate fails | — | — | `couenne solver not found`: needs the COIN-OR binaries on PATH. |
 
 **Compiling GEKKO models:** with PyInstaller, a GEKKO model compiles in 2 min (43 MB) in a venv with only gekko, numpy, fmugen, PyInstaller and FMPy. In a shared venv with many other packages, the same compile took 19 min and made a 195 MB FMU: fmugen collects every gekko submodule, and some of them import scikit-learn, Pyomo and IPython when installed. **Compile a model in a venv with only what it needs.** Nuitka builds with gekko and numpy took over 30 minutes and were stopped; `examples/simple_pid` compiles with Nuitka and simulates (12 min).
 
