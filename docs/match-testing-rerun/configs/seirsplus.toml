@@ -1,0 +1,42 @@
+# seirsplus: the `init --probe` config, reading the latest compartment counts (the last element
+# of each growing array) instead of the arrays.
+# `dt` is a fixed 0.1 instead of the step size: run_epoch evaluates at arange(t, t + runtime, dt),
+# so with dt = runtime = 1 it keeps only the start point and t never advances.
+[model]
+entry = "seirsplus.models:SEIRSModel"
+call = "run_epoch"
+requirements = ["seirsplus==1.0.9"]
+
+[parameters]
+initN = { start = 100000 }
+beta = { start = 0.147 }
+sigma = { start = 0.192 }
+gamma = { start = 0.0714 }
+xi = { start = 0 }
+mu_I = { start = 0 }
+mu_0 = { start = 0 }
+nu = { start = 0 }
+p = { start = 0 }
+theta_E = { start = 0 }
+theta_I = { start = 0 }
+psi_E = { start = 0 }
+psi_I = { start = 0 }
+q = { start = 0 }
+initE = { start = 0 }
+initI = { start = 100 }
+initQ_E = { start = 0 }
+initQ_I = { start = 0 }
+initR = { start = 0 }
+initF = { start = 0 }
+
+[inputs]
+runtime = { start = 1.0 }
+dt = { start = 0.1 }
+
+[outputs]
+t = { from = "attr:t" }
+S = { from = "attr:numS.-1" }
+E = { from = "attr:numE.-1" }
+I = { from = "attr:numI.-1" }
+R = { from = "attr:numR.-1" }
+F = { from = "attr:numF.-1" }

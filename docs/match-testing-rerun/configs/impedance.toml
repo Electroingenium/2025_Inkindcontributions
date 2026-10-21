@@ -1,0 +1,25 @@
+# impedance: the `init --probe` config, with the predicted impedance at each frequency as outputs:
+# predict() returns a complex array, read as `.real` and `.imag` per element.
+[model]
+entry = "impedance.models.circuits:Randles"
+call = "predict"
+init_call = true
+requirements = ["impedance==1.7.1"]
+
+[parameters]
+CPE = { start = false }
+initial_guess = { dimensions = [5], start = [0.01, 0.005, 0.001, 200.0, 0.1] }
+
+[inputs]
+frequencies = { dimensions = [4], start = [1.0, 10.0, 100.0, 1000.0], unit = "Hz" }
+use_initial = { start = false }
+
+[outputs]
+Z1_re = { from = "return:0.real", unit = "Ohm" }
+Z1_im = { from = "return:0.imag", unit = "Ohm" }
+Z2_re = { from = "return:1.real", unit = "Ohm" }
+Z2_im = { from = "return:1.imag", unit = "Ohm" }
+Z3_re = { from = "return:2.real", unit = "Ohm" }
+Z3_im = { from = "return:2.imag", unit = "Ohm" }
+Z4_re = { from = "return:3.real", unit = "Ohm" }
+Z4_im = { from = "return:3.imag", unit = "Ohm" }

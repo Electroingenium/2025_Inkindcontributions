@@ -1,0 +1,24 @@
+# river: the `init --probe` config, with the learned weights and intercept as outputs.
+# learn_one returns None; the weights are a dict on the model (`weights.a`).
+[model]
+entry = "river.linear_model:LinearRegression"
+call = "learn_one"
+requirements = ["river==0.26.1"]
+
+[parameters]
+l2 = { start = 0.0 }
+l1 = { start = 0.0 }
+intercept_init = { start = 0.0 }
+intercept_lr = { start = 0.01 }
+clip_gradient = { start = 1000000000000.0 }
+
+[inputs]
+a = { start = 1.0, to = "arg:x[a]" }
+b = { start = 2.0, to = "arg:x[b]" }
+y = { start = 3.0 }
+w = { start = 1.0 }
+
+[outputs]
+weight_a = { from = "attr:weights.a" }
+weight_b = { from = "attr:weights.b" }
+intercept = { from = "attr:intercept" }

@@ -1,0 +1,24 @@
+# pybamm: the `init --probe` config, with the terminal voltage read from the solution step()
+# returns. The Solution is not a Mapping: "Voltage [V]" is only reachable as solution["Voltage [V]"]
+# (built on demand), so the path below is expected to fail. The time of the solution's last point
+# is read too.
+[model]
+entry = "pybamm:Simulation"
+call = "step"
+init_call = true
+requirements = ["pybamm==26.10.1.1"]
+
+[model.constants]
+model = { call = "pybamm.lithium_ion:SPM()" }
+
+[parameters]
+cache_esoh = { start = true }
+experiment_model_mode = { start = "legacy" }
+
+[inputs]
+dt = { start = 100.0, unit = "s" }
+save = { start = true }
+
+[outputs]
+t = { from = "return:t.-1", unit = "s" }
+voltage = { from = "return:Voltage [V].entries.-1", unit = "V" }

@@ -1,0 +1,19 @@
+# commpy: the `init --probe` config, with the modulated symbols as outputs: modulate() returns a
+# complex array (4 bits -> 2 QPSK symbols), read as `.real` and `.imag` per symbol.
+[model]
+entry = "commpy.modulation:QAMModem"
+call = "modulate"
+init_call = true
+requirements = ["numpy==2.5.4", "scikit-commpy==0.8.0"]
+
+[model.call_constants]
+input_bits = { call = "numpy:array([0,1,1,0])" }
+
+[parameters]
+m = { start = 4 }
+
+[outputs]
+s1_re = { from = "return:0.real" }
+s1_im = { from = "return:0.imag" }
+s2_re = { from = "return:1.real" }
+s2_im = { from = "return:1.imag" }
