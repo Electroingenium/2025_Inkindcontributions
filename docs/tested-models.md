@@ -26,7 +26,7 @@ Each model went through:
 
 **FMI 2 by default.** A model was run with FMI 3 only when no FMI 2 config simulated; the results below combine both.
 
-Setup: fmugen at `6dfc18c` (2026-10-22), WSL 2 (Ubuntu), Python 3.13, `uv` venvs, FMPy 0.3.32, UniFMU 0.14, gekko 1.3.2 with its local solver. CGE ran on Windows 11. Every FMU was compared value by value with the model run directly ([report](match-testing-rerun/report.md)). The **Compiled** column: PyInstaller 6.22.3, each compiled FMU compared with the uncompiled one; on Windows 11 (2026-10-13) for the models that worked then, and in WSL 2 (2026-10-22, fmugen `19ccfd9`, [report](match-testing-compile/report.md)) for the rest. Compile in a venv with only what the model needs: extra packages make the FMU larger and the build slower.
+Setup: fmugen at `6dfc18c` (2026-10-22), WSL 2 (Ubuntu), Python 3.13, `uv` venvs, FMPy 0.3.32, UniFMU 0.14, gekko 1.3.2 with its local solver. CGE ran on Windows 11. Every FMU was compared value by value with the model run directly ([report](match-testing-rerun/report.md)). The **Compiled** column: PyInstaller 6.22.3 in WSL 2 (Linux), each compiled FMU compared with the uncompiled one of the same config, value by value ([report](match-testing-compile-rest/report.md), [GEKKO and hand configs](match-testing-compile/report.md)). Sizes are of the Linux FMUs. Compile in a venv with only what the model needs: extra packages make the FMU larger and the build slower.
 
 Columns: **`init` / `init --probe`**: ✓ if the config of either one builds, simulates and outputs the model's results; otherwise how they failed (✗ no useful outputs: it runs, but only outputs parameters, settings or constants). **Hand config**: a config written by hand (for the examples, the repository's `fmugen.toml`), ✓ if it builds, simulates and outputs the model's results, with a link to it; — when the model needs none: ✓, ✗ no config (`init` stopped), ✗ build fails, ✗ simulate fails, or — (not run). **Compiled**: the best config compiled with PyInstaller, built and simulated. **Notes**: what was checked, or the error of each config that failed ("`init`:", "`init --probe`:").
 
@@ -76,11 +76,11 @@ The 5 failures: sgp4, pyet and nashpy (not supported), pymunk and pybamm (no pat
 
 | Model | `init` / `init --probe` | Hand config (the repository's `fmugen.toml`) | Compiled (PyInstaller) | Notes |
 |---|---|---|---|---|
-| [examples/psychrometry](../examples/psychrometry) (`compute_balances_simplified`) | ✓ | ✓ | ✓ (hand config, 128.7 MB) |  |
-| [examples/simple_pid](../examples/simple_pid) (`simple_pid:PID`) | ✓ | ✓ | ✓ (`init --probe` config, 128.7 MB) |  |
-| [examples/rc_building](../examples/rc_building) (`Zone`) | ✓ | ✓† | ✓† (hand config, 128.7 MB) | †The repo config fixes `step_size = 3600`, so the generic 1 s run is refused (correct); simulated at 3600 s steps. |
-| [examples/kalman](../examples/kalman) (`filterpy.kalman:KalmanFilter`; repo config FMI 3: structural parameters, clock) | ✗ no useful outputs | ✓ | ✓ (hand config) | The `init` configs output only filter settings and likelihoods (`dim_x`, …, `alpha`, `likelihood`), not the state estimate. The repository config is driven by `examples/kalman/run.py`. |
-| [examples/sampled_pid](../examples/sampled_pid) (`simple_pid:PID`; repo config: clocks) | ✓ | ✓ | ✓ (hand config, 128.7 MB) | The repo config is driven by `run.py` (clock ticked every 0.1 s, first-order plant). |
+| [examples/psychrometry](../examples/psychrometry) (`compute_balances_simplified`) | ✓ | ✓ | ✓ (`init --probe` config, 108.7 MB) |  |
+| [examples/simple_pid](../examples/simple_pid) (`simple_pid:PID`) | ✓ | ✓ | ✓ (`init --probe` config, 111.0 MB) |  |
+| [examples/rc_building](../examples/rc_building) (`Zone`) | ✓ | ✓† | ✓ (`init --probe` config, 108.8 MB) | †The repo config fixes `step_size = 3600`, so the generic 1 s run is refused (correct); simulated at 3600 s steps. |
+| [examples/kalman](../examples/kalman) (`filterpy.kalman:KalmanFilter`; repo config FMI 3: structural parameters, clock) | ✗ no useful outputs | ✓ | ✓ (repository config (FMI 3), 114.8 MB) | The `init` configs output only filter settings and likelihoods (`dim_x`, …, `alpha`, `likelihood`), not the state estimate. The repository config is driven by `examples/kalman/run.py`. |
+| [examples/sampled_pid](../examples/sampled_pid) (`simple_pid:PID`; repo config: clocks) | ✓ | ✓ | ✓ (repository config (FMI 3), 111.1 MB) | The repo config is driven by `run.py` (clock ticked every 0.1 s, first-order plant). |
 
 ---
 
@@ -90,130 +90,130 @@ Errors such as `y is an array of shape […], not a single value` in the `init` 
 
 | Model | `init` / `init --probe` | Hand config | Compiled (PyInstaller) | Notes |
 |---|---|---|---|---|
-| `ahrs.filters:Madgwick` | ✓ | — | ✓ (`init --probe` config) |  |
-| `ahrs.filters:Mahony` | ✓ | — | ✓ (`init --probe` config) |  |
+| `ahrs.filters:Madgwick` | ✓ | — | ✓ (`init --probe` config, 50.3 MB) |  |
+| `ahrs.filters:Mahony` | ✓ | — | ✓ (`init --probe` config, 50.3 MB) |  |
 | `ambiance:Atmosphere` | ✗ no useful outputs | ✓ ([config](match-testing-rerun/configs/ambiance.toml)) | ✓ (hand config, 87.6 MB) | The `init` configs output only the inputs: the results are properties returning 1-element arrays. The hand config reads element 0 of each (`return:temperature.0`, …). |
-| `anastruct:SystemElements` | ✓ | — | ✓ (`init --probe` config, 52.5 MB) |  |
-| `antropy:perm_entropy` | ✓ | — | ✓ (`init --probe` config, 105.7 MB) |  |
-| `astral.sun:elevation` | ✓ | — | ✓ (`init --probe` config, 101.9 MB) |  |
-| `astropy.cosmology:FlatLambdaCDM` | ✓ | — | ✓ (`init --probe` config, 37.7 MB) |  |
-| `Bio.SeqUtils:gc_fraction` | ✓ | — | ✓ (`init --probe` config, 29.8 MB) |  |
-| `blackscholes:BlackScholesCall` | ✓ | — | ✓ (`init --probe` config, 24.7 MB) |  |
+| `anastruct:SystemElements` | ✓ | — | ✓ (`init --probe` config, 88.5 MB) |  |
+| `antropy:perm_entropy` | ✓ | — | ✓ (`init --probe` config, 164.9 MB) |  |
+| `astral.sun:elevation` | ✓ | — | ✓ (`init --probe` config, 46.2 MB) |  |
+| `astropy.cosmology:FlatLambdaCDM` | ✓ | — | ✓ (`init --probe` config, 65.2 MB) |  |
+| `Bio.SeqUtils:gc_fraction` | ✓ | — | ✓ (`init --probe` config, 54.3 MB) |  |
+| `blackscholes:BlackScholesCall` | ✓ | — | ✓ (`init --probe` config, 45.9 MB) |  |
 | `cantera:Solution` | ✗ no useful outputs | ✓ ([config](#cantera)) | ✓ (hand config, 79.9 MB) | Outputs are only solver settings (`rtol`, `max_steps`): the results are Cython properties, and the gas state can't be set from inputs. |
-| `chemicals.vapor_pressure:Antoine` | ✓ | — | ✓ (`init --probe` config, 134.6 MB) |  |
-| `colour.temperature:CCT_to_xy_CIE_D` | ✓ | — | ✓ (`init --probe` config, 113.1 MB) |  |
+| `chemicals.vapor_pressure:Antoine` | ✓ | — | ✓ (`init --probe` config, 126.5 MB) |  |
+| `colour.temperature:CCT_to_xy_CIE_D` | ✓ | — | ✓ (`init --probe` config, 56.4 MB) |  |
 | `commpy.modulation:QAMModem` | ✗ no useful outputs | ✓ ([config](match-testing-rerun/configs/commpy.toml)) | ✓ (hand config, 126.0 MB) | `init`: only `m = 4`; the modulated symbols are complex, so they're left out. The hand config reads `.real` and `.imag` per symbol. |
-| `control:StateSpace` | ✓ | — | ✓ (`init --probe` config) | Needs `--start x=[1.0, 0.0] --start u=[0.0]`. |
+| `control:StateSpace` | ✓ | — | ✓ (`init --probe` config, 124.6 MB) | Needs `--start x=[1.0, 0.0] --start u=[0.0]`. |
 | `CoolProp.CoolProp:PropsSI` | ✗ build fails | ✓ ([config](models.md#positional-only-arguments)) | ✓ (hand config, 56.7 MB) | C extension with no signature: no variables inferred. |
-| `cv2:KalmanFilter` | ✓ | — | ✓ (`init --probe` config, 66.3 MB) |  |
+| `cv2:KalmanFilter` | ✓ | — | ✓ (`init --probe` config, 163.5 MB) |  |
 | `dysts:Lorenz` (`call = "rhs"`, `[model] integrate`) | — | ✓ | ✓ (hand config, 267.5 MB, both integrators) | Integrated by the FMU with `[model] integrate`: `"scipy:DOP853"` (FMI 3) or `"rk4"`, 50 substeps (FMI 2). |
-| `electricpy:powerset` | ✓ | — | ✓ (`init --probe` config, 71.2 MB) |  |
-| `erfa:gmst06` | ✓ | — | ✓ (`init --probe` config, 101.8 MB) |  |
-| `filterpy.common:Q_discrete_white_noise` | ✓ | — | ✓ (`init --probe` config, 128.8 MB) |  |
-| `filterpy.gh:GHFilter` | ✓ | — | ✓ (`init --probe` config, 128.8 MB) |  |
-| `fluids.core:Reynolds` | ✓ | — | ✓ (`init --probe` config, 133.8 MB) |  |
-| `fluids.friction:friction_factor` | ✓ | — | ✓ (`init --probe` config, 133.8 MB) |  |
+| `electricpy:powerset` | ✓ | — | ✓ (`init --probe` config, 123.8 MB) |  |
+| `erfa:gmst06` | ✓ | — | ✓ (`init --probe` config, 46.7 MB) |  |
+| `filterpy.common:Q_discrete_white_noise` | ✓ | — | ✓ (`init --probe` config, 114.8 MB) |  |
+| `filterpy.gh:GHFilter` | ✓ | — | ✓ (`init --probe` config, 114.8 MB) |  |
+| `fluids.core:Reynolds` | ✓ | — | ✓ (`init --probe` config, 104.0 MB) |  |
+| `fluids.friction:friction_factor` | ✓ | — | ✓ (`init --probe` config, 104.0 MB) |  |
 | `fluids.units:head_from_P` | ✗ simulate fails | ✓ ([config](#fluidsunits)) | ✓ (hand config, 89.1 MB) | TypeError: 100000.0 has no quantity |
 | `fluids.units:Reynolds` | ✗ simulate fails | ✓ ([config](#fluidsunits)) | ✓ (hand config, 89.1 MB) | TypeError: 1.0 has no quantity |
-| `gsw:rho` | ✓ | — | ✓ (`init --probe` config, 103.3 MB) |  |
-| `gymnasium.envs.classic_control.cartpole:CartPoleEnv` | ✓ | — | ✓ (`init --probe` config, 135.6 MB) |  |
-| `gymnasium.envs.classic_control.pendulum:PendulumEnv` | ✓ | — | ✓ (`init --probe` config, 135.6 MB) |  |
-| `haversine:haversine` | ✓ | — | ✓ (`init --probe` config, 24.6 MB) |  |
-| `heartpy:process` | ✓ | — | ✓ (`init --probe` config) | **Needs `setuptools<81` installed by hand** (heartpy imports `pkg_resources` without declaring it), and its `data/data.csv` given by full path. |
-| `highway_env.envs.highway_env:HighwayEnv` | ✓ | — | ✓ (`init --probe` config, 135.8 MB) |  |
-| `hplib.hplib:HeatPump` | ✓ | — | ✓ (`init --probe` config) |  |
-| `ht.conv_internal:Nu_conv_internal` | ✓ | — | ✓ (`init --probe` config, 134.1 MB) |  |
-| `ht.hx:effectiveness_from_NTU` | ✓ | — | ✓ (`init --probe` config, 134.1 MB) |  |
-| `iapws.iapws97:_TSat_P` | ✓ | — | ✓ (`init --probe` config) |  |
-| `iapws:IAPWS97` | ✓ | — | ✓ (`init --probe` config) |  |
+| `gsw:rho` | ✓ | — | ✓ (`init --probe` config, 48.3 MB) |  |
+| `gymnasium.envs.classic_control.cartpole:CartPoleEnv` | ✓ | — | ✓ (seeded config, 104.0 MB) |  |
+| `gymnasium.envs.classic_control.pendulum:PendulumEnv` | ✓ | — | ✓ (seeded config, 104.0 MB) |  |
+| `haversine:haversine` | ✓ | — | ✓ (`init --probe` config, 44.8 MB) |  |
+| `heartpy:process` | ✓ | — | ✓ (`init --probe` config, 119.6 MB) | **Needs `setuptools<81` installed by hand** (heartpy imports `pkg_resources` without declaring it), and its `data/data.csv` given by full path. |
+| `highway_env.envs.highway_env:HighwayEnv` | ✓ | — | ✓ (seeded config, 104.2 MB) |  |
+| `hplib.hplib:HeatPump` | ✓ | — | ✓ (`init --probe` config, 102.7 MB) |  |
+| `ht.conv_internal:Nu_conv_internal` | ✓ | — | ✓ (`init --probe` config, 104.8 MB) |  |
+| `ht.hx:effectiveness_from_NTU` | ✓ | — | ✓ (`init --probe` config, 104.8 MB) |  |
+| `iapws.iapws97:_TSat_P` | ✓ | — | ✓ (`init --probe` config, 87.8 MB) |  |
+| `iapws:IAPWS97` | ✓ | — | ✓ (`init --probe` config, 87.8 MB) |  |
 | `impedance.models.circuits:Randles` | ✗ no useful outputs | ✓ ([config](match-testing-rerun/configs/impedance.toml)) | ✓ (hand config, 131.6 MB) | `init`: outputs only echo `initial_guess`; the complex prediction is left out. The hand config reads `.real` and `.imag` at each frequency. |
-| `joblib:load` | ✓ | — | ✓ (`init --probe` config) | **Compiled: needs `scikit-learn` added to `[model] requirements` by hand**: the model is unpickled, so nothing imports scikit-learn by name. Uncompiled, it needs nothing extra. |
-| `librosa:hz_to_mel` | ✓ | — | ✓ (`init --probe` config, 108.5 MB) |  |
-| `mendeleev:element` | ✓ | — | ✓ (`init --probe` config) |  |
-| `mesa.examples:BoltzmannWealth` | ✓ | — | ✓ (`init --probe` config, 111.4 MB) |  |
-| `meteocalc:heat_index` | ✓ | — | ✓ (`init --probe` config, 24.6 MB) |  |
+| `joblib:load` | ✓ | — | ✓ (`init --probe` config, 112.8 MB) | **Compiled: needs `scikit-learn` added to `[model] requirements` by hand**: the model is unpickled, so nothing imports scikit-learn by name. Uncompiled, it needs nothing extra. |
+| `librosa:hz_to_mel` | ✓ | — | ✓ (`init --probe` config, 167.7 MB) |  |
+| `mendeleev:element` | ✓ | — | ✓ (`init --probe` config, 75.7 MB) |  |
+| `mesa.examples:BoltzmannWealth` | ✓ | — | ✓ (seeded config, 105.2 MB) |  |
+| `meteocalc:heat_index` | ✓ | — | ✓ (`init --probe` config, 44.8 MB) |  |
 | `metpy.calc:dewpoint_from_relative_humidity` | ✗ simulate fails | ✓ ([config](#metpy)) | ✓ (hand config, 149.9 MB) | ValueError: This function changed in version(s) ['1.0']--double check that the function is being called properly. |
 | `nashpy:Game` | ✗ simulate fails | — | — | With `support_enumeration` the method returns a generator: `--probe` finds no outputs, the `init` config fails (`float() argument must be … not 'generator'`). 0.0.43 has no `is_zero_sum`. |
-| `neurokit2:ecg_simulate` | ✓ | — | ✓ (`init --probe` config, 114.1 MB) |  |
-| `numdifftools:Derivative` | ✓ | — | ✓ (`init --probe` config, 52.3 MB) |  |
-| `numpy_financial:pmt` | ✓ | — | ✓ (`init --probe` config, 24.7 MB) |  |
-| `obspy.geodetics:gps2dist_azimuth` | ✓ | — | ✓ (`init --probe` config, 77.0 MB) |  |
-| `openap:Thrust` | ✓ | — | ✓ (`init --probe` config) |  |
-| `openturns:Normal` | ✓ | — | ✓ (`init --probe` config, 79.9 MB) |  |
+| `neurokit2:ecg_simulate` | ✓ | — | ✓ (`init --probe` config, 150.4 MB) |  |
+| `numdifftools:Derivative` | ✓ | — | ✓ (`init --probe` config, 90.8 MB) |  |
+| `numpy_financial:pmt` | ✓ | — | ✓ (`init --probe` config, 46.0 MB) |  |
+| `obspy.geodetics:gps2dist_azimuth` | ✓ | — | ✓ (`init --probe` config, 145.5 MB) |  |
+| `openap:Thrust` | ✓ | — | ✓ (`init --probe` config, 106.7 MB) |  |
+| `openturns:Normal` | ✓ | — | ✓ (`init --probe` config, 152.2 MB) |  |
 | `pandapower:runpp` | ✗ no useful outputs | ✓ ([config](match-testing-rerun/configs/pandapower.toml), another entry) | ✓ (hand config, 124.1 MB) | `runpp(net)` returns None and writes its results onto `net`, which a function entry can't read back. The hand config uses `pandapower.contingency:run_contingency(net, nminus1_cases={})`, which runs the same `runpp` and returns its results (bus voltages, line and transformer loadings). |
-| `pedon:Genuchten` | ✓ | — | ✓ (`init --probe` config, 83.7 MB) |  |
-| `ppigrf:igrf` | ✓ | — | ✓ (`init --probe` config, 101.5 MB) |  |
+| `pedon:Genuchten` | ✓ | — | ✓ (`init --probe` config, 129.0 MB) |  |
+| `ppigrf:igrf` | ✓ | — | ✓ (`init --probe` config, 60.8 MB) |  |
 | `psychrolib:GetHumRatioFromRelHum` | ✓ | — | ✓ (`init --probe` config, 44.8 MB; 110.2 MB with numba) | Also with numba installed, which makes psychrolib's functions ufuncs: `init` passes their arguments by position. |
-| pvlib `get_total_irradiance` → `sapm_cell` → `pvwatts_dc` (**composite FMU**) | ✓ (each part) | — | ✓ | The three parts made with `init --probe`. |
-| `pvlib.atmosphere:alt2pres` | ✓ | — | ✓ (`init --probe` config, 133.0 MB) |  |
-| `pvlib.iotools:read_tmy3` | ✓ | — | ✓ (`init --probe` config, 133.0 MB) |  |
-| `pvlib.irradiance:aoi` | ✓ | — | ✓ (`init --probe` config, 133.0 MB) |  |
-| `pvlib.pvsystem:pvwatts_dc` | ✓ | — | ✓ (`init --probe` config, 133.0 MB) |  |
-| `pvlib.solarposition:get_solarposition` | ✓ | — | ✓ (`init --probe` config, 133.0 MB) |  |
-| `pvlib.temperature:sapm_cell` | ✓ | — | ✓ (`init --probe` config, 133.0 MB) |  |
-| `py_vollib.black_scholes:black_scholes` | ✓ | — | ✓ (`init --probe` config) |  |
+| pvlib `get_total_irradiance` → `sapm_cell` → `pvwatts_dc` (**composite FMU**) | ✓ (each part) | — | ✓ (compiled on Windows) | The three parts made with `init --probe`. |
+| `pvlib.atmosphere:alt2pres` | ✓ | — | ✓ (`init --probe` config, 132.8 MB) |  |
+| `pvlib.iotools:read_tmy3` | ✓ | — | ✓ (`init --probe` config, 132.8 MB) |  |
+| `pvlib.irradiance:aoi` | ✓ | — | ✓ (`init --probe` config, 132.8 MB) |  |
+| `pvlib.pvsystem:pvwatts_dc` | ✓ | — | ✓ (`init --probe` config, 132.8 MB) |  |
+| `pvlib.solarposition:get_solarposition` | ✓ | — | ✓ (`init --probe` config, 132.8 MB) |  |
+| `pvlib.temperature:sapm_cell` | ✓ | — | ✓ (`init --probe` config, 132.8 MB) |  |
+| `py_vollib.black_scholes:black_scholes` | ✓ | — | ✓ (`init --probe` config, 102.7 MB) |  |
 | `pybamm:Simulation` | ✗ no useful outputs | ✗ simulate fails ([config](match-testing-rerun/configs/pybamm.toml)) | ✗ no useful outputs | Outputs are only solver flags. The voltage is only reachable as `solution["Voltage [V]"]` on the `Solution` that `step()` returns, which isn't a mapping, so no path can read it. |
-| `PyCO2SYS:sys` | ✓ | — | ✓ (`init --probe` config, 24.8 MB) |  |
+| `PyCO2SYS:sys` | ✓ | — | ✓ (`init --probe` config, 46.1 MB) |  |
 | `pyet:pm_fao56` | ✗ simulate fails | — | ✗ simulate fails (`init --probe` config, 111.1 MB) | AttributeError: 'float' object has no attribute 'time' |
-| `pyfluids:Fluid` | ✓ | — | ✓ (`init --probe` config, 29.4 MB) |  |
-| `pygfunction.heat_transfer:finite_line_source` | ✓ | — | ✓ (`init --probe` config, 52.8 MB) |  |
-| `pykalman:KalmanFilter` | ✓ | — | ✓ (`init --probe` config, 52.5 MB) |  |
-| `pyloudnorm:Meter` | ✓ | — | ✓ (`init` config, 53.2 MB) |  |
-| `pymap3d:geodetic2enu` | ✓ | — | ✓ (`init --probe` config, 24.7 MB) |  |
-| `pymsis:calculate` | ✓ | — | ✓ (`init --probe` config) |  |
+| `pyfluids:Fluid` | ✓ | — | ✓ (`init --probe` config, 56.7 MB) |  |
+| `pygfunction.heat_transfer:finite_line_source` | ✓ | — | ✓ (`init --probe` config, 88.2 MB) |  |
+| `pykalman:KalmanFilter` | ✓ | — | ✓ (`init --probe` config, 92.0 MB) |  |
+| `pyloudnorm:Meter` | ✓ | — | ✓ (`init --probe` config, 91.2 MB) |  |
+| `pymap3d:geodetic2enu` | ✓ | — | ✓ (`init --probe` config, 46.0 MB) |  |
+| `pymsis:calculate` | ✓ | — | ✓ (`init --probe` config, 48.8 MB) |  |
 | `pymunk:Space` | ✗ no useful outputs | ✗ simulate fails ([config](match-testing-rerun/configs/pymunk.toml)) | ✗ no useful outputs | Outputs are only constant settings (`damping`, `collision_slop`, …). A body can be added in `setup`, but `Space.bodies` is a `dict_keys` view, which a path can't index. |
-| `pyorbital.astronomy:sun_zenith_angle` | ✓ | — | ✓ (`init --probe` config, 25.0 MB) |  |
-| `pyproj:Transformer` | ✓ | — | ✓ (`init --probe` config, 107.9 MB) |  |
+| `pyorbital.astronomy:sun_zenith_angle` | ✓ | — | ✓ (`init --probe` config, 107.7 MB) |  |
+| `pyproj:Transformer` | ✓ | — | ✓ (`init --probe` config, 61.2 MB) |  |
 | `pyquaternion:Quaternion` | ✓ | — | ✓ (`init --probe` config, 48.9 MB) | `--call rotate`, axis, angle, vector. Plain `init` fails: it passes axis and angle to the constructor by position. |
-| `pyromat:get` | ✓ | — | ✓ (`init --probe` config) |  |
-| `pysolar.solar:get_altitude` | ✓ | — | ✓ (`init --probe` config, 101.5 MB) |  |
+| `pyromat:get` | ✓ | — | ✓ (`init --probe` config, 47.0 MB) |  |
+| `pysolar.solar:get_altitude` | ✓ | — | ✓ (`init --probe` config, 45.9 MB) |  |
 | `PyTCI.models.propofol:Marsh` | ✗ no useful outputs | ✓ ([config](#pytci)) | ✓ (hand config, 87.6 MB) | Outputs only echo the parameters (`weight`, `time_seconds`): the state is in a nested function. |
-| `pyteomics.mass:calculate_mass` | ✓ | — | ✓ (`init --probe` config, 28.4 MB) |  |
-| `pythermalcomfort.models.jos3:JOS3` | ✓ | ✓ ([config](#jos3)) | ✓ (`init --probe` config, 128.9 MB) |  |
-| `pythermalcomfort.models:pmv_ppd_iso` | ✓ | — | ✓ (`init --probe` config, 97.0 MB) |  |
-| `pythermalcomfort.models:sports_heat_stress_risk` | ✓ | — | ✓ (`init --probe` config, 128.9 MB) |  |
-| `pywt:dwt` | ✓ | — | ✓ (`init --probe` config, 25.2 MB) |  |
-| `pyxirr:npv` | ✓ | — | ✓ (`init --probe` config, 25.0 MB) |  |
-| `quantecon:LinearStateSpace` | ✓ | — | ✓ (`init --probe` config, 98.8 MB) |  |
-| `QuantLib:blackFormula` | ✓ | — | ✓ (`init --probe` config, 37.2 MB) |  |
-| `radioactivedecay:Inventory` | ✓ | — | ✓ (`init --probe` config) |  |
-| `rainflow:count_cycles` | ✓ | — | ✓ (`init --probe` config, 24.6 MB) |  |
-| `rdkit.Chem.Descriptors:MolWt` | ✓ | — | ✓ (`init --probe` config, 44.7 MB) |  |
+| `pyteomics.mass:calculate_mass` | ✓ | — | ✓ (`init --probe` config, 51.6 MB) |  |
+| `pythermalcomfort.models.jos3:JOS3` | ✓ | ✓ ([config](#jos3)) | ✓ (`init --probe` config, 153.8 MB) |  |
+| `pythermalcomfort.models:pmv_ppd_iso` | ✓ | — | ✓ (`init --probe` config, 153.8 MB) |  |
+| `pythermalcomfort.models:sports_heat_stress_risk` | ✓ | — | ✓ (`init --probe` config, 153.8 MB) |  |
+| `pywt:dwt` | ✓ | — | ✓ (`init --probe` config, 53.3 MB) |  |
+| `pyxirr:npv` | ✓ | — | ✓ (`init --probe` config, 45.3 MB) |  |
+| `quantecon:LinearStateSpace` | ✓ | — | ✓ (`init --probe` config, 156.1 MB) |  |
+| `QuantLib:blackFormula` | ✓ | — | ✓ (`init --probe` config, 78.8 MB) |  |
+| `radioactivedecay:Inventory` | ✓ | — | ✓ (`init --probe` config, 135.5 MB) |  |
+| `rainflow:count_cycles` | ✓ | — | ✓ (`init --probe` config, 48.8 MB) |  |
+| `rdkit.Chem.Descriptors:MolWt` | ✓ | — | ✓ (`init --probe` config, 110.7 MB) |  |
 | `river.linear_model:LinearRegression` | ✗ no useful outputs | ✓ ([config](match-testing-rerun/configs/river.toml)) | ✓ (hand config, 92.9 MB) | `init`: only hyperparameters (`l1`, `l2`, …). The hand config reads the learned weights (`attr:weights.a`, …) and the intercept. |
-| `roboticstoolbox.models.DH:Panda` | ✓ | — | ✓ (`init --probe` config) |  |
-| `scipy.signal:lfilter` | ✓ | — | ✓ (`init --probe` config, 53.2 MB) |  |
+| `roboticstoolbox.models.DH:Panda` | ✓ | — | ✓ (`init --probe` config, 172.7 MB) |  |
+| `scipy.signal:lfilter` | ✓ | — | ✓ (`init --probe` config, 98.3 MB) |  |
 | `seirsplus.models:SEIRSModel` | ✗ no useful outputs | ✓ ([config](match-testing-rerun/configs/seirsplus.toml)) | ✓ (hand config, 94.8 MB) | `init`: outputs only echo the parameters; the state arrays grow each step and are left out. The hand config reads the latest counts (`attr:numS.-1`, …) and sets `dt = 0.1`: with `dt` = the step size (1), `run_epoch` keeps only the start point and `t` never advances. |
 | `sgp4.api:Satrec` | ✗ no config | ✗ not written yet | — | C built-ins with no signature: `--start fr, jd, line1, line2: cannot tell which arguments these are …`. A hand config with `to = "pos:N"` bindings might work. |
-| `shapely:Point` | ✓ | — | ✓ (`init --probe` config, 26.2 MB) |  |
-| `simglucose.patient.t1dpatient:T1DPatient` | ✓ | — | ✓ (`init --probe` config) |  |
+| `shapely:Point` | ✓ | — | ✓ (`init --probe` config, 50.3 MB) |  |
+| `simglucose.patient.t1dpatient:T1DPatient` | ✓ | — | ✓ (`init --probe` config, 134.0 MB) |  |
 | `simpy:Environment` | ✓ | — | ✓ (`init --probe` config, 44.8 MB) | `--call run`: `until` is bound to the step's end time. |
-| `skfuzzy:interp_membership` | ✓ | — | ✓ (`init --probe` config, 52.3 MB) | **Needs scipy, packaging and networkx installed by hand**: scikit-fuzzy imports them without declaring them. |
-| `skimage.color:rgb2hsv` | ✓ | — | ✓ (`init --probe` config, 52.8 MB) |  |
-| `statsmodels.stats.proportion:proportion_confint` | ✓ | — | ✓ (`init --probe` config, 71.3 MB) |  |
-| `tclab:TCLabModel` | ✓ | — | ✓ (`init --probe` config, 128.8 MB) |  |
+| `skfuzzy:interp_membership` | ✓ | — | ✓ (`init --probe` config, 94.5 MB) | **Needs scipy, packaging and networkx installed by hand**: scikit-fuzzy imports them without declaring them. |
+| `skimage.color:rgb2hsv` | ✓ | — | ✓ (`init --probe` config, 127.1 MB) |  |
+| `statsmodels.stats.proportion:proportion_confint` | ✓ | — | ✓ (`init --probe` config, 121.1 MB) |  |
+| `tclab:TCLabModel` | ✓ | — | ✓ (`init` config, 44.9 MB) |  |
 | `tellurium:loada` | ✗ no useful outputs | ✓ ([config](match-testing-rerun/configs/tellurium.toml)) | ✓ (hand config, 211.1 MB) | `init`: only `oneStep`'s return (the time reached). The hand config reads the species from the RoadRunner object (`attr:S1`, `attr:S2`). `currentTime` is a fixed input there; bind it with `[time] currentTime = "time"` to follow the simulation clock. On Linux it needs `LD_LIBRARY_PATH` set to Python's `lib` folder. |
-| `thermo:Chemical` | ✓ | — | ✓ (`init --probe` config) |  |
-| `thermofeel:calculate_heat_index_simplified` | ✓ | — | ✓ (`init --probe` config, 24.7 MB) |  |
-| `timezonefinder:TimezoneFinder` | ✓ | — | ✓ (`init --probe` config, 58.0 MB) |  |
-| `tmm:coh_tmm` | ✓ | — | ✓ (`init --probe` config, 24.6 MB) |  |
-| `transforms3d.euler:euler2quat` | ✓ | — | ✓ (`init --probe` config, 24.7 MB) |  |
+| `thermo:Chemical` | ✓ | — | ✓ (`init --probe` config, 133.1 MB) |  |
+| `thermofeel:calculate_heat_index_simplified` | ✓ | — | ✓ (`init --probe` config, 48.9 MB) |  |
+| `timezonefinder:TimezoneFinder` | ✓ | — | ✓ (`init --probe` config, 80.6 MB) |  |
+| `tmm:coh_tmm` | ✓ | — | ✓ (`init --probe` config, 49.1 MB) |  |
+| `transforms3d.euler:euler2quat` | ✓ | — | ✓ (`init --probe` config, 47.3 MB) |  |
 | `uncertainties:ufloat` | ✗ no useful outputs | ✓ ([config](match-testing-rerun/configs/uncertainties.toml)) | ✓ (hand config, 45.9 MB) | `init`: only `s`, the `ufloat` itself. The hand config reads `return:nominal_value` and `return:std_dev`. |
-| `windpowerlib.wind_speed:logarithmic_profile` | ✓ | — | ✓ (`init --probe` config, 101.5 MB) |  |
+| `windpowerlib.wind_speed:logarithmic_profile` | ✓ | — | ✓ (`init --probe` config, 62.9 MB) |  |
 
 ---
 
 ## Neural networks
 
-Each was installed as published (`pip install <package>`) into its own venv together with fmugen. Neural networks need `--probe`: their result sizes depend on the weights, and their code is mostly compiled or framework code. Weights from Hugging Face are downloaded on first use, unless the FMU is built with `--hf-weights` (automatic with `--vendor` / `--compile`). `--capture-output` is needed whenever a model prints while loading, which hangs UniFMU 0.14 otherwise.
+Each was installed as published (`pip install <package>`) into its own venv together with fmugen. Neural networks need `--probe`: their result sizes depend on the weights, and their code is mostly compiled or framework code. Weights from Hugging Face are downloaded on first use, unless the FMU is built with `--hf-weights` (automatic with `--vendor` / `--compile`). `--capture-output` is needed whenever a model prints while loading, which hangs UniFMU 0.14 otherwise. Compiled on Linux, their FMUs are 4.3–4.6 GB: torch from PyPI brings the NVIDIA CUDA libraries and triton (about 4 GB installed), and fmugen collects every dependency's binaries. Installing a CPU-only torch (`pip install torch --index-url https://download.pytorch.org/whl/cpu`) avoids them; Windows' torch has no CUDA, and compiled Windows FMUs were about 300 MB.
 
 | Model | `init` / `init --probe` | Hand config | Compiled (PyInstaller) | Notes |
 |---|---|---|---|---|
-| `chronos:ChronosBoltPipeline` | ✓ | — | ✓ (`init --probe` config, 322.8 MB) |  |
-| `silero_vad:load_silero_vad` | ✓ | — | ✓ (`init --probe` config) |  |
-| `tsfm_public.toolkit.get_model:get_model` | ✓ | — | ✓ (`init --probe` config) |  |
-| `stable_baselines3:PPO` | ✓ | — | ✓ (`init --probe` config) |  |
-| `surfaces.test_functions.machine_learning.hyperparameter_optimization.tabular.regression.test_functions.gradient_boosting_regressor:GradientBoostingRegressorFunction` | ✓ | — | ✓, 294 MB (`init --probe` config) |  |
-| `torchani.models:ANI2x` | ✓ | — | ✓ (`init --probe` config) |  |
+| `chronos:ChronosBoltPipeline` | ✓ | — | ✓ (`init --probe` config, 4.6 GB) |  |
+| `silero_vad:load_silero_vad` | ✓ | — | ✓ (`init --probe` config, 4.5 GB) |  |
+| `tsfm_public.toolkit.get_model:get_model` | ✓ | — | ✓ (`init --probe` config, 4.3 GB) |  |
+| `stable_baselines3:PPO` | ✓ | — | ✓ (`init --probe` config, 4.5 GB) |  |
+| `surfaces.test_functions.machine_learning.hyperparameter_optimization.tabular.regression.test_functions.gradient_boosting_regressor:GradientBoostingRegressorFunction` | ✓ | — | ✓ (seeded config, 613.9 MB) |  |
+| `torchani.models:ANI2x` | ✓ | — | ✓ (`init --probe` config, 4.4 GB) |  |
 
 ---
 
