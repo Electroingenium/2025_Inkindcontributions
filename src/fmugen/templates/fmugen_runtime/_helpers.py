@@ -579,13 +579,33 @@ def _nth(obj, part):
     return list(obj)[int(part)]
 
 
+def _item(obj, part):
+    """``obj[part]`` for an object that isn't a mapping but takes keys, such as pybamm's ``Solution``.
+
+    Only tried where an attribute lookup has failed. Strings and mappings are left out (a
+    mapping's part is already a key).
+
+    :param obj: any object.
+    :param part: the path part, used as the key.
+    :type part: str
+    :return: the item, or ``_MISSING`` when ``obj`` has no such item.
+    """
+    if isinstance(obj, (str, bytes, Mapping)) or not hasattr(type(obj), "__getitem__"):
+        return _MISSING
+    try:
+        return obj[part]
+    except (KeyError, IndexError, TypeError, ValueError):
+        return _MISSING
+
+
 def get_path(obj, path):
     """Follow a dotted path through attributes, mapping keys and sequence indexes.
 
     ``"state.T"``, ``"rewards.speed"``, ``"4.x"``, ``"X.value.-1"`` (the last element). On a
     mapping a part is a key, unless it's only an attribute (``"options.update"``: the method).
     A number on any other iterable without indexing (``"bodies.0"`` on a ``dict_keys`` view)
-    picks that element, but only where there's no such attribute.
+    picks that element, and on an object that takes keys (``obj["Voltage [V]"]``) a part is
+    then tried as a key, but both only where there's no such attribute.
 
     :param obj: the start object (usually the model object or a call result).
     :param path: the dotted path.
@@ -606,6 +626,8 @@ def get_path(obj, path):
                 obj = getattr(obj, part)
             except AttributeError:
                 element = _nth(obj, part)
+                if element is _MISSING:
+                    element = _item(obj, part)
                 if element is _MISSING:
                     raise
                 obj = element
