@@ -24,11 +24,13 @@ def validate(fmu_dir):
         jsonschema.validate(json.loads(path.read_text()), SCHEMA, cls=jsonschema.Draft202012Validator)
 
 
-@pytest.mark.parametrize("fmi", [2, 3])
-@pytest.mark.parametrize("name", sorted(p.name for p in EXAMPLES.iterdir() if (p / "fmugen.toml").exists()))
+#: Examples whose config uses clocks: FMI 3 only, so there is no FMI 2 build to check.
+FMI3_ONLY = ("kalman", "sampled_pid")
+
+
+@pytest.mark.parametrize("name,fmi", [(p.name, fmi) for p in sorted(EXAMPLES.iterdir()) if (p / "fmugen.toml").exists()
+                                      for fmi in (2, 3) if fmi == 3 or p.name not in FMI3_ONLY])
 def test_examples_match_the_schema(tmp_path, name, fmi):
-    if fmi == 2 and name in ("kalman", "sampled_pid"):   # clocks: FMI 3 only
-        pytest.skip("FMI 3 only")
     build(EXAMPLES / name, tmp_path / "out", output_format="folder", fmi_version=fmi)
     validate(tmp_path / "out")
 
