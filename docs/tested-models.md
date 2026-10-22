@@ -26,7 +26,7 @@ Each model went through:
 
 **FMI 2 by default.** A model was run with FMI 3 only when no FMI 2 config simulated; the results below combine both.
 
-Setup: fmugen at `6dfc18c` (2026-10-22), WSL 2 (Ubuntu), Python 3.13, `uv` venvs, FMPy 0.3.32, UniFMU 0.14, gekko 1.3.2 with its local solver. CGE ran on Windows 11. Every FMU was compared value by value with the model run directly ([report](match-testing-rerun/report.md)). The **Compiled** column is from 2026-10-13 (Windows 11, PyInstaller 6.22.3), the last time compiling was tested.
+Setup: fmugen at `6dfc18c` (2026-10-22), WSL 2 (Ubuntu), Python 3.13, `uv` venvs, FMPy 0.3.32, UniFMU 0.14, gekko 1.3.2 with its local solver. CGE ran on Windows 11. Every FMU was compared value by value with the model run directly ([report](match-testing-rerun/report.md)). The **Compiled** column: PyInstaller 6.22.3, each compiled FMU compared with the uncompiled one; on Windows 11 (2026-10-13) for the models that worked then, and in WSL 2 (2026-10-22, fmugen `19ccfd9`, [report](match-testing-compile/report.md)) for the rest. Compile in a venv with only what the model needs: extra packages make the FMU larger and the build slower.
 
 Columns: **`init` / `init --probe`**: ✓ if the config of either one builds, simulates and outputs the model's results; otherwise how they failed (✗ no useful outputs: it runs, but only outputs parameters, settings or constants). **Hand config**: a config written by hand (for the examples, the repository's `fmugen.toml`), ✓ if it builds, simulates and outputs the model's results, with a link to it; — when the model needs none: ✓, ✗ no config (`init` stopped), ✗ build fails, ✗ simulate fails, or — (not run). **Compiled**: the best config compiled with PyInstaller, built and simulated. **Notes**: what was checked, or the error of each config that failed ("`init`:", "`init --probe`:").
 
@@ -43,7 +43,7 @@ Columns: **`init` / `init --probe`**: ✓ if the config of either one builds, si
 | **Simulates with useful results** (a config from `init` or `init --probe`) | **109** |
 | …or with a hand-written config | **126** |
 | Fails | 5 |
-| **Compiled FMU simulates** | **97**: every model that was compiled (of the GEKKO models, only CFTOC was) |
+| **Compiled FMU simulates** | **117**: every model that was compiled; 9 GEKKO models aren't compiled yet |
 
 A config only counts as a success if the FMU simulates **and** gives the model's results. An FMU that runs but only outputs its own parameters, settings or constants counts as a failure.
 
@@ -92,29 +92,29 @@ Errors such as `y is an array of shape […], not a single value` in the `init` 
 |---|---|---|---|---|
 | `ahrs.filters:Madgwick` | ✓ | — | ✓ (`init --probe` config) |  |
 | `ahrs.filters:Mahony` | ✓ | — | ✓ (`init --probe` config) |  |
-| `ambiance:Atmosphere` | ✗ no useful outputs | ✓ ([config](match-testing-rerun/configs/ambiance.toml)) | ✗ no useful outputs | The `init` configs output only the inputs: the results are properties returning 1-element arrays. The hand config reads element 0 of each (`return:temperature.0`, …). |
+| `ambiance:Atmosphere` | ✗ no useful outputs | ✓ ([config](match-testing-rerun/configs/ambiance.toml)) | ✓ (hand config, 87.6 MB) | The `init` configs output only the inputs: the results are properties returning 1-element arrays. The hand config reads element 0 of each (`return:temperature.0`, …). |
 | `anastruct:SystemElements` | ✓ | — | ✓ (`init --probe` config, 52.5 MB) |  |
 | `antropy:perm_entropy` | ✓ | — | ✓ (`init --probe` config, 105.7 MB) |  |
 | `astral.sun:elevation` | ✓ | — | ✓ (`init --probe` config, 101.9 MB) |  |
 | `astropy.cosmology:FlatLambdaCDM` | ✓ | — | ✓ (`init --probe` config, 37.7 MB) |  |
 | `Bio.SeqUtils:gc_fraction` | ✓ | — | ✓ (`init --probe` config, 29.8 MB) |  |
 | `blackscholes:BlackScholesCall` | ✓ | — | ✓ (`init --probe` config, 24.7 MB) |  |
-| `cantera:Solution` | ✗ no useful outputs | ✓ ([config](#cantera)) | ✗ no useful outputs | Outputs are only solver settings (`rtol`, `max_steps`): the results are Cython properties, and the gas state can't be set from inputs. |
+| `cantera:Solution` | ✗ no useful outputs | ✓ ([config](#cantera)) | ✓ (hand config, 79.9 MB) | Outputs are only solver settings (`rtol`, `max_steps`): the results are Cython properties, and the gas state can't be set from inputs. |
 | `chemicals.vapor_pressure:Antoine` | ✓ | — | ✓ (`init --probe` config, 134.6 MB) |  |
 | `colour.temperature:CCT_to_xy_CIE_D` | ✓ | — | ✓ (`init --probe` config, 113.1 MB) |  |
-| `commpy.modulation:QAMModem` | ✗ no useful outputs | ✓ ([config](match-testing-rerun/configs/commpy.toml)) | ✗ no useful outputs | `init`: only `m = 4`; the modulated symbols are complex, so they're left out. The hand config reads `.real` and `.imag` per symbol. |
+| `commpy.modulation:QAMModem` | ✗ no useful outputs | ✓ ([config](match-testing-rerun/configs/commpy.toml)) | ✓ (hand config, 126.0 MB) | `init`: only `m = 4`; the modulated symbols are complex, so they're left out. The hand config reads `.real` and `.imag` per symbol. |
 | `control:StateSpace` | ✓ | — | ✓ (`init --probe` config) | Needs `--start x=[1.0, 0.0] --start u=[0.0]`. |
-| `CoolProp.CoolProp:PropsSI` | ✗ build fails | ✓ ([config](models.md#positional-only-arguments)) | ✗ build fails (`init --probe` config) | C extension with no signature: no variables inferred. |
+| `CoolProp.CoolProp:PropsSI` | ✗ build fails | ✓ ([config](models.md#positional-only-arguments)) | ✓ (hand config, 56.7 MB) | C extension with no signature: no variables inferred. |
 | `cv2:KalmanFilter` | ✓ | — | ✓ (`init --probe` config, 66.3 MB) |  |
-| `dysts:Lorenz` (`call = "rhs"`, `[model] integrate`) | — | ✓ | — | Integrated by the FMU with `[model] integrate`: `"scipy:DOP853"` (FMI 3) or `"rk4"`, 50 substeps (FMI 2). |
+| `dysts:Lorenz` (`call = "rhs"`, `[model] integrate`) | — | ✓ | ✓ (hand config, 267.5 MB, both integrators) | Integrated by the FMU with `[model] integrate`: `"scipy:DOP853"` (FMI 3) or `"rk4"`, 50 substeps (FMI 2). |
 | `electricpy:powerset` | ✓ | — | ✓ (`init --probe` config, 71.2 MB) |  |
 | `erfa:gmst06` | ✓ | — | ✓ (`init --probe` config, 101.8 MB) |  |
 | `filterpy.common:Q_discrete_white_noise` | ✓ | — | ✓ (`init --probe` config, 128.8 MB) |  |
 | `filterpy.gh:GHFilter` | ✓ | — | ✓ (`init --probe` config, 128.8 MB) |  |
 | `fluids.core:Reynolds` | ✓ | — | ✓ (`init --probe` config, 133.8 MB) |  |
 | `fluids.friction:friction_factor` | ✓ | — | ✓ (`init --probe` config, 133.8 MB) |  |
-| `fluids.units:head_from_P` | ✗ simulate fails | ✓ ([config](#fluidsunits)) | ✗ simulate fails (`init --probe` config, 133.8 MB) | TypeError: 100000.0 has no quantity |
-| `fluids.units:Reynolds` | ✗ simulate fails | ✓ ([config](#fluidsunits)) | ✗ simulate fails (`init --probe` config, 133.8 MB) | TypeError: 1.0 has no quantity |
+| `fluids.units:head_from_P` | ✗ simulate fails | ✓ ([config](#fluidsunits)) | ✓ (hand config, 89.1 MB) | TypeError: 100000.0 has no quantity |
+| `fluids.units:Reynolds` | ✗ simulate fails | ✓ ([config](#fluidsunits)) | ✓ (hand config, 89.1 MB) | TypeError: 1.0 has no quantity |
 | `gsw:rho` | ✓ | — | ✓ (`init --probe` config, 103.3 MB) |  |
 | `gymnasium.envs.classic_control.cartpole:CartPoleEnv` | ✓ | — | ✓ (`init --probe` config, 135.6 MB) |  |
 | `gymnasium.envs.classic_control.pendulum:PendulumEnv` | ✓ | — | ✓ (`init --probe` config, 135.6 MB) |  |
@@ -126,13 +126,13 @@ Errors such as `y is an array of shape […], not a single value` in the `init` 
 | `ht.hx:effectiveness_from_NTU` | ✓ | — | ✓ (`init --probe` config, 134.1 MB) |  |
 | `iapws.iapws97:_TSat_P` | ✓ | — | ✓ (`init --probe` config) |  |
 | `iapws:IAPWS97` | ✓ | — | ✓ (`init --probe` config) |  |
-| `impedance.models.circuits:Randles` | ✗ no useful outputs | ✓ ([config](match-testing-rerun/configs/impedance.toml)) | ✗ no useful outputs | `init`: outputs only echo `initial_guess`; the complex prediction is left out. The hand config reads `.real` and `.imag` at each frequency. |
+| `impedance.models.circuits:Randles` | ✗ no useful outputs | ✓ ([config](match-testing-rerun/configs/impedance.toml)) | ✓ (hand config, 131.6 MB) | `init`: outputs only echo `initial_guess`; the complex prediction is left out. The hand config reads `.real` and `.imag` at each frequency. |
 | `joblib:load` | ✓ | — | ✓ (`init --probe` config) | **Compiled: needs `scikit-learn` added to `[model] requirements` by hand**: the model is unpickled, so nothing imports scikit-learn by name. Uncompiled, it needs nothing extra. |
 | `librosa:hz_to_mel` | ✓ | — | ✓ (`init --probe` config, 108.5 MB) |  |
 | `mendeleev:element` | ✓ | — | ✓ (`init --probe` config) |  |
 | `mesa.examples:BoltzmannWealth` | ✓ | — | ✓ (`init --probe` config, 111.4 MB) |  |
 | `meteocalc:heat_index` | ✓ | — | ✓ (`init --probe` config, 24.6 MB) |  |
-| `metpy.calc:dewpoint_from_relative_humidity` | ✗ simulate fails | ✓ ([config](#metpy)) | ✗ simulate fails (`init --probe` config, 111.0 MB) | ValueError: This function changed in version(s) ['1.0']--double check that the function is being called properly. |
+| `metpy.calc:dewpoint_from_relative_humidity` | ✗ simulate fails | ✓ ([config](#metpy)) | ✓ (hand config, 149.9 MB) | ValueError: This function changed in version(s) ['1.0']--double check that the function is being called properly. |
 | `nashpy:Game` | ✗ simulate fails | — | — | With `support_enumeration` the method returns a generator: `--probe` finds no outputs, the `init` config fails (`float() argument must be … not 'generator'`). 0.0.43 has no `is_zero_sum`. |
 | `neurokit2:ecg_simulate` | ✓ | — | ✓ (`init --probe` config, 114.1 MB) |  |
 | `numdifftools:Derivative` | ✓ | — | ✓ (`init --probe` config, 52.3 MB) |  |
@@ -140,10 +140,10 @@ Errors such as `y is an array of shape […], not a single value` in the `init` 
 | `obspy.geodetics:gps2dist_azimuth` | ✓ | — | ✓ (`init --probe` config, 77.0 MB) |  |
 | `openap:Thrust` | ✓ | — | ✓ (`init --probe` config) |  |
 | `openturns:Normal` | ✓ | — | ✓ (`init --probe` config, 79.9 MB) |  |
-| `pandapower:runpp` | ✗ no useful outputs | ✓ ([config](match-testing-rerun/configs/pandapower.toml), another entry) | ✗ no useful outputs | `runpp(net)` returns None and writes its results onto `net`, which a function entry can't read back. The hand config uses `pandapower.contingency:run_contingency(net, nminus1_cases={})`, which runs the same `runpp` and returns its results (bus voltages, line and transformer loadings). |
+| `pandapower:runpp` | ✗ no useful outputs | ✓ ([config](match-testing-rerun/configs/pandapower.toml), another entry) | ✓ (hand config, 124.1 MB) | `runpp(net)` returns None and writes its results onto `net`, which a function entry can't read back. The hand config uses `pandapower.contingency:run_contingency(net, nminus1_cases={})`, which runs the same `runpp` and returns its results (bus voltages, line and transformer loadings). |
 | `pedon:Genuchten` | ✓ | — | ✓ (`init --probe` config, 83.7 MB) |  |
 | `ppigrf:igrf` | ✓ | — | ✓ (`init --probe` config, 101.5 MB) |  |
-| `psychrolib:GetHumRatioFromRelHum` | ✓ | — | — | Also with numba installed, which makes psychrolib's functions ufuncs: `init` passes their arguments by position. |
+| `psychrolib:GetHumRatioFromRelHum` | ✓ | — | ✓ (`init --probe` config, 44.8 MB; 110.2 MB with numba) | Also with numba installed, which makes psychrolib's functions ufuncs: `init` passes their arguments by position. |
 | pvlib `get_total_irradiance` → `sapm_cell` → `pvwatts_dc` (**composite FMU**) | ✓ (each part) | — | ✓ | The three parts made with `init --probe`. |
 | `pvlib.atmosphere:alt2pres` | ✓ | — | ✓ (`init --probe` config, 133.0 MB) |  |
 | `pvlib.iotools:read_tmy3` | ✓ | — | ✓ (`init --probe` config, 133.0 MB) |  |
@@ -164,10 +164,10 @@ Errors such as `y is an array of shape […], not a single value` in the `init` 
 | `pymunk:Space` | ✗ no useful outputs | ✗ simulate fails ([config](match-testing-rerun/configs/pymunk.toml)) | ✗ no useful outputs | Outputs are only constant settings (`damping`, `collision_slop`, …). A body can be added in `setup`, but `Space.bodies` is a `dict_keys` view, which a path can't index. |
 | `pyorbital.astronomy:sun_zenith_angle` | ✓ | — | ✓ (`init --probe` config, 25.0 MB) |  |
 | `pyproj:Transformer` | ✓ | — | ✓ (`init --probe` config, 107.9 MB) |  |
-| `pyquaternion:Quaternion` | ✓ | — | — | `--call rotate`, axis, angle, vector. Plain `init` fails: it passes axis and angle to the constructor by position. |
+| `pyquaternion:Quaternion` | ✓ | — | ✓ (`init --probe` config, 48.9 MB) | `--call rotate`, axis, angle, vector. Plain `init` fails: it passes axis and angle to the constructor by position. |
 | `pyromat:get` | ✓ | — | ✓ (`init --probe` config) |  |
 | `pysolar.solar:get_altitude` | ✓ | — | ✓ (`init --probe` config, 101.5 MB) |  |
-| `PyTCI.models.propofol:Marsh` | ✗ no useful outputs | ✓ ([config](#pytci)) | ✗ no useful outputs | Outputs only echo the parameters (`weight`, `time_seconds`): the state is in a nested function. |
+| `PyTCI.models.propofol:Marsh` | ✗ no useful outputs | ✓ ([config](#pytci)) | ✓ (hand config, 87.6 MB) | Outputs only echo the parameters (`weight`, `time_seconds`): the state is in a nested function. |
 | `pyteomics.mass:calculate_mass` | ✓ | — | ✓ (`init --probe` config, 28.4 MB) |  |
 | `pythermalcomfort.models.jos3:JOS3` | ✓ | ✓ ([config](#jos3)) | ✓ (`init --probe` config, 128.9 MB) |  |
 | `pythermalcomfort.models:pmv_ppd_iso` | ✓ | — | ✓ (`init --probe` config, 97.0 MB) |  |
@@ -179,25 +179,25 @@ Errors such as `y is an array of shape […], not a single value` in the `init` 
 | `radioactivedecay:Inventory` | ✓ | — | ✓ (`init --probe` config) |  |
 | `rainflow:count_cycles` | ✓ | — | ✓ (`init --probe` config, 24.6 MB) |  |
 | `rdkit.Chem.Descriptors:MolWt` | ✓ | — | ✓ (`init --probe` config, 44.7 MB) |  |
-| `river.linear_model:LinearRegression` | ✗ no useful outputs | ✓ ([config](match-testing-rerun/configs/river.toml)) | ✗ no useful outputs | `init`: only hyperparameters (`l1`, `l2`, …). The hand config reads the learned weights (`attr:weights.a`, …) and the intercept. |
+| `river.linear_model:LinearRegression` | ✗ no useful outputs | ✓ ([config](match-testing-rerun/configs/river.toml)) | ✓ (hand config, 92.9 MB) | `init`: only hyperparameters (`l1`, `l2`, …). The hand config reads the learned weights (`attr:weights.a`, …) and the intercept. |
 | `roboticstoolbox.models.DH:Panda` | ✓ | — | ✓ (`init --probe` config) |  |
 | `scipy.signal:lfilter` | ✓ | — | ✓ (`init --probe` config, 53.2 MB) |  |
-| `seirsplus.models:SEIRSModel` | ✗ no useful outputs | ✓ ([config](match-testing-rerun/configs/seirsplus.toml)) | ✗ no useful outputs | `init`: outputs only echo the parameters; the state arrays grow each step and are left out. The hand config reads the latest counts (`attr:numS.-1`, …) and sets `dt = 0.1`: with `dt` = the step size (1), `run_epoch` keeps only the start point and `t` never advances. |
+| `seirsplus.models:SEIRSModel` | ✗ no useful outputs | ✓ ([config](match-testing-rerun/configs/seirsplus.toml)) | ✓ (hand config, 94.8 MB) | `init`: outputs only echo the parameters; the state arrays grow each step and are left out. The hand config reads the latest counts (`attr:numS.-1`, …) and sets `dt = 0.1`: with `dt` = the step size (1), `run_epoch` keeps only the start point and `t` never advances. |
 | `sgp4.api:Satrec` | ✗ no config | ✗ not written yet | — | C built-ins with no signature: `--start fr, jd, line1, line2: cannot tell which arguments these are …`. A hand config with `to = "pos:N"` bindings might work. |
 | `shapely:Point` | ✓ | — | ✓ (`init --probe` config, 26.2 MB) |  |
 | `simglucose.patient.t1dpatient:T1DPatient` | ✓ | — | ✓ (`init --probe` config) |  |
-| `simpy:Environment` | ✓ | — | — | `--call run`: `until` is bound to the step's end time. |
+| `simpy:Environment` | ✓ | — | ✓ (`init --probe` config, 44.8 MB) | `--call run`: `until` is bound to the step's end time. |
 | `skfuzzy:interp_membership` | ✓ | — | ✓ (`init --probe` config, 52.3 MB) | **Needs scipy, packaging and networkx installed by hand**: scikit-fuzzy imports them without declaring them. |
 | `skimage.color:rgb2hsv` | ✓ | — | ✓ (`init --probe` config, 52.8 MB) |  |
 | `statsmodels.stats.proportion:proportion_confint` | ✓ | — | ✓ (`init --probe` config, 71.3 MB) |  |
 | `tclab:TCLabModel` | ✓ | — | ✓ (`init --probe` config, 128.8 MB) |  |
-| `tellurium:loada` | ✗ no useful outputs | ✓ ([config](match-testing-rerun/configs/tellurium.toml)) | ✗ no useful outputs | `init`: only `oneStep`'s return (the time reached). The hand config reads the species from the RoadRunner object (`attr:S1`, `attr:S2`). `currentTime` is a fixed input there; bind it with `[time] currentTime = "time"` to follow the simulation clock. On Linux it needs `LD_LIBRARY_PATH` set to Python's `lib` folder. |
+| `tellurium:loada` | ✗ no useful outputs | ✓ ([config](match-testing-rerun/configs/tellurium.toml)) | ✓ (hand config, 211.1 MB) | `init`: only `oneStep`'s return (the time reached). The hand config reads the species from the RoadRunner object (`attr:S1`, `attr:S2`). `currentTime` is a fixed input there; bind it with `[time] currentTime = "time"` to follow the simulation clock. On Linux it needs `LD_LIBRARY_PATH` set to Python's `lib` folder. |
 | `thermo:Chemical` | ✓ | — | ✓ (`init --probe` config) |  |
 | `thermofeel:calculate_heat_index_simplified` | ✓ | — | ✓ (`init --probe` config, 24.7 MB) |  |
 | `timezonefinder:TimezoneFinder` | ✓ | — | ✓ (`init --probe` config, 58.0 MB) |  |
 | `tmm:coh_tmm` | ✓ | — | ✓ (`init --probe` config, 24.6 MB) |  |
 | `transforms3d.euler:euler2quat` | ✓ | — | ✓ (`init --probe` config, 24.7 MB) |  |
-| `uncertainties:ufloat` | ✗ no useful outputs | ✓ ([config](match-testing-rerun/configs/uncertainties.toml)) | ✗ no useful outputs | `init`: only `s`, the `ufloat` itself. The hand config reads `return:nominal_value` and `return:std_dev`. |
+| `uncertainties:ufloat` | ✗ no useful outputs | ✓ ([config](match-testing-rerun/configs/uncertainties.toml)) | ✓ (hand config, 45.9 MB) | `init`: only `s`, the `ufloat` itself. The hand config reads `return:nominal_value` and `return:std_dev`. |
 | `windpowerlib.wind_speed:logarithmic_profile` | ✓ | — | ✓ (`init --probe` config, 101.5 MB) |  |
 
 ---
@@ -219,7 +219,7 @@ Each was installed as published (`pip install <package>`) into its own venv toge
 
 ## GEKKO models
 
-Dynamic optimization and simulation models built on GEKKO, FMI 2, checked against a direct run and against each model's published results where it has them. GEKKO's distillation script and APMonitor's ethanol script have nothing to call, so their code is wrapped in a class, unchanged. Only CFTOC was compiled: Nuitka builds were stopped after 30 minutes (see below).
+Dynamic optimization and simulation models built on GEKKO, FMI 2, checked against a direct run and against each model's published results where it has them. GEKKO's distillation script and APMonitor's ethanol script have nothing to call, so their code is wrapped in a class, unchanged.
 
 | Model | `init` / `init --probe` | Hand config | Compiled (PyInstaller) | Notes |
 |---|---|---|---|---|
@@ -227,17 +227,17 @@ Dynamic optimization and simulation models built on GEKKO, FMI 2, checked agains
 | `DistColEnvDynInc_altrewards.py:DistColEnvDynInc` ([Kalpesh-RL/DistillationColumn](https://github.com/Kalpesh-RL/DistillationColumn) `f2b9966`) | ✓ | — | — | Distillation column as a Gym environment. `--start "Action=[0.0, 0.0, 0.0]" --setup reset`. Random by design: seed it (`random:seed(0)`, `numpy.random:seed(0)` before construction) to reproduce a run. |
 | `Bioreactor.py:SimpleBioreactor` ([Bartosz1280/Bioreactor-modeling](https://github.com/Bartosz1280/Bioreactor-modeling) `3112aba`) | ✓ | — | — | Batch bioreactor (Monod growth). `--call solve`, `time_arr` and `simulation_input` from the repo notebook. |
 | `Code/model.py:CGE` ([konradarchicinski/cge_model_python](https://github.com/konradarchicinski/cge_model_python) `60d611d`) | ✓ | — | — | Computable general equilibrium economy. `--call results --start capital=0.1 --start labour=0.0`. **Needs its `Code/model.py` renamed** (any other name): `build` refuses a model file named `model.py`, which clashes with UniFMU's backend module. **Needs pandas 2**: with pandas 3 the model itself fails (its chained `df[a][b] = …` assignments don't write under copy-on-write). **Windows only**: its data paths are hardcoded with backslashes (`Data\production_structure.csv`), which on Linux are file names that FMPy refuses in an FMU. |
-| `CFTOCSolverV2.py:CFTOCSolverV2` ([ollyme102b/ros_workspace](https://github.com/ollyme102b/ros_workspace) `03f5938`) | ✗ no config | ✓ ([config](match-testing-rerun/configs/gk_cftoc.toml)) | ✓ (`init --probe` config, 43 MB, 2 min) | Constrained finite-time optimal control. `--call calculate_optimal_actuation`. **`init` stops** on `--start calculate_optimal_actuation_x0=call:…` (an fmugen bug, see [Known problems](#known-problems)). The hand config passes every argument as a constant, with the repo test's values. |
-| `debutanizer.model:solve_steady_state` ([Arushan45/Debutanizer-Project](https://github.com/Arushan45/Debutanizer-Project) `f6fe813`) | ✓ | — | — | Debutanizer column, steady state (30 stages). `--start reflux_ratio=2.5 --start alpha=1.9717789099`. **The repository must be installed** (`pip install -e .`): the entry is a package imported by name. |
-| `debutanizer.model:optimize_reflux` ([Arushan45/Debutanizer-Project](https://github.com/Arushan45/Debutanizer-Project) `f6fe813`) | ✓ | — | — | Debutanizer reflux optimization. `--start alpha=1.9717789099`. **The repository must be installed**, as for the steady state. |
+| `CFTOCSolverV2.py:CFTOCSolverV2` ([ollyme102b/ros_workspace](https://github.com/ollyme102b/ros_workspace) `03f5938`) | ✗ no config | ✓ ([config](match-testing-rerun/configs/gk_cftoc.toml)) | — | Constrained finite-time optimal control. `--call calculate_optimal_actuation`. **`init` stops** on `--start calculate_optimal_actuation_x0=call:…` (an fmugen bug, see [Known problems](#known-problems)). The hand config passes every argument as a constant, with the repo test's values. |
+| `debutanizer.model:solve_steady_state` ([Arushan45/Debutanizer-Project](https://github.com/Arushan45/Debutanizer-Project) `f6fe813`) | ✓ | — | ✓ (`init --probe` config, 57 MB) | Debutanizer column, steady state (30 stages). `--start reflux_ratio=2.5 --start alpha=1.9717789099`. **The repository must be installed** (`pip install -e .`): the entry is a package imported by name. |
+| `debutanizer.model:optimize_reflux` ([Arushan45/Debutanizer-Project](https://github.com/Arushan45/Debutanizer-Project) `f6fe813`) | ✓ | — | ✓ (`init --probe` config, 57 MB) | Debutanizer reflux optimization. `--start alpha=1.9717789099`. **The repository must be installed**, as for the steady state. |
 | `apsis/mpc.py:solve_mpc` ([dhruvhaldar/apsis](https://github.com/dhruvhaldar/apsis) `a171cf1`) | ✓ | — | — | Linear MPC. The app's defaults. |
-| `process_fopdt.py:ProcessModel` ([BYU-PRISM/Transformer_MPC](https://github.com/BYU-PRISM/Transformer_MPC) `7686735`) | ✓ | — | — | 2×2 FOPDT process (a `GEKKO` subclass). `--call run --start "u=[1.0, 0.5]"`. |
+| `process_fopdt.py:ProcessModel` ([BYU-PRISM/Transformer_MPC](https://github.com/BYU-PRISM/Transformer_MPC) `7686735`) | ✓ | — | ✓ (`init --probe` config, 130 MB with matplotlib and scipy) | 2×2 FOPDT process (a `GEKKO` subclass). `--call run --start "u=[1.0, 0.5]"`. |
 | `mpc_gekko.py:MPCModel` ([BYU-PRISM/Transformer_MPC](https://github.com/BYU-PRISM/Transformer_MPC) `7686735`) | ✓ | — | — | MPC controller for that process (a `GEKKO` subclass). `--call solve`. Its setpoints are attributes (`y1.SP`): bind an input with `to = "attr:y1.SP"` by hand. |
 | `ethanol_run.py:EthanolBioreactor` ([APMonitor](https://apmonitor.com/do/index.php/Main/EthanolBioreactor)) | ✓ | — | — | Ethanol fed-batch bioreactor (APMonitor's script, wrapped in a class: `run()` holds the script's code up to its `solve()`, unchanged, without the plots). `--call run`. The script's model can only be solved once, so `run()` builds it again each step. |
 | `simple_nhes.py:model` ([BYU-PRISM/NHES-opt-sensitivity](https://github.com/BYU-PRISM/NHES-opt-sensitivity) `5e9a6f2`) | ✓ | — | — | Nuclear-renewable hybrid energy system. `--probe --start "params=call:simple_nhes:nom_params"`. **Needs input data that isn't published** (`grid_data/more_data_scaled.csv`): it was run on a generated series of hourly `Load`, `Wind` and `Solar` in MW. Also needs seaborn and plotly, which it imports without declaring. |
-| `openhens:OpenHENS` ([waikato-ahuora-smart-energy-systems/OpenHENS](https://github.com/waikato-ahuora-smart-energy-systems/OpenHENS) `5081bab`) | ✗ no useful outputs | ✓ ([config](match-testing-rerun/configs/gk_openhens.toml): one output added, `TAC = { from = "attr:_best_solns.0.case.TAC" }`) | — | Heat exchanger network synthesis. `--call solve`, the README's options. **Needs the COIN-OR `couenne` executable on PATH** (from the [IDAES solver bundle](https://github.com/IDAES/idaes-ext/releases/tag/3.4.2)) and **the repository installed** (`pip install -e .`), as its README says. `init --probe` finds no outputs: the solutions are kept in a private list; the hand config adds the total annual cost. It also reads the solutions saved in its `output_folder`, which `init` doesn't copy into the FMU, so its result differs from running it in the repository. |
+| `openhens:OpenHENS` ([waikato-ahuora-smart-energy-systems/OpenHENS](https://github.com/waikato-ahuora-smart-energy-systems/OpenHENS) `5081bab`) | ✗ no useful outputs | ✓ ([config](match-testing-rerun/configs/gk_openhens.toml): one output added, `TAC = { from = "attr:_best_solns.0.case.TAC" }`) | ✓ (hand config, 118 MB; couenne must be on PATH) | Heat exchanger network synthesis. `--call solve`, the README's options. **Needs the COIN-OR `couenne` executable on PATH** (from the [IDAES solver bundle](https://github.com/IDAES/idaes-ext/releases/tag/3.4.2)) and **the repository installed** (`pip install -e .`), as its README says. `init --probe` finds no outputs: the solutions are kept in a private list; the hand config adds the total annual cost. It also reads the solutions saved in its `output_folder`, which `init` doesn't copy into the FMU, so its result differs from running it in the repository. |
 
-**Compiling GEKKO models:** with PyInstaller, a GEKKO model compiles in 2 min (43 MB) in a venv with only gekko, numpy, fmugen, PyInstaller and FMPy. In a shared venv with many other packages, the same compile took 19 min and made a 195 MB FMU: fmugen collects every gekko submodule, and some of them import scikit-learn, Pyomo and IPython when installed. **Compile a model in a venv with only what it needs.** Nuitka builds with gekko and numpy took over 30 minutes and were stopped; `examples/simple_pid` compiles with Nuitka and simulates (12 min).
+**Compiling GEKKO models:** with PyInstaller, in a venv with only the model's packages, fmugen, PyInstaller and FMPy, a GEKKO model compiles in 10–25 s to 57–130 MB (matplotlib, which some model files import, adds about 35 MB). In a shared venv with many other packages, a compile took 19 min and made a 195 MB FMU: fmugen collects every gekko submodule, and some of them import scikit-learn, Pyomo and IPython when installed. Nuitka builds with gekko and numpy took over 30 minutes and were stopped. The compiled FMU contains gekko's own solver; a solver the model runs from PATH (OpenHENS's couenne) must be installed where the FMU runs.
 
 ---
 
