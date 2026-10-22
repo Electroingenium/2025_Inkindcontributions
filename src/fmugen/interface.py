@@ -287,8 +287,11 @@ def _infer_config(target, call, config_dir, fmi_version, starts, setup, kind, cr
     unknown = set(converts or {}) - variables
     if unknown:
         raise InterfaceError(f"--convert names that are not arguments of the model: {sorted(unknown)}")
+    # a call: start for the method's copy of a shared name is stored under the argument's own name
+    prefix = f"{data['model'].get('call', 'call').strip('_')}_"
     unused = set(starts) - variables - set(comments.get(POSITIONAL_STARTS, {})) \
         - {n for table in ("constants", "call_constants") for n in data["model"].get(table, {})} \
+        - {prefix + n for n in data["model"].get("call_constants", {})} \
         - {str(info.get("to", "")).partition(":")[2].partition("[")[0]
            for sec in ("parameters", "inputs", "states") for info in data.get(sec, {}).values()} \
         - {str(info["to"]).partition(":")[2] for sec in ("parameters", "inputs", "states")

@@ -961,6 +961,22 @@ def test_misspelled_field_and_unknown_argument_are_named(tmp_path):
         init(f"{tmp_path / 'objs.py'}:f", starts={"w.T": 1.0, "v.T": 1.0})
 
 
+def test_call_start_for_the_step_method_copy_of_a_shared_name(tmp_path):
+    # x0 in both: the method's one is given as solve_x0, and a call: start keeps the argument's name
+    write(tmp_path, "ctrl.py", """
+        class Ctrl:
+            def __init__(self, x0):
+                self.x0 = x0
+
+            def solve(self, x0):
+                return {"y": float(sum(x0)) + self.x0[0]}
+    """)
+    _, data = init(f"{tmp_path / 'ctrl.py'}:Ctrl", call="solve", probe=True,
+                   starts={"x0": {"call": "builtins:list([1.0])"}, "solve_x0": {"call": "builtins:list([2.0, 3.0])"}})
+    assert data["model"]["call_constants"]["x0"] == {"call": "builtins:list([2.0, 3.0])"}
+    assert data["model"]["constants"]["x0"] == {"call": "builtins:list([1.0])"}
+
+
 def test_init_start_for_a_callable_without_signature():
     from fmugen.config import InterfaceError
 
