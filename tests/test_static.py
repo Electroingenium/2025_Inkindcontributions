@@ -310,7 +310,7 @@ def test_pint_units_are_read_from_the_errors():
 
 
 def test_probe_outputs_what_the_step_changes_when_nothing_else(tmp_path):
-    # like river's LinearRegression (learns intercept) and seirsplus (histories that grow each step)
+    # like river's LinearRegression (learns intercept); a history that grows each step stays left out
     model = write(tmp_path, '''
         import numpy as np
 
@@ -325,5 +325,5 @@ def test_probe_outputs_what_the_step_changes_when_nothing_else(tmp_path):
                 self.history = np.append(self.history, self.intercept)
     ''')
     data, _ = infer(f"{model}:Learner", call="learn_one", probe=True)
-    assert data["outputs"] == {"intercept": {}, "history": {"from": "attr:history.-1"}}
+    assert data["outputs"] == {"intercept": {}}
     assert "locals" not in data
