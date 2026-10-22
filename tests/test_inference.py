@@ -615,6 +615,38 @@ def test_requirements_are_the_installed_distributions_the_model_uses(tmp_path):
     assert "requirements = [" in render_toml(data, comments)
 
 
+def test_requirements_skip_a_venv_next_to_the_model(tmp_path):
+    import importlib
+    import sys
+    from fmugen.interface import _local_sources
+    # like cftoc/.venv beside cftoc/CFTOCSolverV2.py: its packages aren't the model's imports,
+    # and one of them imports __main__, which has no spec under the fmugen console script
+    import importlib.metadata
+    folder = tmp_path / "cftoc"
+    (folder / ".venv" / "lib" / "site-packages").mkdir(parents=True)
+    (folder / ".venv" / "pyvenv.cfg").write_text("home = /usr/bin\n")
+    (folder / ".venv" / "lib" / "site-packages" / "tool.py").write_text("import __main__\nimport numpy\n")
+    (folder / "solver.py").write_text(textwrap.dedent('''
+        import pytest
+
+        def f(x=1.0):
+            return {"y": 2 * x}
+    '''))
+    data, _ = infer(folder / "solver.py", config_dir=tmp_path, probe=False)
+    assert data["model"]["sources"] == ["cftoc"]
+    assert data["model"]["requirements"] == [f"pytest=={importlib.metadata.version('pytest')}"]
+    # with the config beside the model, a module imported from the venv isn't a source
+    (folder / ".venv" / "lib" / "venvtool.py").write_text("X = 1\n")
+    with isolated_imports():
+        sys.path.insert(0, str(folder / ".venv" / "lib"))
+        try:
+            importlib.import_module("venvtool")
+            sources = _local_sources((folder / "solver.py").resolve(), folder.resolve())
+        finally:
+            sys.path.pop(0)
+    assert sources == []
+
+
 def test_result_keys_that_are_not_names_get_valid_ones(tmp_path):
     (tmp_path / "decay.py").write_text(textwrap.dedent('''
         def decay(t=1.0):   # like radioactivedecay's Inventory.contents

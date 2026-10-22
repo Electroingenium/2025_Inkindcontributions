@@ -423,7 +423,8 @@ def _local_sources(entry_file, config_dir):
         if not file:
             continue
         file = Path(file).resolve()
-        if not file.is_relative_to(config_dir) or "site-packages" in file.parts or file == entry_file:
+        if not file.is_relative_to(config_dir) or "site-packages" in file.parts or file == entry_file \
+                or _in_venv(file, config_dir):
             continue
         rel = file.relative_to(config_dir)
         sources.add(rel.parts[0] if len(rel.parts) > 1 else rel.as_posix())
@@ -431,6 +432,20 @@ def _local_sources(entry_file, config_dir):
     if len(entry_rel.parts) > 1:
         sources.add(entry_rel.parts[0])
     return sorted(sources)
+
+
+def _in_venv(file, root):
+    """Whether ``file`` is inside a virtual environment under ``root`` (a folder with ``pyvenv.cfg``).
+
+    A venv next to the model (``cftoc/.venv``) isn't part of it: its packages are not the model's imports.
+
+    :param file: a file under ``root``.
+    :type file: pathlib.Path
+    :param root: the source folder.
+    :type root: pathlib.Path
+    :rtype: bool
+    """
+    return any((root / folder / "pyvenv.cfg").is_file() for folder in file.relative_to(root).parents[:-1])
 
 
 def _add_data_files(data, comments, config_dir, entry_file):
@@ -566,7 +581,7 @@ def _add_requirements(data, comments, module_name, config_dir, entry_file):
     files = [entry_file] if entry_file else []
     for source in data["model"].get("sources", []):
         source = config_dir / source
-        files += sorted(source.rglob("*.py")) if source.is_dir() else [source] if source.suffix == ".py" else []
+        files += sorted(f for f in source.rglob("*.py") if not _in_venv(f, source)) if source.is_dir()             else [source] if source.suffix == ".py" else []
     for file in files:
         try:
             tree = ast.parse(file.read_text(encoding="utf-8"))
@@ -593,9 +608,12 @@ def _add_requirements(data, comments, module_name, config_dir, entry_file):
     distributions = static.packages_distributions()
     found, unknown = {}, []
     for top in sorted(tops):
-        if top in sys.stdlib_module_names or top == "fmugen" or importlib.util.find_spec(top) is None:
+        try:
+            spec = importlib.util.find_spec(top)
+        except (ImportError, ValueError):   # __main__ has no spec under a console script
             continue
-        spec = importlib.util.find_spec(top)
+        if top in sys.stdlib_module_names or top == "fmugen" or spec is None:
+            continue
         origin = Path(spec.origin).resolve() if spec.origin else None
         if origin is not None and origin.is_relative_to(config_dir) and "site-packages" not in origin.parts:
             continue   # one of the model's own files
