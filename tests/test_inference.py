@@ -217,7 +217,7 @@ def test_number_like_outputs_are_kept(tmp_path):
             return {"d": Decimal("1.5"), "q": Fraction(1, 3), "h": numpy.float16(2.0), "c": 1j}
     """))
     data, _ = infer(tmp_path / "nums.py")
-    assert list(data["outputs"]) == ["d", "q", "h"]   # complex is not an FMI value
+    assert list(data["outputs"]) == ["d", "q", "h", "c_real", "c_imag"]   # complex: its two parts
 
 
 def test_pint_outputs_get_their_unit(tmp_path):

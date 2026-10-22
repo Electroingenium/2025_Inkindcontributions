@@ -40,7 +40,7 @@ Columns: **`init` / `init --probe`**: ✓ if the config of either one builds, si
 |---|---|
 | `init` writes a config | 125 |
 | `init --probe` writes a config | 129 |
-| **Simulates with useful results** (a config from `init` or `init --probe`) | **111** |
+| **Simulates with useful results** (a config from `init` or `init --probe`) | **119** |
 | …or with a hand-written config | **131** |
 | Fails | 0 |
 | **Compiled FMU simulates** | **131**: every model |
@@ -52,10 +52,12 @@ How far each step gets:
 | Config | Models | Success |
 |---|---|---|
 | `init` (code only) | 45 of 131 | 34 % |
-| `init --probe` (or `init`, when it already works) | 111 of 131 | 85 % |
+| `init --probe` (or `init`, when it already works) | 119 of 131 | 91 % |
 | `init --probe` + a hand-written config (for the examples, the repository's `fmugen.toml`) | 131 of 131 | 100 % |
 
-The `init` config fails mostly on models that return arrays, tuples, strings or objects, which only `--probe` types correctly; the error message points to it. Of the 67 `init` configs of the first group that simulate, 23 only output parameters, settings or constants. GEKKO models keep their results in GEKKO variables, which only `--probe` finds. The hand configs add `PropsSI`, `fluids.units` ×2, metpy, cantera, PyTCI and the kalman example ([Hand configs](#hand-configs)), ambiance, pandapower, seirsplus, impedance, commpy, river, tellurium, uncertainties and the GEKKO models CFTOC and OpenHENS, sgp4, pymunk and pybamm ([configs](match-testing-rerun/configs/)).
+The `init` config fails mostly on models that return arrays, tuples, strings or objects, which only `--probe` types correctly; the error message points to it. Of the 67 `init` configs of the first group that simulate, 23 only output parameters, settings or constants. GEKKO models keep their results in GEKKO variables, which only `--probe` finds. The hand configs add `PropsSI`, cantera, PyTCI and the kalman example ([Hand configs](#hand-configs)), pandapower, seirsplus, river, tellurium, the GEKKO model OpenHENS, sgp4, pymunk and pybamm ([configs](match-testing-rerun/configs/)).
+
+Later, `init --probe` got 8 more without a hand config, each checked with a build and a simulation in WSL 2 against the model called directly (not compiled again): commpy and impedance (complex results split into real and imaginary parts), uncertainties and ambiance (a returned object's properties, one-element arrays read as their element), `fluids.units` ×2 and metpy (inputs retried as pint quantities, with units read from the errors) and CFTOC (a `call:` start for the step method's copy of a shared argument is no longer refused).
 
 No model fails. The last 4 needed fmugen features, added after the main run and checked on these 4 models only (built, simulated, compiled and compared with a direct run; the other models weren't rerun with them):
 
@@ -94,7 +96,7 @@ Errors such as `y is an array of shape […], not a single value` in the `init` 
 |---|---|---|---|---|
 | `ahrs.filters:Madgwick` | ✓ | — | ✓ (`init --probe` config, 50.3 MB) |  |
 | `ahrs.filters:Mahony` | ✓ | — | ✓ (`init --probe` config, 50.3 MB) |  |
-| `ambiance:Atmosphere` | ✗ no useful outputs | ✓ ([config](match-testing-rerun/configs/ambiance.toml)) | ✓ (hand config, 87.6 MB) | The `init` configs output only the inputs: the results are properties returning 1-element arrays. The hand config reads element 0 of each (`return:temperature.0`, …). |
+| `ambiance:Atmosphere` | ✓ | ✓ ([config](match-testing-rerun/configs/ambiance.toml)) | ✓ (hand config, 87.6 MB) | `init --probe` reads each one-element array property as its element (`return:temperature.0`, …): 281.65 K, 89 876 Pa at 1000 m. Before: The `init` configs output only the inputs: the results are properties returning 1-element arrays. The hand config reads element 0 of each (`return:temperature.0`, …). |
 | `anastruct:SystemElements` | ✓ | — | ✓ (`init --probe` config, 88.5 MB) |  |
 | `antropy:perm_entropy` | ✓ | — | ✓ (`init --probe` config, 164.9 MB) |  |
 | `astral.sun:elevation` | ✓ | — | ✓ (`init --probe` config, 46.2 MB) |  |
@@ -104,7 +106,7 @@ Errors such as `y is an array of shape […], not a single value` in the `init` 
 | `cantera:Solution` | ✗ no useful outputs | ✓ ([config](#cantera)) | ✓ (hand config, 79.9 MB) | Outputs are only solver settings (`rtol`, `max_steps`): the results are Cython properties, and the gas state can't be set from inputs. |
 | `chemicals.vapor_pressure:Antoine` | ✓ | — | ✓ (`init --probe` config, 126.5 MB) |  |
 | `colour.temperature:CCT_to_xy_CIE_D` | ✓ | — | ✓ (`init --probe` config, 56.4 MB) |  |
-| `commpy.modulation:QAMModem` | ✗ no useful outputs | ✓ ([config](match-testing-rerun/configs/commpy.toml)) | ✓ (hand config, 126.0 MB) | `init`: only `m = 4`; the modulated symbols are complex, so they're left out. The hand config reads `.real` and `.imag` per symbol. |
+| `commpy.modulation:QAMModem` | ✓ | ✓ ([config](match-testing-rerun/configs/commpy.toml)) | ✓ (hand config, 126.0 MB) | `init --probe` splits the complex symbols into `y_real` / `y_imag` (`return:real`, `return:imag`): (−1+1j, 1−1j), as `modulate` called directly. Before: `init`: only `m = 4`; the modulated symbols are complex, so they're left out. The hand config reads `.real` and `.imag` per symbol. |
 | `control:StateSpace` | ✓ | — | ✓ (`init --probe` config, 124.6 MB) | Needs `--start x=[1.0, 0.0] --start u=[0.0]`. |
 | `CoolProp.CoolProp:PropsSI` | ✗ build fails | ✓ ([config](models.md#positional-only-arguments)) | ✓ (hand config, 56.7 MB) | C extension with no signature: no variables inferred. |
 | `cv2:KalmanFilter` | ✓ | — | ✓ (`init --probe` config, 163.5 MB) |  |
@@ -115,8 +117,8 @@ Errors such as `y is an array of shape […], not a single value` in the `init` 
 | `filterpy.gh:GHFilter` | ✓ | — | ✓ (`init --probe` config, 114.8 MB) |  |
 | `fluids.core:Reynolds` | ✓ | — | ✓ (`init --probe` config, 104.0 MB) |  |
 | `fluids.friction:friction_factor` | ✓ | — | ✓ (`init --probe` config, 104.0 MB) |  |
-| `fluids.units:head_from_P` | ✗ simulate fails | ✓ ([config](#fluidsunits)) | ✓ (hand config, 89.1 MB) | TypeError: 100000.0 has no quantity |
-| `fluids.units:Reynolds` | ✗ simulate fails | ✓ ([config](#fluidsunits)) | ✓ (hand config, 89.1 MB) | TypeError: 1.0 has no quantity |
+| `fluids.units:head_from_P` | ✓ | ✓ ([config](#fluidsunits)) | ✓ (hand config, 89.1 MB) | `init --probe` retries with pint quantities and takes each input's unit from the error that names it (`convert = "pint"`, `unit = "Pa"`, …): 10.197 m. Before: TypeError: 100000.0 has no quantity |
+| `fluids.units:Reynolds` | ✓ | ✓ ([config](#fluidsunits)) | ✓ (hand config, 89.1 MB) | `init --probe` retries with pint quantities, units from the errors: Re = 38 200.66. Before: TypeError: 1.0 has no quantity |
 | `gsw:rho` | ✓ | — | ✓ (`init --probe` config, 48.3 MB) |  |
 | `gymnasium.envs.classic_control.cartpole:CartPoleEnv` | ✓ | — | ✓ (seeded config, 104.0 MB) |  |
 | `gymnasium.envs.classic_control.pendulum:PendulumEnv` | ✓ | — | ✓ (seeded config, 104.0 MB) |  |
@@ -128,13 +130,13 @@ Errors such as `y is an array of shape […], not a single value` in the `init` 
 | `ht.hx:effectiveness_from_NTU` | ✓ | — | ✓ (`init --probe` config, 104.8 MB) |  |
 | `iapws.iapws97:_TSat_P` | ✓ | — | ✓ (`init --probe` config, 87.8 MB) |  |
 | `iapws:IAPWS97` | ✓ | — | ✓ (`init --probe` config, 87.8 MB) |  |
-| `impedance.models.circuits:Randles` | ✗ no useful outputs | ✓ ([config](match-testing-rerun/configs/impedance.toml)) | ✓ (hand config, 131.6 MB) | `init`: outputs only echo `initial_guess`; the complex prediction is left out. The hand config reads `.real` and `.imag` at each frequency. |
+| `impedance.models.circuits:Randles` | ✓ | ✓ ([config](match-testing-rerun/configs/impedance.toml)) | ✓ (hand config, 131.6 MB) | `init --probe` splits the complex prediction into `y_real` / `y_imag` at each frequency, identical to `predict` called directly. Needs pandas installed by hand (impedance imports it without declaring it). Before: `init`: outputs only echo `initial_guess`; the complex prediction is left out. The hand config reads `.real` and `.imag` at each frequency. |
 | `joblib:load` | ✓ | — | ✓ (`init --probe` config, 112.8 MB) | **Compiled: needs `scikit-learn` added to `[model] requirements` by hand**: the model is unpickled, so nothing imports scikit-learn by name. Uncompiled, it needs nothing extra. |
 | `librosa:hz_to_mel` | ✓ | — | ✓ (`init --probe` config, 167.7 MB) |  |
 | `mendeleev:element` | ✓ | — | ✓ (`init --probe` config, 75.7 MB) |  |
 | `mesa.examples:BoltzmannWealth` | ✓ | — | ✓ (seeded config, 105.2 MB) |  |
 | `meteocalc:heat_index` | ✓ | — | ✓ (`init --probe` config, 44.8 MB) |  |
-| `metpy.calc:dewpoint_from_relative_humidity` | ✗ simulate fails | ✓ ([config](#metpy)) | ✓ (hand config, 149.9 MB) | ValueError: This function changed in version(s) ['1.0']--double check that the function is being called properly. |
+| `metpy.calc:dewpoint_from_relative_humidity` | ✓ | ✓ ([config](#metpy)) | ✓ (hand config, 149.9 MB) | `init --probe` retries with pint quantities; metpy names only the dimension, so the input gets its SI unit (`temperature` in K): set the unit your start is in (the hand config's `degC`). Before: ValueError: This function changed in version(s) ['1.0']--double check that the function is being called properly. |
 | `nashpy:Game` | ✓ | — | ✓ (`init --probe` config, 94.9 MB) | `--call support_enumeration`, `--start A=… --start B=…` (a 2×2 game with one mixed equilibrium). The method returns a generator: its items are read into a tuple, and `--probe` writes `y0_0` and `y0_1`, the two players' strategies in the first equilibrium. Plain `init` fails (`float() argument must be … not 'generator'`). 0.0.43 has no `is_zero_sum`. |
 | `neurokit2:ecg_simulate` | ✓ | — | ✓ (`init --probe` config, 150.4 MB) |  |
 | `numdifftools:Derivative` | ✓ | — | ✓ (`init --probe` config, 90.8 MB) |  |
@@ -199,7 +201,7 @@ Errors such as `y is an array of shape […], not a single value` in the `init` 
 | `timezonefinder:TimezoneFinder` | ✓ | — | ✓ (`init --probe` config, 80.6 MB) |  |
 | `tmm:coh_tmm` | ✓ | — | ✓ (`init --probe` config, 49.1 MB) |  |
 | `transforms3d.euler:euler2quat` | ✓ | — | ✓ (`init --probe` config, 47.3 MB) |  |
-| `uncertainties:ufloat` | ✗ no useful outputs | ✓ ([config](match-testing-rerun/configs/uncertainties.toml)) | ✓ (hand config, 45.9 MB) | `init`: only `s`, the `ufloat` itself. The hand config reads `return:nominal_value` and `return:std_dev`. |
+| `uncertainties:ufloat` | ✓ | ✓ ([config](match-testing-rerun/configs/uncertainties.toml)) | ✓ (hand config, 45.9 MB) | `init --probe` reads the returned object's properties; those named like an argument get the result's name: `y_nominal_value`, `y_std_dev`. Before: `init`: only `s`, the `ufloat` itself. The hand config reads `return:nominal_value` and `return:std_dev`. |
 | `windpowerlib.wind_speed:logarithmic_profile` | ✓ | — | ✓ (`init --probe` config, 62.9 MB) |  |
 
 ---
