@@ -640,6 +640,29 @@ def test_dotted_path_reads_the_last_element():
         get_path({"x": Wrapper(4.0)}, "x.-1")
 
 
+def test_dotted_path_indexes_any_iterable():
+    from fmugen.templates.fmugen_runtime import get_path
+
+    class Space:   # like pymunk's Space: bodies is a dict_keys view
+        def __init__(self):
+            self._bodies = {"a": 1, "b": 2}
+
+        @property
+        def bodies(self):
+            return self._bodies.keys()
+
+    assert get_path(Space(), "bodies.0") == "a" and get_path(Space(), "bodies.-1") == "b"
+    assert get_path({"s": frozenset([7])}, "s.0") == 7
+    with pytest.raises(IndexError):
+        get_path(Space(), "bodies.2")
+    with pytest.raises(AttributeError):   # strings, mappings and iterators aren't indexed this way
+        get_path({"s": "abc"}, "s.0")
+    with pytest.raises(KeyError):   # a mapping's part is a key, as before
+        get_path({"d": {"x": 1}}, "d.0")
+    with pytest.raises(AttributeError):
+        get_path({"g": iter([1, 2])}, "g.0")
+
+
 def test_dotted_path_indexes_numpy_arrays():
     np = pytest.importorskip("numpy")
     from fmugen.templates.fmugen_runtime import get_path

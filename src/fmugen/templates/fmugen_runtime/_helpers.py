@@ -22,7 +22,7 @@ import traceback
 import types
 import typing
 import warnings
-from collections.abc import Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from fractions import Fraction
 from pathlib import Path
 
@@ -557,11 +557,35 @@ def _indexable(obj):
         and hasattr(obj, "__getitem__")
 
 
+_MISSING = object()   # _nth / _item: the fallback doesn't apply
+
+
+def _nth(obj, part):
+    """Element ``part`` (``"0"``, ``"-1"``) of an iterable that can't be indexed, such as a ``dict_keys`` view.
+
+    Only tried where an attribute lookup has failed. Strings, mappings, pandas/xarray objects and
+    iterators (which reading would consume) are left out.
+
+    :param obj: any object.
+    :param part: the path part.
+    :type part: str
+    :return: the element, or ``_MISSING`` when this doesn't apply.
+    :raises IndexError: ``obj`` has fewer elements.
+    """
+    if not (part.lstrip("-").isdigit() and part.count("-") <= 1) or isinstance(obj, (str, bytes, Mapping)) \
+            or type(obj).__module__.split(".")[0] in ("pandas", "xarray") or not isinstance(obj, Iterable) \
+            or isinstance(obj, Iterator):
+        return _MISSING
+    return list(obj)[int(part)]
+
+
 def get_path(obj, path):
     """Follow a dotted path through attributes, mapping keys and sequence indexes.
 
     ``"state.T"``, ``"rewards.speed"``, ``"4.x"``, ``"X.value.-1"`` (the last element). On a
     mapping a part is a key, unless it's only an attribute (``"options.update"``: the method).
+    A number on any other iterable without indexing (``"bodies.0"`` on a ``dict_keys`` view)
+    picks that element, but only where there's no such attribute.
 
     :param obj: the start object (usually the model object or a call result).
     :param path: the dotted path.
@@ -578,7 +602,13 @@ def get_path(obj, path):
             except TypeError as e:   # a list-like wrapping a single value (a GEKKO variable before its first solve)
                 raise IndexError(f"{part}: {e}") from e
         else:
-            obj = getattr(obj, part)
+            try:
+                obj = getattr(obj, part)
+            except AttributeError:
+                element = _nth(obj, part)
+                if element is _MISSING:
+                    raise
+                obj = element
     return obj
 
 
