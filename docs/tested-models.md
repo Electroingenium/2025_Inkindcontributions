@@ -9,6 +9,7 @@ fmugen has been tried on 131 published, unmodified Python models (three needed a
 - [Neural networks](#neural-networks)
 - [GEKKO models](#gekko-models)
 - [Hand configs](#hand-configs)
+- [Pending](#pending)
 - [Known problems](#known-problems)
 - [Versions](#versions)
 - [Reproducing a run](#reproducing-a-run)
@@ -317,6 +318,122 @@ relative_humidity = { start = 0.5, unit = "dimensionless", convert = "pint" }
 [outputs]
 y = { from = "return", unit = "degC" }
 ```
+
+---
+
+## Pending
+
+100 more models, not tried yet: 45 neural networks and 55 other models, from libraries not in the tables above. 25 need FMI 3: Binary variables (images), 2-D arrays, clocks, structural parameters or UInt64. Every package is on PyPI; the entry and what to try are a starting point, not checked.
+
+### Neural networks (pending)
+
+| Model | Package | FMI 3 feature | What to try | Status |
+|---|---|---|---|---|
+| `ultralytics:YOLO` | [ultralytics](https://pypi.org/project/ultralytics/) | Binary | YOLO11n object detection; the image as a Binary input, boxes as arrays | pending |
+| `transformers:pipeline` | [transformers](https://pypi.org/project/transformers/) | — | `"sentiment-analysis"` pipeline (DistilBERT): text in, label and score out | pending |
+| `sentence_transformers:SentenceTransformer` | [sentence-transformers](https://pypi.org/project/sentence-transformers/) | — | `all-MiniLM-L6-v2`, `--call encode`: a 384-value embedding | pending |
+| `timm:create_model` | [timm](https://pypi.org/project/timm/) | — | `resnet18`, pretrained: image classification logits | pending |
+| `torchvision.models:resnet18` | [torchvision](https://pypi.org/project/torchvision/) | — | ImageNet weights, a 224×224 image | pending |
+| `neuralforecast.models:NHITS` | [neuralforecast](https://pypi.org/project/neuralforecast/) | — | N-HiTS forecaster, fitted on a short series, `predict` | pending |
+| `darts.models:NBEATSModel` | [darts](https://pypi.org/project/darts/) | — | N-BEATS forecaster | pending |
+| `pytorch_forecasting:TemporalFusionTransformer` | [pytorch-forecasting](https://pypi.org/project/pytorch-forecasting/) | — | Temporal Fusion Transformer | pending |
+| `gluonts.torch:DeepAREstimator` | [gluonts](https://pypi.org/project/gluonts/) | — | DeepAR probabilistic forecaster (`gluonts[torch]`) | pending |
+| `timesfm:TimesFM_2p5_200M_torch` | [timesfm](https://pypi.org/project/timesfm/) | — | Google TimesFM 2.5 foundation forecaster (Hugging Face weights) | pending |
+| `uni2ts.model.moirai:MoiraiForecast` | [uni2ts](https://pypi.org/project/uni2ts/) | — | Salesforce Moirai foundation forecaster | pending |
+| `momentfm:MOMENTPipeline` | [momentfm](https://pypi.org/project/momentfm/) | — | MOMENT time-series foundation model | pending |
+| `tirex:load_model` | [tirex-ts](https://pypi.org/project/tirex-ts/) | — | NX-AI TiRex (xLSTM) forecaster | pending |
+| `mace.calculators:mace_mp` | [mace-torch](https://pypi.org/project/mace-torch/) | — | MACE-MP-0 interatomic potential (ASE calculator): energy and forces | pending |
+| `chgnet.model:CHGNet` | [chgnet](https://pypi.org/project/chgnet/) | — | CHGNet crystal potential, `predict_structure` | pending |
+| `matgl:load_model` | [matgl](https://pypi.org/project/matgl/) | — | M3GNet universal potential | pending |
+| `deepxde.nn:FNN` | [deepxde](https://pypi.org/project/deepxde/) | — | Physics-informed network (PINN) | pending |
+| `neuralop.models:FNO` | [neuraloperator](https://pypi.org/project/neuraloperator/) | — | Fourier neural operator | pending |
+| `torchdiffeq:odeint` | [torchdiffeq](https://pypi.org/project/torchdiffeq/) | — | Neural ODE (an MLP right-hand side) | pending |
+| `torchdyn.core:NeuralODE` | [torchdyn](https://pypi.org/project/torchdyn/) | — | Neural ODE module | pending |
+| `sbi.inference:NPE` | [sbi](https://pypi.org/project/sbi/) | — | Neural posterior estimation (normalizing flow) | pending |
+| `onnxruntime:InferenceSession` | [onnxruntime](https://pypi.org/project/onnxruntime/) | — | An ONNX model zoo network (MNIST), `--call run` | pending |
+| `keras.applications:MobileNetV2` | [keras](https://pypi.org/project/keras/) | — | Keras/TensorFlow image classifier (needs tensorflow) | pending |
+| `equinox.nn:MLP` | [equinox](https://pypi.org/project/equinox/) | — | JAX network | pending |
+| `skorch:NeuralNetRegressor` | [skorch](https://pypi.org/project/skorch/) | — | A torch network behind a scikit-learn API, `predict` | pending |
+| `pytorch_tabnet.tab_model:TabNetRegressor` | [pytorch-tabnet](https://pypi.org/project/pytorch-tabnet/) | — | TabNet on tabular data | pending |
+| `tabpfn:TabPFNRegressor` | [tabpfn](https://pypi.org/project/tabpfn/) | — | TabPFN tabular foundation model | pending |
+| `facenet_pytorch:MTCNN` | [facenet-pytorch](https://pypi.org/project/facenet-pytorch/) | — | Face detection | pending |
+| `whisper:load_model` | [openai-whisper](https://pypi.org/project/openai-whisper/) | — | Speech to text (`tiny`), `--call transcribe`: a string output | pending |
+| `speechbrain.inference.speaker:EncoderClassifier` | [speechbrain](https://pypi.org/project/speechbrain/) | — | Speaker embedding (ECAPA) | pending |
+| `torchaudio.pipelines:WAV2VEC2_ASR_BASE_960H` | [torchaudio](https://pypi.org/project/torchaudio/) | — | wav2vec 2.0 speech recognition | pending |
+| `stable_baselines3:SAC` | [stable-baselines3](https://pypi.org/project/stable-baselines3/) | — | SAC policy on Pendulum (`predict`) | pending |
+| `sb3_contrib:RecurrentPPO` | [sb3-contrib](https://pypi.org/project/sb3-contrib/) | — | LSTM policy: its hidden state carried between steps | pending |
+| `d3rlpy.algos:CQLConfig` | [d3rlpy](https://pypi.org/project/d3rlpy/) | — | Offline RL (CQL) policy | pending |
+| `snntorch:Leaky` | [snntorch](https://pypi.org/project/snntorch/) | — | Spiking neuron layer: membrane state between steps | pending |
+| `norse.torch:LIFCell` | [norse](https://pypi.org/project/norse/) | — | Spiking LIF cell, state between steps | pending |
+| `nengo:Simulator` | [nengo](https://pypi.org/project/nengo/) | — | Spiking network simulator, `--call run_steps` | pending |
+| `reservoirpy.nodes:Reservoir` | [reservoirpy](https://pypi.org/project/reservoirpy/) | — | Echo state network | pending |
+| `pytorch_tcn:TCN` | [pytorch-tcn](https://pypi.org/project/pytorch-tcn/) | — | Temporal convolutional network, streaming mode | pending |
+| `kan:KAN` | [pykan](https://pypi.org/project/pykan/) | — | Kolmogorov–Arnold network | pending |
+| `ncps.torch:CfC` | [ncps](https://pypi.org/project/ncps/) | — | Liquid / closed-form continuous-time network | pending |
+| `neuromancer.modules.blocks:MLP` | [neuromancer](https://pypi.org/project/neuromancer/) | — | Differentiable-programming control block | pending |
+| `pyod.models.auto_encoder:AutoEncoder` | [pyod](https://pypi.org/project/pyod/) | — | Autoencoder anomaly detector, `decision_function` | pending |
+| `rembg:remove` | [rembg](https://pypi.org/project/rembg/) | Binary | Background removal (U²-Net): image bytes in and out | pending |
+| `easyocr:Reader` | [easyocr](https://pypi.org/project/easyocr/) | Binary | OCR: image bytes in, text out | pending |
+
+### Other models (pending)
+
+| Model | Package | FMI 3 feature | What to try | Status |
+|---|---|---|---|---|
+| `qrcode:make` | [qrcode](https://pypi.org/project/qrcode/) | Binary | QR code as PNG bytes out | pending |
+| `pyzbar.pyzbar:decode` | [pyzbar](https://pypi.org/project/pyzbar/) | Binary | Barcode decoding from image bytes | pending |
+| `PIL.ImageOps:grayscale` | [pillow](https://pypi.org/project/pillow/) | Binary | Image bytes in, grayscale image bytes out | pending |
+| `python_speech_features:mfcc` | [python_speech_features](https://pypi.org/project/python_speech_features/) | 2-D array | MFCC matrix of an audio frame | pending |
+| `ssqueezepy:ssq_cwt` | [ssqueezepy](https://pypi.org/project/ssqueezepy/) | 2-D array | Synchrosqueezed wavelet transform (complex, split) | pending |
+| `harold:lqr` | [harold](https://pypi.org/project/harold/) | 2-D array | LQR gain matrix K | pending |
+| `slycot:sb02md` | [slycot](https://pypi.org/project/slycot/) | 2-D array | Riccati solution matrix (SLICOT, Fortran) | pending |
+| `do_mpc.controller:MPC` | [do-mpc](https://pypi.org/project/do-mpc/) | Clock | MPC sampled on a clock (`t_step`) | pending |
+| `casadi:nlpsol` | [casadi](https://pypi.org/project/casadi/) | Structural parameter | Optimal control, horizon length N as a structural parameter | pending |
+| `osqp:OSQP` | [osqp](https://pypi.org/project/osqp/) | Clock | QP-based MPC solved at each clock tick | pending |
+| `ruckig:Ruckig` | [ruckig](https://pypi.org/project/ruckig/) | Clock | Jerk-limited trajectory generator at a fixed control cycle | pending |
+| `vqf:VQF` | [vqf](https://pypi.org/project/vqf/) | Clock | IMU orientation filter, updated at the sensor's sample clock | pending |
+| `simdkalman:KalmanFilter` | [simdkalman](https://pypi.org/project/simdkalman/) | Structural parameter | Vectorized Kalman filter, the state size as a structural parameter | pending |
+| `imufusion:Ahrs` | [imufusion](https://pypi.org/project/imufusion/) | Clock | x-io Fusion AHRS, updated at a fixed sample clock | pending |
+| `pde:DiffusionPDE` | [py-pde](https://pypi.org/project/py-pde/) | Structural parameter | Diffusion on a grid, the grid size as a structural parameter | pending |
+| `fipy:Grid1D` | [fipy](https://pypi.org/project/fipy/) | Structural parameter | Finite-volume 1-D heat equation, `nx` cells | pending |
+| `skfem:MeshTri` | [scikit-fem](https://pypi.org/project/scikit-fem/) | Structural parameter | FEM Poisson problem, mesh refinement sets the array sizes | pending |
+| `pydmd:DMD` | [pydmd](https://pypi.org/project/pydmd/) | Structural parameter, 2-D array | Dynamic mode decomposition, number of modes | pending |
+| `numpy.random:default_rng` | [numpy](https://pypi.org/project/numpy/) | UInt64 | A UInt64 seed | pending |
+| `pysindy:SINDy` | [pysindy](https://pypi.org/project/pysindy/) | 2-D array | Sparse identification: the coefficient matrix | pending |
+| `mujoco:MjData` | [mujoco](https://pypi.org/project/mujoco/) | Structural parameter | Physics model: arrays sized by `nq`, `nv` | pending |
+| `wntr.sim:EpanetSimulator` | [wntr](https://pypi.org/project/wntr/) | Structural parameter | Water network: pressures sized by the number of junctions | pending |
+| `pymoo.optimize:minimize` | [pymoo](https://pypi.org/project/pymoo/) | — | Multi-objective optimization (NSGA-II) | pending |
+| `diffrax:diffeqsolve` | [diffrax](https://pypi.org/project/diffrax/) | — | JAX ODE solver | pending |
+| `sdeint:itoint` | [sdeint](https://pypi.org/project/sdeint/) | — | Stochastic differential equation (seeded) | pending |
+| `jitcode:jitcode` | [jitcode](https://pypi.org/project/jitcode/) | — | ODE compiled to C from SymPy expressions | pending |
+| `pinocchio:buildSampleModelManipulator` | [pin](https://pypi.org/project/pin/) | — | Rigid-body dynamics (RNEA, ABA) | pending |
+| `pybullet:connect` | [pybullet](https://pypi.org/project/pybullet/) | — | Physics engine in `DIRECT` mode | pending |
+| `skrf:Network` | [scikit-rf](https://pypi.org/project/scikit-rf/) | — | RF network S-parameters (complex, split) | pending |
+| `prophet:Prophet` | [prophet](https://pypi.org/project/prophet/) | — | Bayesian forecaster (Stan) | pending |
+| `statsforecast.models:AutoARIMA` | [statsforecast](https://pypi.org/project/statsforecast/) | — | Fast ARIMA | pending |
+| `pmdarima:auto_arima` | [pmdarima](https://pypi.org/project/pmdarima/) | — | ARIMA with model search | pending |
+| `lifelines:KaplanMeierFitter` | [lifelines](https://pypi.org/project/lifelines/) | — | Survival analysis | pending |
+| `emcee:EnsembleSampler` | [emcee](https://pypi.org/project/emcee/) | — | MCMC sampler (seeded) | pending |
+| `chaospy:Normal` | [chaospy](https://pypi.org/project/chaospy/) | — | Polynomial chaos / uncertainty quantification | pending |
+| `SALib.analyze.sobol:analyze` | [SALib](https://pypi.org/project/SALib/) | — | Sobol sensitivity indices | pending |
+| `PySAM.Pvwattsv8:default` | [nrel-pysam](https://pypi.org/project/nrel-pysam/) | — | NREL SAM PV model (C library) | pending |
+| `floris:FlorisModel` | [floris](https://pypi.org/project/floris/) | — | Wind farm wakes | pending |
+| `pypsa:Network` | [pypsa](https://pypi.org/project/pypsa/) | — | Power flow (`pf`) | pending |
+| `pandapipes:create_empty_network` | [pandapipes](https://pypi.org/project/pandapipes/) | — | Pipe network flow | pending |
+| `pyswmm:Simulation` | [pyswmm](https://pypi.org/project/pyswmm/) | — | Stormwater (SWMM engine), stepped | pending |
+| `pastas:Model` | [pastas](https://pypi.org/project/pastas/) | — | Groundwater time-series model | pending |
+| `landlab.components:FlowAccumulator` | [landlab](https://pypi.org/project/landlab/) | — | Landscape flow routing on a grid | pending |
+| `tespy.networks:Network` | [tespy](https://pypi.org/project/tespy/) | — | Thermal plant network (a heat pump cycle) | pending |
+| `xgboost:XGBRegressor` | [xgboost](https://pypi.org/project/xgboost/) | — | Gradient boosting | pending |
+| `lightgbm:LGBMRegressor` | [lightgbm](https://pypi.org/project/lightgbm/) | — | Gradient boosting | pending |
+| `catboost:CatBoostRegressor` | [catboost](https://pypi.org/project/catboost/) | — | Gradient boosting | pending |
+| `GPy.models:GPRegression` | [GPy](https://pypi.org/project/GPy/) | — | Gaussian process: mean and variance | pending |
+| `hapsira.twobody:Orbit` | [hapsira](https://pypi.org/project/hapsira/) | — | Orbit propagation (astropy units) | pending |
+| `openseespy.opensees:node` | [openseespy](https://pypi.org/project/openseespy/) | — | Structural FE (OpenSees), module-level state | pending |
+| `Pynite:FEModel3D` | [PyNiteFEA](https://pypi.org/project/PyNiteFEA/) | — | 3-D frame FE analysis | pending |
+| `sectionproperties.analysis:Section` | [sectionproperties](https://pypi.org/project/sectionproperties/) | — | Cross-section properties (FE) | pending |
+| `arch:arch_model` | [arch](https://pypi.org/project/arch/) | — | GARCH volatility model, `fit` then `forecast` | pending |
+| `ephem:Observer` | [ephem](https://pypi.org/project/ephem/) | — | Sun and planet positions from an observer (C library) | pending |
+| `sympy:lambdify` | [sympy](https://pypi.org/project/sympy/) | — | A symbolic expression made into a function | pending |
 
 ---
 
