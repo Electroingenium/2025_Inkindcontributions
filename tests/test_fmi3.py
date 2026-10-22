@@ -436,3 +436,53 @@ def test_instantiating_with_logging_off_turns_logging_off(make_fmu):
             model = model_fmi3.Model("test", "", "", False, logging_on, False, False, [], lambda *a: None,
                                      resources_dir=fmu_dir / "resources")
             assert model.engine.logging_on is logging_on
+
+
+def test_array_output_empty_until_the_first_step(tmp_path, make_fmu, adapter):
+    # like pyloudnorm's blockwise_loudness: empty after construction, full after each step
+    write(tmp_path, '''
+        class Meter:
+            def __init__(self):
+                self.blocks = []
+
+            def step(self, level=1.0):
+                self.blocks = [level, 2 * level, 3 * level]
+                return level
+    ''', '''
+        [model]
+        entry = "m.py:Meter"
+        fmi_version = 3
+        call = "step"
+        [inputs]
+        level = { start = 1.0 }
+        [outputs]
+        blocks = { dimensions = [3] }
+    ''')
+    fmu = adapter(make_fmu(tmp_path), fmi=3)
+    fmu.initialize()   # the empty list is skipped, not an error
+    assert fmu.fmi3DoStep(0.0, 1.0, False)[0] == OK
+    assert fmu.engine.get_values([fmu.vr["blocks"]]) == (OK, [1.0, 2.0, 3.0])
+
+
+def test_array_output_of_the_wrong_size_still_fails_a_step(tmp_path, make_fmu, adapter):
+    write(tmp_path, '''
+        class Meter:
+            def __init__(self):
+                self.blocks = [0.0, 0.0, 0.0]
+
+            def step(self, level=1.0):
+                self.blocks = [level]
+                return level
+    ''', '''
+        [model]
+        entry = "m.py:Meter"
+        fmi_version = 3
+        call = "step"
+        [inputs]
+        level = { start = 1.0 }
+        [outputs]
+        blocks = { dimensions = [3] }
+    ''')
+    fmu = adapter(make_fmu(tmp_path), fmi=3)
+    fmu.initialize()
+    assert fmu.fmi3DoStep(0.0, 1.0, False)[0] == ERROR

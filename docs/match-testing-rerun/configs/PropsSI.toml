@@ -1,0 +1,14 @@
+# docs/models.md "Positional-only arguments", as published
+[model]
+entry = "CoolProp.CoolProp:PropsSI"
+
+[inputs]
+output = { start = "T",      to = "pos:0" }
+name1  = { start = "P",      to = "pos:1" }
+value1 = { start = 101325.0, to = "pos:2" }
+name2  = { start = "Q",      to = "pos:3" }
+value2 = { start = 0.0,      to = "pos:4" }
+fluid  = { start = "Water",  to = "pos:5" }
+
+[outputs]
+value = { from = "return" }    # saturation temperature of water at 1 atm: 373.12 K

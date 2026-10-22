@@ -127,7 +127,7 @@ See [docs/fmi.md](docs/fmi.md) for what each FMI call does, function by function
 | [docs/config.md](docs/config.md) | `fmugen.toml` reference: every key, its default, validation rules and a complete example |
 | [docs/models.md](docs/models.md) | Writing models: the supported shapes with examples, what `fmugen init` infers and what to check |
 | [docs/init-tutorial.md](docs/init-tutorial.md) | Tutorial: reading and editing the `fmugen.toml` that `fmugen init` writes, with a checklist and FAQ |
-| [docs/tested-models.md](docs/tested-models.md) | The first published models fmugen was tried on (FMI 2 and FMI 3), what each needed, and the results. Later runs: [round 2](docs/tested-models-round2.md), [round 3](docs/tested-models-round3.md), [rerun](docs/tested-models-rerun.md), [GEKKO](docs/tested-models-gekko.md) |
+| [docs/tested-models.md](docs/tested-models.md) | Every published model fmugen was tried on, with its most recent result |
 | [docs/fmi.md](docs/fmi.md) | FMI 2 and FMI 3 behaviour: function-by-function support, initialization, steps, clocks, state, logging |
 | [docs/packaging.md](docs/packaging.md) | What `fmugen build` does, the generated FMU's layout, the FMU's Python environment, updating UniFMU |
 | [docs/interface.md](docs/interface.md) | `resources/interface.json`, fmugen's description of the model inside each FMU: every key, with a JSON Schema |

@@ -1,0 +1,38 @@
+--- last run
++++ rerun
+@@ -3,10 +3,32 @@
+ call = "rotate"
+ requirements = ["numpy==2.5.4", "pyquaternion==0.9.9"]  # the versions installed here; installed into Docker images and by --vendor
+ [model.constants]
+-0 = { call = "numpy:array([0.0,0.0,1.0])" }  # computed when the FMU initializes
++axis = { call = "numpy:array([0.0,0.0,1.0])" }  # computed when the FMU initializes
+ [model.call_constants]
+ vector = { call = "numpy:array([1.0,0.0,0.0])" }  # computed when the FMU initializes
+ [parameters]
+-angle = { start = 0.5, to = "pos:1" }  # start from --start, passed by position to *args: check the order
++angle = { start = 0.5 }  # start from --start (passed through **kwargs)
+ [outputs]
+-y = { from = "return" }  # from the code; not seen in the probe
++y = { from = "return", dimensions = [3] }
++axis = { dimensions = [3] }  # a property of the object
++conjugate = {}  # a property of the object
++degrees = {}  # a property of the object
++elements = { dimensions = [4] }  # a property of the object
++imaginary = { dimensions = [3] }  # a property of the object
++inverse = {}  # a property of the object
++magnitude = {}  # a property of the object
++norm = {}  # a property of the object
++normalised = {}  # a property of the object
++polar_angle = {}  # a property of the object
++polar_unit_vector = { dimensions = [3] }  # a property of the object
++radians = {}  # a property of the object
++real = {}  # a property of the object
++rotation_matrix = { dimensions = [3, 3] }  # a property of the object
++scalar = {}  # a property of the object
++transformation_matrix = { dimensions = [4, 4] }  # a property of the object
++unit = {}  # a property of the object
++vector = { dimensions = [3] }  # a property of the object
++w = {}  # a property of the object
++x = {}  # a property of the object
++yaw_pitch_roll = { dimensions = [3] }  # a property of the object
++z = {}  # a property of the object

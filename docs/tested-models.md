@@ -1,233 +1,354 @@
 # Tested models
 
-fmugen has been tried on published, unmodified Python models: the examples in this repository, and 20 more models from 11 open-source projects on PyPI. Each was run through the whole pipeline for **FMI 2 and FMI 3**: `fmugen init` → `fmugen build` → `fmpy validate` → `fmpy simulate`.
+fmugen has been tried on 131 published, unmodified Python models (three needed a file renamed or a script wrapped in a class, and one synthetic input data; see their notes): the examples in this repository, models from more than 100 libraries on PyPI, 6 neural networks and 13 models built on [GEKKO](https://github.com/BYU-PRISM/GEKKO). Each model is listed once, with its most recent result.
 
-- **Repository examples:** the 5 examples build, validate and simulate. The 3 that use no FMI 3-only features give identical results under FMI 2 and FMI 3.
-- **PyPI models:** **37 of 40 runs pass** (20 models × 2 FMI versions). The 3 that fail are FMI 2 builds of models whose inputs are arrays, which only FMI 3 has. `init` stops them with a clear message.
-- **Neural networks:** [6 small published networks](#neural-networks) (on PyTorch or ONNX Runtime: forecasters, a voice detector, a reinforcement-learning controller, a molecular energy model and a surrogate) build, validate and simulate. **Every result is identical** to calling the model directly.
-
-These runs are how the [`[model] setup`](models.md#libraries-that-need-setup-first), [`to = "pos:N"`](models.md#positional-only-arguments), [`to = "call:…"`](models.md#setter-methods-and-properties) and [`kind = "function"`](models.md#constructors-that-do-the-work) features, and `init --start/--setup/--kind`, came about. The neural networks led to `[model] create` / `init --create`, `convert`, tensor outputs, `build --capture-output`, factory functions (a function entry with `call`), computed constants (`{ call = "…" }`), tuple and dict arguments (`to = "arg:NAME[i]"`), NamedTuple field names, 0-d array results, and `init` retrying array inputs as numpy arrays or tensors.
-
-- [Projects](#projects)
+- [How the models were tested](#how-the-models-were-tested)
+- [Summary](#summary)
 - [Repository examples](#repository-examples)
-- [Models from PyPI](#models-from-pypi)
+- [Python libraries](#python-libraries)
 - [Neural networks](#neural-networks)
-- [What was checked](#what-was-checked)
+- [GEKKO models](#gekko-models)
+- [Hand configs](#hand-configs)
+- [Known problems](#known-problems)
+- [Versions](#versions)
 - [Reproducing a run](#reproducing-a-run)
 
 ---
 
-## Projects
+## How the models were tested
 
-| Project | Version | License | Used for |
-|---|---|---|---|
-| Psychrometry model (Lucia Royo-Pascual, EIUM) | — | — | [examples/psychrometry](../examples/psychrometry) |
-| [simple-pid](https://github.com/m-lundberg/simple-pid) | 2.0.1 | MIT | [examples/simple_pid](../examples/simple_pid), [examples/sampled_pid](../examples/sampled_pid) |
-| [RC_BuildingSimulator](https://github.com/architecture-building-systems/RC_BuildingSimulator) | commit `97c1cdd` | MIT (amended) | [examples/rc_building](../examples/rc_building) |
-| [FilterPy](https://github.com/rlabbe/filterpy) | 1.4.5 | MIT | [examples/kalman](../examples/kalman); `GHFilter`, `Q_discrete_white_noise` |
-| [PsychroLib](https://github.com/psychrometrics/psychrolib) | 2.5.0 | MIT | `GetHumRatioFromRelHum` |
-| [CoolProp](https://github.com/CoolProp/CoolProp) | 8.0.0 | MIT | `PropsSI` |
-| [pvlib](https://github.com/pvlib/pvlib-python) | 0.16.1 | BSD-3-Clause | `pvwatts_dc`, `sapm_cell`, `alt2pres`, `aoi` |
-| [fluids](https://github.com/CalebBell/fluids) | 1.3.1 | MIT | `friction_factor`, `Reynolds` |
-| [ht](https://github.com/CalebBell/ht) | 1.2.0 | MIT | `Nu_conv_internal`, `effectiveness_from_NTU` |
-| [chemicals](https://github.com/CalebBell/chemicals) | 1.5.2 | MIT | `Antoine` |
-| [iapws](https://github.com/jjgomera/iapws) | 1.5.5 | GPL-3.0 | `_TSat_P`, `IAPWS97` |
-| [AHRS](https://github.com/Mayitzin/ahrs) | 0.4.0 | MIT | `Madgwick`, `Mahony` |
-| [Gymnasium](https://github.com/Farama-Foundation/Gymnasium) | 1.3.0 | MIT | `CartPoleEnv`, `PendulumEnv` |
-| [TCLab](https://github.com/jckantor/TCLab) | 1.0.0 | Apache-2.0 | `TCLabModel` |
-| [Silero VAD](https://github.com/snakers4/silero-vad) (`silero-vad`) | 6.2.3, with onnxruntime 1.30.0 | MIT | `load_silero_vad` |
-| [Granite TSFM](https://github.com/ibm-granite/granite-tsfm) (`granite-tsfm`, weights [`ibm-granite/granite-timeseries-ttm-r2`](https://huggingface.co/ibm-granite/granite-timeseries-ttm-r2)) | 0.3.10, with torch 2.11.0, transformers 5.18.0 | Apache-2.0 | `get_model` (TinyTimeMixer) |
-| [Stable-Baselines3](https://github.com/DLR-RM/stable-baselines3) + [huggingface_sb3](https://github.com/huggingface/huggingface_sb3) (model [`sb3/demo-hf-CartPole-v1`](https://huggingface.co/sb3/demo-hf-CartPole-v1)) | 2.9.0 / 3.0, with torch 2.14.1, gymnasium 1.4.0 | MIT / Apache-2.0 | `PPO` |
-| [surfaces](https://github.com/SimonBlanke/Surfaces) (`surfaces[surrogates]`) | 0.9.0, with onnxruntime 1.30.0 | MIT | `GradientBoostingRegressorFunction` (ONNX surrogate) |
-| [TorchANI](https://github.com/aiqm/torchani) | 2.9.0, with torch 2.13.0 | MIT | `ANI2x` |
-| [Chronos](https://github.com/amazon-science/chronos-forecasting) (`chronos-forecasting`, weights [`amazon/chronos-bolt-tiny`](https://huggingface.co/amazon/chronos-bolt-tiny)) | 2.3.2, with torch 2.14.1, transformers 5.18.0 | Apache-2.0 | `ChronosBoltPipeline` |
+Each model went through:
 
-Only RC_BuildingSimulator is copied into this repository. The others are installed from PyPI when needed.
+1. `fmugen init` (code only)
+2. `fmugen init --probe`
+3. `fmugen build --capture-output` on each config `init` wrote (and on the committed `fmugen.toml` for the repository examples), then `fmpy.simulate_fmu` for 3 s with 1 s outputs
+4. `fmugen build --capture-output --compile pyinstaller` on the best config (the `--probe` one when it simulated), then the same simulation
+
+**FMI 2 by default.** A model was run with FMI 3 only when no FMI 2 config simulated; the results below combine both.
+
+Setup: fmugen at `6dfc18c` (2026-10-22), WSL 2 (Ubuntu), Python 3.13, `uv` venvs, FMPy 0.3.32, UniFMU 0.14, gekko 1.3.2 with its local solver. CGE ran on Windows 11. Every FMU was compared value by value with the model run directly ([report](match-testing-rerun/report.md)). The **Compiled** column: PyInstaller 6.22.3 in WSL 2 (Linux), each compiled FMU compared with the uncompiled one of the same config, value by value ([report](match-testing-compile-rest/report.md), [GEKKO and hand configs](match-testing-compile/report.md), [GEKKO retest](match-testing-compile/retest.md)). Sizes are of the Linux FMUs, except CGE's (Windows only). Compile in a venv with only what the model needs: extra packages make the FMU larger and the build slower.
+
+Columns: **`init` / `init --probe`**: ✓ if the config of either one builds, simulates and outputs the model's results; otherwise how they failed (✗ no useful outputs: it runs, but only outputs parameters, settings or constants). **Hand config**: a config written by hand (for the examples, the repository's `fmugen.toml`), ✓ if it builds, simulates and outputs the model's results, with a link to it; — when the model needs none: ✓, ✗ no config (`init` stopped), ✗ build fails, ✗ simulate fails, or — (not run). **Compiled**: the best config compiled with PyInstaller, built and simulated. **Notes**: what was checked, or the error of each config that failed ("`init`:", "`init --probe`:").
+
+---
+
+## Summary
+
+131 models: 118 from libraries, neural networks and the repository examples, and 13 built on GEKKO. FMI 2 and FMI 3 results are combined: a model counts as passing if it passes with either.
+
+| | Models (131) |
+|---|---|
+| `init` writes a config | 125 |
+| `init --probe` writes a config | 129 |
+| **Simulates with useful results** (a config from `init` or `init --probe`) | **120** |
+| …or with a hand-written config | **131** |
+| Fails | 0 |
+| **Compiled FMU simulates** | **131**: every model |
+
+A config only counts as a success if the FMU simulates **and** gives the model's results. An FMU that runs but only outputs its own parameters, settings or constants counts as a failure.
+
+How far each step gets:
+
+| Config | Models | Success |
+|---|---|---|
+| `init` (code only) | 45 of 131 | 34 % |
+| `init --probe` (or `init`, when it already works) | 120 of 131 | 92 % |
+| `init --probe` + a hand-written config (for the examples, the repository's `fmugen.toml`) | 131 of 131 | 100 % |
+
+The `init` config fails mostly on models that return arrays, tuples, strings or objects, which only `--probe` types correctly; the error message points to it. Of the 67 `init` configs of the first group that simulate, 23 only output parameters, settings or constants. GEKKO models keep their results in GEKKO variables, which only `--probe` finds. The hand configs add `PropsSI`, cantera, PyTCI and the kalman example ([Hand configs](#hand-configs)), pandapower, seirsplus, tellurium, the GEKKO model OpenHENS, sgp4, pymunk and pybamm ([configs](match-testing-rerun/configs/)).
+
+Later, `init --probe` got 9 more without a hand config, each built, compiled with PyInstaller 6.22.3 and simulated in WSL 2; the compiled FMUs give exactly the values of the model called directly (157 values, t = 0–3; [probe-9](probe-9/CONCLUSION.md)): commpy and impedance (complex results split into real and imaginary parts), uncertainties and ambiance (a returned object's properties, one-element arrays read as their element), `fluids.units` ×2 and metpy (inputs retried as pint quantities, with units read from the errors) CFTOC (a `call:` start for the step method's copy of a shared argument is no longer refused) and river (when the probe finds no outputs, what the step changes becomes the outputs). seirsplus can't be done by `init`, an FMI limitation: its counts are arrays that grow by one element each step, and an FMI variable has a fixed size.
+
+No model fails. The last 4 needed fmugen features, added after the main run and checked on these 4 models only (built, simulated, compiled and compared with a direct run; the other models weren't rerun with them):
+
+| Model | What was missing | Feature |
+|---|---|---|
+| pymunk | `Space.bodies` is a `dict_keys` view, which a path couldn't index | A number in a path picks an element of any iterable, where there's no such attribute ([config.md](config.md)) |
+| pybamm | The voltage is `solution["Voltage [V]"]` on an object that isn't a mapping | A path part is tried as a key on objects that take keys, where there's no such attribute |
+| nashpy | `support_enumeration` returns a generator | Generator results are read into a tuple; `init --probe` splits nested tuples into `y0_0`, `y0_1` |
+| pyet | Its inputs must be pandas Series with a date index | `convert = "series"` with an `epoch`, which `init --probe` writes when plain numbers and arrays fail |
+
+**FMU vs direct run** ([report](match-testing-rerun/report.md)): every model was built into FMUs (`init --probe`, plain `init`, and the repository or hand configs; no `--compile`) and compared, output by output and step by step, with the model called directly in plain Python without fmugen. 130 of 134 match (236,621 values; largest relative difference 1.3 × 10⁻¹⁶, otherwise identical), counting psychrolib with numba and the two FMI 3 repository configs as separate entries. Models random by design were compared seeded. The other 4 are nashpy (no outputs to compare), pyet (the FMU fails), sgp4 (no config) and PyTCI's hand config, which differs from a per-step loop only at t = 0 ([PyTCI](#pytci)).
+
+Checked later, after the features above: sgp4's hand config, pymunk, pybamm, nashpy and pyet all match the direct run with no difference, and so do their compiled FMUs. The `init --probe` configs of the 9 models added later (CFTOC, commpy, impedance, uncertainties, ambiance, `fluids.units` ×2, metpy, river) match it too, compiled and with no difference: 157 values over t = 0–3 ([probe-9](probe-9/CONCLUSION.md)).
+
+CGE counts as a success after renaming its `model.py`, NHES with synthetic input data, OpenHENS with a hand-added output and the COIN-OR couenne solver.
 
 ---
 
 ## Repository examples
 
-| Example | Model shape | FMI 2 | FMI 3 |
-|---|---|---|---|
-| [psychrometry](../examples/psychrometry) | function returning a dict | ✓ | ✓ (same results) |
-| [simple_pid](../examples/simple_pid) | class from PyPI, `__call__`, time step argument, tunable parameters | ✓ | ✓ (same results) |
-| [rc_building](../examples/rc_building) | multi-file package, results as attributes, fed-back state, fixed step | ✓ | ✓ (same results) |
-| [kalman](../examples/kalman) | arrays, structural parameters, triggered clock | — | ✓ |
-| [sampled_pid](../examples/sampled_pid) | periodic clock, `call = false` | — | ✓ |
+| Model | `init` / `init --probe` | Hand config (the repository's `fmugen.toml`) | Compiled (PyInstaller) | Notes |
+|---|---|---|---|---|
+| [examples/psychrometry](../examples/psychrometry) (`compute_balances_simplified`) | ✓ | ✓ | ✓ (`init --probe` config, 108.7 MB) |  |
+| [examples/simple_pid](../examples/simple_pid) (`simple_pid:PID`) | ✓ | ✓ | ✓ (`init --probe` config, 111.0 MB) |  |
+| [examples/rc_building](../examples/rc_building) (`Zone`) | ✓ | ✓† | ✓ (`init --probe` config, 108.8 MB) | †The repo config fixes `step_size = 3600`, so the generic 1 s run is refused (correct); simulated at 3600 s steps. |
+| [examples/kalman](../examples/kalman) (`filterpy.kalman:KalmanFilter`; repo config FMI 3: structural parameters, clock) | ✗ no useful outputs | ✓ | ✓ (repository config (FMI 3), 114.8 MB) | The `init` configs output only filter settings and likelihoods (`dim_x`, …, `alpha`, `likelihood`), not the state estimate. The repository config is driven by `examples/kalman/run.py`. |
+| [examples/sampled_pid](../examples/sampled_pid) (`simple_pid:PID`; repo config: clocks) | ✓ | ✓ | ✓ (repository config (FMI 3), 111.1 MB) | The repo config is driven by `run.py` (clock ticked every 0.1 s, first-order plant). |
 
 ---
 
-## Models from PyPI
+## Python libraries
 
-Columns:
-- **`init` options:** what was passed to `fmugen init` besides the target. "—" means nothing else was needed.
-- **FMI 2 / FMI 3:** whether `build`, `validate` and `simulate` all passed.
+Errors such as `y is an array of shape […], not a single value` in the `init` config are expected: `--probe` finds the shape.
 
-These runs were made while `init` always called the model, which is now `init --probe`. Rerun since then **without `--probe`** (the model is not called, only its code is read):
-
-- The 11 scalar functions (pvlib ×4, `effectiveness_from_NTU`, `Antoine`, `friction_factor`, `Reynolds`, `Nu_conv_internal`, `_TSat_P`, `GetHumRatioFromRelHum`) give **exactly the same outputs** as with the probe.
-- `IAPWS97` (`--kind function`): 29 of the 52 outputs are found in the code; the other 23 are set by a helper that fills the object in a loop, which only `--probe` sees. None found in the code is wrong.
-- `TCLabModel`: its six properties (`T1`, `Q1`, …) have no type annotation, so they're written as commented lines to uncomment; `--probe` reads them.
-- `PropsSI` is a C extension: no source to read, with or without the probe; its config is written by hand.
-- Models with array results (Gymnasium, Madgwick) need `--probe` for the array sizes with FMI 3 (not rerun).
-
-| Model | Shape | `init` options | FMI 2 | FMI 3 |
+| Model | `init` / `init --probe` | Hand config | Compiled (PyInstaller) | Notes |
 |---|---|---|---|---|
-| `pvlib.pvsystem:pvwatts_dc` | function | — | ✓ | ✓ |
-| `pvlib.temperature:sapm_cell` | function | — | ✓ | ✓ |
-| `pvlib.atmosphere:alt2pres` | function | — | ✓ | ✓ |
-| `pvlib.irradiance:aoi` | function | — | ✓ | ✓ |
-| `ht.hx:effectiveness_from_NTU` | function, string argument | — | ✓ | ✓ |
-| `chemicals.vapor_pressure:Antoine` | function | — | ✓ | ✓ |
-| `fluids.friction:friction_factor` | function | `--start Re=1e5` | ✓ | ✓ |
-| `fluids.core:Reynolds` | function | `--start V=1.0 D=0.1 rho=1000.0 mu=0.001` | ✓ | ✓ |
-| `ht.conv_internal:Nu_conv_internal` | function | `--start Re=1e4 Pr=0.7` | ✓ | ✓ |
-| `iapws.iapws97:_TSat_P` | function | `--start P=1.0` | ✓ | ✓ |
-| `filterpy.common:Q_discrete_white_noise` | function returning a matrix | `--start dim=2` | ✓ (no outputs: the result is an array) | ✓ (2×2 array output) |
-| `psychrolib:GetHumRatioFromRelHum` | function, library setup | `--setup "psychrolib:SetUnitSystem(psychrolib.SI)"`, `--start TDryBulb=25.0 RelHum=0.5 Pressure=101325.0` | ✓ | ✓ |
-| `CoolProp.CoolProp:PropsSI` | C extension, positional-only, strings | hand-written config ([shown here](models.md#positional-only-arguments)) | ✓ | ✓ |
-| `iapws:IAPWS97` | constructor does the work, `**kwargs` | `--kind function --start T=400.0 P=1.0` | ✓ | ✓ |
-| `filterpy.gh:GHFilter` | class, `update(z)`, argument names shared with the constructor | `--call update --start x=0.0 dx=1.0 dt=0.1 g=0.8 h=0.2` | ✓ | ✓ |
-| `tclab:TCLabModel` | class, `update(t)`, properties, setter methods | — (heater input: [`to = "call:Q1"`](models.md#setter-methods-and-properties) by hand) | ✓ | ✓ |
-| `gymnasium…cartpole:CartPoleEnv` | class, `step(action)`, setup, tuple result | `--call step --setup reset --start action=1` | ✓ (no observation output: it is an array) | ✓ |
-| `gymnasium…pendulum:PendulumEnv` | class, array action, setup | `--fmi 3 --call step --setup reset --start "u=[0.5]"` | ✗ array input | ✓ |
-| `ahrs.filters:Madgwick` | class, `updateIMU(q, gyr, acc)` arrays | `--fmi 3 --call updateIMU --start "q=[1.0, 0.0, 0.0, 0.0]" "gyr=[0.0, 0.0, 0.01]" "acc=[0.0, 0.0, 9.81]"` | ✓ (rerun: arrays are one scalar per element, `q[1]` … `q[4]`) | ✓ |
-| `ahrs.filters:Mahony` | as Madgwick | as Madgwick | ✗ array input | ✓ |
-| `fluids.units:Reynolds` | function taking and returning pint quantities | hand-written: `convert = "pint"` and a `unit` on each input ([below](#what-was-checked)) | ✓ | ✓ |
-| `fluids.units:head_from_P` | as `Reynolds`, dimensional output | as `Reynolds`, output `unit = "cm"` | — | ✓ |
-| `highway_env…highway_env:HighwayEnv` | class, `step(action)`, nested `info` dict (`rewards.*`) | `--fmi 3 --call step --setup reset --start action=1 --probe`, then `setup = ["reset(seed=0)"]` | — | ✓ |
-| `pvlib.solarposition:get_solarposition` | function of a date-time returning a one-row DataFrame | `--start latitude=40.4 --start longitude=-3.7 --probe`, then `time = { source = "end_time", epoch = "…" }` | ✓ | ✓ |
-| `pythermalcomfort…sports_heat_stress_risk` | function with a dataclass argument (`sport: _SportsValues`) | `--start tdb=35.0 … --start sport.clo=0.37 --start sport.met=7.5 --start sport.vr=2.0 --start sport.duration=60 --probe` | ✓ | ✓ |
-| `pvlib.iotools:read_tmy3` | function opening a data file by a relative path (pvlib's own `723170TYA.CSV`) | `--start filename=proj/723170TYA.CSV --probe` (writes `sources` and `cwd`) | ✓ | ✓ |
-| `pythermalcomfort.models.jos3:JOS3` | class, `simulate(times, dtime)`, state in a module global (`PRE_SHIV`) | hand-written inputs (`to = "attr:tdb"`, …), `setup = ["options.update({'limit_dshiv/dt': True})"]`; `init` writes `globals` | ✓ | — |
-| `pvlib` irradiance → cell temperature → DC power | **composite FMU** of three functions (`get_total_irradiance`, `sapm_cell`, `pvwatts_dc`), each made with `init` | `[composite]` with 3 connections | ✓ | ✓ |
-
-Each `--start` takes one `NAME=VALUE`; the table groups several per row for brevity.
+| `ahrs.filters:Madgwick` | ✓ | — | ✓ (`init --probe` config, 50.3 MB) |  |
+| `ahrs.filters:Mahony` | ✓ | — | ✓ (`init --probe` config, 50.3 MB) |  |
+| `ambiance:Atmosphere` | ✓ | ✓ ([config](match-testing-rerun/configs/ambiance.toml)) | ✓ (`init --probe` config, [identical to the direct run](probe-9/CONCLUSION.md)) | `init --probe` reads each one-element array property as its element (`return:temperature.0`, …): 281.65 K, 89 876 Pa at 1000 m. Before: The `init` configs output only the inputs: the results are properties returning 1-element arrays. The hand config reads element 0 of each (`return:temperature.0`, …). |
+| `anastruct:SystemElements` | ✓ | — | ✓ (`init --probe` config, 88.5 MB) |  |
+| `antropy:perm_entropy` | ✓ | — | ✓ (`init --probe` config, 164.9 MB) |  |
+| `astral.sun:elevation` | ✓ | — | ✓ (`init --probe` config, 46.2 MB) |  |
+| `astropy.cosmology:FlatLambdaCDM` | ✓ | — | ✓ (`init --probe` config, 65.2 MB) |  |
+| `Bio.SeqUtils:gc_fraction` | ✓ | — | ✓ (`init --probe` config, 54.3 MB) |  |
+| `blackscholes:BlackScholesCall` | ✓ | — | ✓ (`init --probe` config, 45.9 MB) |  |
+| `cantera:Solution` | ✗ no useful outputs | ✓ ([config](#cantera)) | ✓ (hand config, 79.9 MB) | Outputs are only solver settings (`rtol`, `max_steps`): the results are Cython properties, and the gas state can't be set from inputs. |
+| `chemicals.vapor_pressure:Antoine` | ✓ | — | ✓ (`init --probe` config, 126.5 MB) |  |
+| `colour.temperature:CCT_to_xy_CIE_D` | ✓ | — | ✓ (`init --probe` config, 56.4 MB) |  |
+| `commpy.modulation:QAMModem` | ✓ | ✓ ([config](match-testing-rerun/configs/commpy.toml)) | ✓ (`init --probe` config, [identical to the direct run](probe-9/CONCLUSION.md)) | `init --probe` splits the complex symbols into `y_real` / `y_imag` (`return:real`, `return:imag`): (−1+1j, 1−1j), as `modulate` called directly. Before: `init`: only `m = 4`; the modulated symbols are complex, so they're left out. The hand config reads `.real` and `.imag` per symbol. |
+| `control:StateSpace` | ✓ | — | ✓ (`init --probe` config, 124.6 MB) | Needs `--start x=[1.0, 0.0] --start u=[0.0]`. |
+| `CoolProp.CoolProp:PropsSI` | ✗ build fails | ✓ ([config](models.md#positional-only-arguments)) | ✓ (hand config, 56.7 MB) | C extension with no signature: no variables inferred. |
+| `cv2:KalmanFilter` | ✓ | — | ✓ (`init --probe` config, 163.5 MB) |  |
+| `dysts:Lorenz` (`call = "rhs"`, `[model] integrate`) | — | ✓ | ✓ (hand config, 267.5 MB, both integrators) | Integrated by the FMU with `[model] integrate`: `"scipy:DOP853"` (FMI 3) or `"rk4"`, 50 substeps (FMI 2). |
+| `electricpy:powerset` | ✓ | — | ✓ (`init --probe` config, 123.8 MB) |  |
+| `erfa:gmst06` | ✓ | — | ✓ (`init --probe` config, 46.7 MB) |  |
+| `filterpy.common:Q_discrete_white_noise` | ✓ | — | ✓ (`init --probe` config, 114.8 MB) |  |
+| `filterpy.gh:GHFilter` | ✓ | — | ✓ (`init --probe` config, 114.8 MB) |  |
+| `fluids.core:Reynolds` | ✓ | — | ✓ (`init --probe` config, 104.0 MB) |  |
+| `fluids.friction:friction_factor` | ✓ | — | ✓ (`init --probe` config, 104.0 MB) |  |
+| `fluids.units:head_from_P` | ✓ | ✓ ([config](#fluidsunits)) | ✓ (`init --probe` config, [identical to the direct run](probe-9/CONCLUSION.md)) | `init --probe` retries with pint quantities and takes each input's unit from the error that names it (`convert = "pint"`, `unit = "Pa"`, …): 10.197 m. Before: TypeError: 100000.0 has no quantity |
+| `fluids.units:Reynolds` | ✓ | ✓ ([config](#fluidsunits)) | ✓ (`init --probe` config, [identical to the direct run](probe-9/CONCLUSION.md)) | `init --probe` retries with pint quantities, units from the errors: Re = 38 200.66. Before: TypeError: 1.0 has no quantity |
+| `gsw:rho` | ✓ | — | ✓ (`init --probe` config, 48.3 MB) |  |
+| `gymnasium.envs.classic_control.cartpole:CartPoleEnv` | ✓ | — | ✓ (seeded config, 104.0 MB) |  |
+| `gymnasium.envs.classic_control.pendulum:PendulumEnv` | ✓ | — | ✓ (seeded config, 104.0 MB) |  |
+| `haversine:haversine` | ✓ | — | ✓ (`init --probe` config, 44.8 MB) |  |
+| `heartpy:process` | ✓ | — | ✓ (`init --probe` config, 119.6 MB) | **Needs `setuptools<81` installed by hand** (heartpy imports `pkg_resources` without declaring it), and its `data/data.csv` given by full path. |
+| `highway_env.envs.highway_env:HighwayEnv` | ✓ | — | ✓ (seeded config, 104.2 MB) |  |
+| `hplib.hplib:HeatPump` | ✓ | — | ✓ (`init --probe` config, 102.7 MB) |  |
+| `ht.conv_internal:Nu_conv_internal` | ✓ | — | ✓ (`init --probe` config, 104.8 MB) |  |
+| `ht.hx:effectiveness_from_NTU` | ✓ | — | ✓ (`init --probe` config, 104.8 MB) |  |
+| `iapws.iapws97:_TSat_P` | ✓ | — | ✓ (`init --probe` config, 87.8 MB) |  |
+| `iapws:IAPWS97` | ✓ | — | ✓ (`init --probe` config, 87.8 MB) |  |
+| `impedance.models.circuits:Randles` | ✓ | ✓ ([config](match-testing-rerun/configs/impedance.toml)) | ✓ (`init --probe` config, [identical to the direct run](probe-9/CONCLUSION.md)) | `init --probe` splits the complex prediction into `y_real` / `y_imag` at each frequency, identical to `predict` called directly. Needs pandas installed by hand (impedance imports it without declaring it). Before: `init`: outputs only echo `initial_guess`; the complex prediction is left out. The hand config reads `.real` and `.imag` at each frequency. |
+| `joblib:load` | ✓ | — | ✓ (`init --probe` config, 112.8 MB) | **Compiled: needs `scikit-learn` added to `[model] requirements` by hand**: the model is unpickled, so nothing imports scikit-learn by name. Uncompiled, it needs nothing extra. |
+| `librosa:hz_to_mel` | ✓ | — | ✓ (`init --probe` config, 167.7 MB) |  |
+| `mendeleev:element` | ✓ | — | ✓ (`init --probe` config, 75.7 MB) |  |
+| `mesa.examples:BoltzmannWealth` | ✓ | — | ✓ (seeded config, 105.2 MB) |  |
+| `meteocalc:heat_index` | ✓ | — | ✓ (`init --probe` config, 44.8 MB) |  |
+| `metpy.calc:dewpoint_from_relative_humidity` | ✓ | ✓ ([config](#metpy)) | ✓ (`init --probe` config, [identical to the direct run](probe-9/CONCLUSION.md)) | `init --probe` retries with pint quantities; metpy names only the dimension, so the input gets its SI unit (`temperature` in K): set the unit your start is in (the hand config's `degC`). Before: ValueError: This function changed in version(s) ['1.0']--double check that the function is being called properly. |
+| `nashpy:Game` | ✓ | — | ✓ (`init --probe` config, 94.9 MB) | `--call support_enumeration`, `--start A=… --start B=…` (a 2×2 game with one mixed equilibrium). The method returns a generator: its items are read into a tuple, and `--probe` writes `y0_0` and `y0_1`, the two players' strategies in the first equilibrium. Plain `init` fails (`float() argument must be … not 'generator'`). 0.0.43 has no `is_zero_sum`. |
+| `neurokit2:ecg_simulate` | ✓ | — | ✓ (`init --probe` config, 150.4 MB) |  |
+| `numdifftools:Derivative` | ✓ | — | ✓ (`init --probe` config, 90.8 MB) |  |
+| `numpy_financial:pmt` | ✓ | — | ✓ (`init --probe` config, 46.0 MB) |  |
+| `obspy.geodetics:gps2dist_azimuth` | ✓ | — | ✓ (`init --probe` config, 145.5 MB) |  |
+| `openap:Thrust` | ✓ | — | ✓ (`init --probe` config, 106.7 MB) |  |
+| `openturns:Normal` | ✓ | — | ✓ (`init --probe` config, 152.2 MB) |  |
+| `pandapower:runpp` | ✗ no useful outputs | ✓ ([config](match-testing-rerun/configs/pandapower.toml), another entry) | ✓ (hand config, 124.1 MB) | `runpp(net)` returns None and writes its results onto `net`, which a function entry can't read back. The hand config uses `pandapower.contingency:run_contingency(net, nminus1_cases={})`, which runs the same `runpp` and returns its results (bus voltages, line and transformer loadings). |
+| `pedon:Genuchten` | ✓ | — | ✓ (`init --probe` config, 129.0 MB) |  |
+| `ppigrf:igrf` | ✓ | — | ✓ (`init --probe` config, 60.8 MB) |  |
+| `psychrolib:GetHumRatioFromRelHum` | ✓ | — | ✓ (`init --probe` config, 44.8 MB; 110.2 MB with numba) | Also with numba installed, which makes psychrolib's functions ufuncs: `init` passes their arguments by position. |
+| pvlib `get_total_irradiance` → `sapm_cell` → `pvwatts_dc` (**composite FMU**) | ✓ (each part) | — | ✓ (compiled on Windows) | The three parts made with `init --probe`. |
+| `pvlib.atmosphere:alt2pres` | ✓ | — | ✓ (`init --probe` config, 132.8 MB) |  |
+| `pvlib.iotools:read_tmy3` | ✓ | — | ✓ (`init --probe` config, 132.8 MB) |  |
+| `pvlib.irradiance:aoi` | ✓ | — | ✓ (`init --probe` config, 132.8 MB) |  |
+| `pvlib.pvsystem:pvwatts_dc` | ✓ | — | ✓ (`init --probe` config, 132.8 MB) |  |
+| `pvlib.solarposition:get_solarposition` | ✓ | — | ✓ (`init --probe` config, 132.8 MB) |  |
+| `pvlib.temperature:sapm_cell` | ✓ | — | ✓ (`init --probe` config, 132.8 MB) |  |
+| `py_vollib.black_scholes:black_scholes` | ✓ | — | ✓ (`init --probe` config, 102.7 MB) |  |
+| `pybamm:Simulation` | ✗ no useful outputs | ✓ ([config](match-testing-rerun/configs/pybamm.toml)) | ✓ (hand config, 265.2 MB) | `init`: outputs are only solver flags. The hand config reads the voltage as `return:Voltage [V].entries.-1`: `solution["Voltage [V]"]` on the `Solution` that `step()` returns. Without `init_call`: it would run one extra `step()` before t = 0. |
+| `PyCO2SYS:sys` | ✓ | — | ✓ (`init --probe` config, 46.1 MB) |  |
+| `pyet:pm_fao56` | ✓ | — | ✓ (`init --probe` config, 72.2 MB) | The inputs must be pandas Series with a date index (the day of the year comes from `rs.index`). With plain numbers the call fails (`'float' object has no attribute 'time'`), so `--probe` writes `convert = "series"` with an `epoch` for each number input. Checked over 5 days with varying `rs` and `tmean`. |
+| `pyfluids:Fluid` | ✓ | — | ✓ (`init --probe` config, 56.7 MB) |  |
+| `pygfunction.heat_transfer:finite_line_source` | ✓ | — | ✓ (`init --probe` config, 88.2 MB) |  |
+| `pykalman:KalmanFilter` | ✓ | — | ✓ (`init --probe` config, 92.0 MB) |  |
+| `pyloudnorm:Meter` | ✓ | — | ✓ (`init --probe` config, 91.2 MB) |  |
+| `pymap3d:geodetic2enu` | ✓ | — | ✓ (`init --probe` config, 46.0 MB) |  |
+| `pymsis:calculate` | ✓ | — | ✓ (`init --probe` config, 48.8 MB) |  |
+| `pymunk:Space` | ✗ no useful outputs | ✓ ([config](match-testing-rerun/configs/pymunk.toml)) | ✓ (hand config, 48.7 MB) | `init`: outputs are only constant settings (`damping`, `collision_slop`, …). The hand config adds gravity and one body in `setup` and reads `attr:bodies.0.position.y`: `Space.bodies` is a `dict_keys` view, indexed by position. |
+| `pyorbital.astronomy:sun_zenith_angle` | ✓ | — | ✓ (`init --probe` config, 107.7 MB) |  |
+| `pyproj:Transformer` | ✓ | — | ✓ (`init --probe` config, 61.2 MB) |  |
+| `pyquaternion:Quaternion` | ✓ | — | ✓ (`init --probe` config, 48.9 MB) | `--call rotate`, axis, angle, vector. Plain `init` fails: it passes axis and angle to the constructor by position. |
+| `pyromat:get` | ✓ | — | ✓ (`init --probe` config, 47.0 MB) |  |
+| `pysolar.solar:get_altitude` | ✓ | — | ✓ (`init --probe` config, 45.9 MB) |  |
+| `PyTCI.models.propofol:Marsh` | ✗ no useful outputs | ✓ ([config](#pytci)) | ✓ (hand config, 87.6 MB) | Outputs only echo the parameters (`weight`, `time_seconds`): the state is in a nested function. |
+| `pyteomics.mass:calculate_mass` | ✓ | — | ✓ (`init --probe` config, 51.6 MB) |  |
+| `pythermalcomfort.models.jos3:JOS3` | ✓ | ✓ ([config](#jos3)) | ✓ (`init --probe` config, 153.8 MB) |  |
+| `pythermalcomfort.models:pmv_ppd_iso` | ✓ | — | ✓ (`init --probe` config, 153.8 MB) |  |
+| `pythermalcomfort.models:sports_heat_stress_risk` | ✓ | — | ✓ (`init --probe` config, 153.8 MB) |  |
+| `pywt:dwt` | ✓ | — | ✓ (`init --probe` config, 53.3 MB) |  |
+| `pyxirr:npv` | ✓ | — | ✓ (`init --probe` config, 45.3 MB) |  |
+| `quantecon:LinearStateSpace` | ✓ | — | ✓ (`init --probe` config, 156.1 MB) |  |
+| `QuantLib:blackFormula` | ✓ | — | ✓ (`init --probe` config, 78.8 MB) |  |
+| `radioactivedecay:Inventory` | ✓ | — | ✓ (`init --probe` config, 135.5 MB) |  |
+| `rainflow:count_cycles` | ✓ | — | ✓ (`init --probe` config, 48.8 MB) |  |
+| `rdkit.Chem.Descriptors:MolWt` | ✓ | — | ✓ (`init --probe` config, 110.7 MB) |  |
+| `river.linear_model:LinearRegression` | ✓ | ✓ ([config](match-testing-rerun/configs/river.toml)) | ✓ (`init --probe` config, [identical to the direct run](probe-9/CONCLUSION.md)) | `init --probe` outputs the learned `intercept` (0.06 after the first step, as `learn_one` called directly): with no other outputs found, the attributes the step changes become outputs instead of locals. The weights (a dict) still need the hand config. Before: `init`: only hyperparameters (`l1`, `l2`, …). The hand config reads the learned weights (`attr:weights.a`, …) and the intercept. |
+| `roboticstoolbox.models.DH:Panda` | ✓ | — | ✓ (`init --probe` config, 172.7 MB) |  |
+| `scipy.signal:lfilter` | ✓ | — | ✓ (`init --probe` config, 98.3 MB) |  |
+| `seirsplus.models:SEIRSModel` | ✗ not possible (FMI limitation) | ✓ ([config](match-testing-rerun/configs/seirsplus.toml)) | ✓ (hand config, 94.8 MB) | **Not possible with `init` (FMI limitation):** the counts (`numS`, `numI`, …) are arrays that grow by one element each step, and an FMI variable has a fixed size ([Limitations](#known-problems)). `init`: outputs only echo the parameters; the state arrays grow each step and are left out. The hand config reads the latest counts (`attr:numS.-1`, …) and sets `dt = 0.1`: with `dt` = the step size (1), `run_epoch` keeps only the start point and `t` never advances. |
+| `sgp4.api:Satrec` | ✗ no config | ✓ ([config](match-testing-rerun/configs/sgp4.toml)) | ✓ (hand config, 44.9 MB) | `init`: C built-ins with no signature: `--start fr, jd, line1, line2: cannot tell which arguments these are …`. The hand config builds the satellite with `create = "twoline2rv"` from the two TLE lines and binds `sgp4(jd, fr)` by position (`to = "pos:N"`); outputs the error code, position (km) and velocity (km/s). Checked against `Satrec.sgp4` called directly: identical; the compiled FMU (PyInstaller 6.22.3, WSL 2) is identical to the uncompiled one. |
+| `shapely:Point` | ✓ | — | ✓ (`init --probe` config, 50.3 MB) |  |
+| `simglucose.patient.t1dpatient:T1DPatient` | ✓ | — | ✓ (`init --probe` config, 134.0 MB) |  |
+| `simpy:Environment` | ✓ | — | ✓ (`init --probe` config, 44.8 MB) | `--call run`: `until` is bound to the step's end time. |
+| `skfuzzy:interp_membership` | ✓ | — | ✓ (`init --probe` config, 94.5 MB) | **Needs scipy, packaging and networkx installed by hand**: scikit-fuzzy imports them without declaring them. |
+| `skimage.color:rgb2hsv` | ✓ | — | ✓ (`init --probe` config, 127.1 MB) |  |
+| `statsmodels.stats.proportion:proportion_confint` | ✓ | — | ✓ (`init --probe` config, 121.1 MB) |  |
+| `tclab:TCLabModel` | ✓ | — | ✓ (`init` config, 44.9 MB) |  |
+| `tellurium:loada` | ✗ no useful outputs | ✓ ([config](match-testing-rerun/configs/tellurium.toml)) | ✓ (hand config, 211.1 MB) | `init`: only `oneStep`'s return (the time reached). The hand config reads the species from the RoadRunner object (`attr:S1`, `attr:S2`). `currentTime` is a fixed input there; bind it with `[time] currentTime = "time"` to follow the simulation clock. On Linux it needs `LD_LIBRARY_PATH` set to Python's `lib` folder. |
+| `thermo:Chemical` | ✓ | — | ✓ (`init --probe` config, 133.1 MB) |  |
+| `thermofeel:calculate_heat_index_simplified` | ✓ | — | ✓ (`init --probe` config, 48.9 MB) |  |
+| `timezonefinder:TimezoneFinder` | ✓ | — | ✓ (`init --probe` config, 80.6 MB) |  |
+| `tmm:coh_tmm` | ✓ | — | ✓ (`init --probe` config, 49.1 MB) |  |
+| `transforms3d.euler:euler2quat` | ✓ | — | ✓ (`init --probe` config, 47.3 MB) |  |
+| `uncertainties:ufloat` | ✓ | ✓ ([config](match-testing-rerun/configs/uncertainties.toml)) | ✓ (`init --probe` config, [identical to the direct run](probe-9/CONCLUSION.md)) | `init --probe` reads the returned object's properties; those named like an argument get the result's name: `y_nominal_value`, `y_std_dev`. Before: `init`: only `s`, the `ufloat` itself. The hand config reads `return:nominal_value` and `return:std_dev`. |
+| `windpowerlib.wind_speed:logarithmic_profile` | ✓ | — | ✓ (`init --probe` config, 62.9 MB) |  |
 
 ---
 
 ## Neural networks
 
-Six small, published networks, each installed as published (`pip install <package>`) into its own venv together with fmugen, then run through `init --probe` → `build` → `fmpy validate` → simulation with FMPy (`FMU3Slave` / `FMU2Slave`). Each result was compared with calling the model directly in its own venv. Neural networks need `--probe`: their result sizes depend on the weights, and their code is mostly compiled or framework code. Rerun after `--probe` became opt-in, the Chronos, Silero VAD and TorchANI configs came out identical.
+Each was installed as published (`pip install <package>`) into its own venv together with fmugen. Neural networks need `--probe`: their result sizes depend on the weights, and their code is mostly compiled or framework code. Weights from Hugging Face are downloaded on first use, unless the FMU is built with `--hf-weights` (automatic with `--vendor` / `--compile`). `--capture-output` is needed whenever a model prints while loading, which hangs UniFMU 0.14 otherwise. Compiled on Linux, their FMUs are 4.3–4.6 GB: torch from PyPI brings the NVIDIA CUDA libraries and triton (about 4 GB installed), and fmugen collects every dependency's binaries. Installing a CPU-only torch (`pip install torch --index-url https://download.pytorch.org/whl/cpu`) avoids them; Windows' torch has no CUDA, and compiled Windows FMUs were about 300 MB.
 
-| Model | Size, runtime | Shape | `init` options | FMI 2 | FMI 3 |
-|---|---|---|---|---|---|
-| `chronos:ChronosBoltPipeline` | ~9 M params, PyTorch | classmethod factory, tensor in/out | [below](#chronos-bolt) | — (array input) | ✓ |
-| `silero_vad:load_silero_vad` | ~2 MB, ONNX Runtime | **factory function**, recurrent state, unannotated tensor input | `--probe --fmi 3 --call __call__ --start onnx=true --start "x=[…512 samples…]" --start sr=16000`; build with `--capture-output` | — (array input) | ✓ |
-| `tsfm_public.toolkit.get_model:get_model` | 805 k params, PyTorch | factory function with `**kwargs`, 3-D tensor input, Hugging Face output object | `--probe --fmi 3 --call forward --start model_path=ibm-granite/granite-timeseries-ttm-r2 --start context_length=512 --start prediction_length=96 --start "past_values=[[[…512 values…]]]"`; build with `--capture-output` | — (array input) | ✓ |
-| `stable_baselines3:PPO` | 9 k params, PyTorch | classmethod factory whose argument is a **downloaded file**, tuple result with a 0-d action | `--probe --fmi 3 --create load --call predict --start "path=call:huggingface_sb3:load_from_hub(repo_id='sb3/demo-hf-CartPole-v1', filename='ppo-CartPole-v1.zip')" --start "observation=[0.0, 0.0, 0.05, 0.0]" --start deterministic=true`; build with `--capture-output` | — (array input) | ✓ |
-| `surfaces…gradient_boosting_regressor:GradientBoostingRegressorFunction` | 19 KB MLP, ONNX Runtime | class, hyperparameters through `**kwargs` | `--probe --call __call__ --start use_surrogate=true --start n_estimators=78 --start max_depth=13` | ✓ | ✓ |
-| `torchani.models:ANI2x` | 1.7 M params (one network), PyTorch | factory function, **tuple argument** `(species, coordinates)`, NamedTuple result | `--probe --fmi 3 --call forward --start model_index=0 --start "species_coordinates=([[6, 1, 1, 1, 1]], [[[0.0, 0.0, 0.0], …]])"`; build with `--capture-output` | — (array input) | ✓ |
-
-What was checked:
-
-| Model | Test | Result |
-|---|---|---|
-| Silero VAD | 40 chunks of 512 samples: noise, a voiced vowel-like sound (140 Hz harmonics, syllable envelope), noise | All 40 speech probabilities identical to the direct calls, so the recurrent state carries over between FMI steps. 0.09 → 0.01 on noise, 0.76–0.997 on the voiced sound, back to 0 after. 40 steps: 0.08 s. |
-| Granite TTM | Two 96-hour forecasts from 512 hours of a daily cycle with weekly modulation | All 192 values identical. Mean absolute error 1.94 and 2.04 against the true series (amplitude ±25). Save/restore works. |
-| SB3 PPO | **Closed loop of two FMUs:** the PPO policy FMU controls a Gymnasium `CartPoleEnv` FMU, exchanging observation and action every step | The pole stays up the full 500 steps (largest angle 0.045 rad; the episode fails at 0.209). All 500 actions identical to `PPO.predict`. |
-| surfaces | A 4 × 4 grid of `n_estimators` × `max_depth`, FMI 2 and FMI 3 | All 16 predictions identical, for both FMI versions. |
-| TorchANI | Methane with one C–H bond stretched from 0.85 to 1.60 Å | All 16 energies identical. Minimum at 1.10 Å (experiment: 1.09 Å); +39 kcal/mol compressed to 0.85 Å, +61 kcal/mol stretched to 1.60 Å. Save/restore works. |
-
-Notes:
-
-- **No model code was changed.** What the configs needed is now part of fmugen; see the features listed at the top of this page.
-- **`--capture-output`** was needed whenever a model prints while loading (warnings, progress bars), which hangs UniFMU 0.14 otherwise ([manual](manual.md)).
-- **State save/restore** for the two ONNX Runtime models: an `InferenceSession` can't be pickled. `init` now saves only the other attributes. For Silero VAD it writes `save_state = ["_state", "_context", "_last_sr", "_last_batch_size", "sample_rates"]`, leaving out the fixed `session`; a rollback through UniFMU (20 chunks, save, 10 chunks, restore, the same 10 again) gives identical probabilities. surfaces was not re-run after this change.
-- **Weights from Hugging Face** (Chronos, TTM, PPO) are downloaded on first use into the user's cache, unless the FMU is built with `--hf-weights` (automatic with `--vendor` / `--compile`), which puts them inside it. Checked offline, with an empty cache, for Chronos-Bolt and the PPO policy.
-- **Stochastic policies:** with `deterministic = false`, the PPO FMU samples its action from torch's global random generator. Saving and restoring the FMU state now also restores that generator: after a restore, 20 sampled actions repeat exactly (they didn't before).
-
-### Chronos-Bolt
-
-[Chronos-Bolt Tiny](https://huggingface.co/amazon/chronos-bolt-tiny) is a pretrained transformer (about 9 M parameters) that forecasts a time series from its recent history. It is used as published: `pip install chronos-forecasting` into a venv, plus fmugen.
-
-| Model | Shape | `init` options | FMI 2 | FMI 3 |
+| Model | `init` / `init --probe` | Hand config | Compiled (PyInstaller) | Notes |
 |---|---|---|---|---|
-| `chronos:ChronosBoltPipeline` | class built by a factory (`from_pretrained`), `predict(inputs)`, tensor in and out, weights downloaded from Hugging Face | `--probe --fmi 3 --create from_pretrained --call predict --start pretrained_model_name_or_path=amazon/chronos-bolt-tiny --start "inputs=[…24 values…]"`; build with `--capture-output` | — (array input: FMI 3 only) | ✓ |
-
-`init` inferred everything from the code and the start values:
-
-```toml
-[model]
-entry = "chronos:ChronosBoltPipeline"
-fmi_version = 3
-create = "from_pretrained"
-call = "predict"
-
-[parameters]
-pretrained_model_name_or_path = { start = "amazon/chronos-bolt-tiny" }
-
-[inputs]
-inputs = { dimensions = [24], start = [20.0, 21.294, …], convert = "torch:tensor" }   # from the torch.Tensor annotation
-limit_prediction_length = { start = false }
-
-[outputs]
-y = { from = "return", dimensions = [1, 9, 64], type = "Float32" }   # 9 quantiles × 64 steps ahead
-quantiles = { dimensions = [9] }                                     # a property: 0.1 … 0.9
-```
-
-What it took:
-
-- **Factory construction.** The pipeline is created with `ChronosBoltPipeline.from_pretrained(name)`; its constructor takes an already-loaded network. [`[model] create`](config.md#model) names the classmethod, and its arguments become parameters, so the Hugging Face model name is a String parameter.
-- **Tensors.** `predict` takes a `torch.Tensor`. `convert = "torch:tensor"` converts the FMU's array before the call; `init` sets it from the annotation. The returned tensor becomes a Float32 array output.
-- **Console output.** Loading the model prints warnings and a progress bar. UniFMU 0.14 crashes when the FMU's Python prints more than about 4 KB, and the importer hangs. `build --capture-output` sends it to the importer's log instead.
-- **A crash in `init` itself**, when cleaning up after `transformers`, whose modules import on attribute access. Fixed in fmugen.
-
-Checked with FMPy (`FMU3Slave`), feeding 24 hourly values of a daily temperature cycle (20 ± 5 °C):
-
-- `fmpy validate`: no problems.
-- Two forecasts, from the cycle and from the cycle shifted by 6 h: the median forecast follows the cycle, with a mean absolute error over the next 24 h of 0.29 °C and 0.61 °C.
-- The FMU's 128 forecast values are **identical** (difference 0.0) to calling `ChronosBoltPipeline.predict` directly.
-- Saving and restoring the FMU state works.
-- Instantiation and initialization take about 58 s (importing PyTorch and loading the network); each forecast step about 0.05 s.
-
-Limits:
-
-- By default, the weights are downloaded from Hugging Face on first use and cached in the user's Hugging Face cache. Built with `--hf-weights` (automatic with `--vendor` / `--compile`), they are inside the FMU, which adds about 33 MB, and the FMU runs offline: checked with an empty Hugging Face cache and `HF_HUB_OFFLINE=1`.
-- `--vendor` and `--compile` were not tried with this model. PyTorch makes either one large (hundreds of MB).
+| `chronos:ChronosBoltPipeline` | ✓ | — | ✓ (`init --probe` config, 4.6 GB) |  |
+| `silero_vad:load_silero_vad` | ✓ | — | ✓ (`init --probe` config, 4.5 GB) |  |
+| `tsfm_public.toolkit.get_model:get_model` | ✓ | — | ✓ (`init --probe` config, 4.3 GB) |  |
+| `stable_baselines3:PPO` | ✓ | — | ✓ (`init --probe` config, 4.5 GB) |  |
+| `surfaces.test_functions.machine_learning.hyperparameter_optimization.tabular.regression.test_functions.gradient_boosting_regressor:GradientBoostingRegressorFunction` | ✓ | — | ✓ (seeded config, 613.9 MB) |  |
+| `torchani.models:ANI2x` | ✓ | — | ✓ (`init --probe` config, 4.4 GB) |  |
 
 ---
 
-## What was checked
+## GEKKO models
 
-Passing `fmpy validate` and `fmpy simulate` shows the FMU is well-formed and runs. In addition:
+Dynamic optimization and simulation models built on GEKKO, FMI 2, checked against a direct run and against each model's published results where it has them. GEKKO's distillation script and APMonitor's ethanol script have nothing to call, so their code is wrapped in a class, unchanged.
 
-- **Spot values:** these were compared with reference values, and FMI 2 and FMI 3 gave the same numbers:
+| Model | `init` / `init --probe` | Hand config | Compiled (PyInstaller) | Notes |
+|---|---|---|---|---|
+| `distillation_column.py:DistillationColumn` (GEKKO [`examples/distillation.py`](https://github.com/BYU-PRISM/GEKKO/blob/master/examples/distillation.py)) | ✓ | — | ✓ (`init --probe` config, 62.1 MB) | Distillation column (GEKKO's example, wrapped in a class with its equations unchanged). `--call step`. |
+| `DistColEnvDynInc_altrewards.py:DistColEnvDynInc` ([Kalpesh-RL/DistillationColumn](https://github.com/Kalpesh-RL/DistillationColumn) `f2b9966`) | ✓ | — | ✓ (seeded config, 63.1 MB) | Distillation column as a Gym environment. `--start "Action=[0.0, 0.0, 0.0]" --setup reset`. Random by design: seed it (`random:seed(0)`, `numpy.random:seed(0)` before construction) to reproduce a run. |
+| `Bioreactor.py:SimpleBioreactor` ([Bartosz1280/Bioreactor-modeling](https://github.com/Bartosz1280/Bioreactor-modeling) `3112aba`) | ✓ | — | ✓ (`init --probe` config, 97.8 MB) | Batch bioreactor (Monod growth). `--call solve`, `time_arr` and `simulation_input` from the repo notebook. |
+| `Code/model.py:CGE` ([konradarchicinski/cge_model_python](https://github.com/konradarchicinski/cge_model_python) `60d611d`) | ✓ | — | ✓ (`init --probe` config, 64 MB, Windows) | Computable general equilibrium economy. `--call results --start capital=0.1 --start labour=0.0`. **Needs its `Code/model.py` renamed** (any other name): `build` refuses a model file named `model.py`, which clashes with UniFMU's backend module. **Needs pandas 2**: with pandas 3 the model itself fails (its chained `df[a][b] = …` assignments don't write under copy-on-write). **Windows only**: its data paths are hardcoded with backslashes (`Data\production_structure.csv`), which on Linux are file names that FMPy refuses in an FMU. |
+| `CFTOCSolverV2.py:CFTOCSolverV2` ([ollyme102b/ros_workspace](https://github.com/ollyme102b/ros_workspace) `03f5938`) | ✓ | ✓ ([config](match-testing-rerun/configs/gk_cftoc.toml)) | ✓ (`init --probe` config, [identical to the direct run](probe-9/CONCLUSION.md)) | Constrained finite-time optimal control. `--call calculate_optimal_actuation`. `init --probe` with the repo test's values as `--start` (`x0`, `Xm` and the method's `calculate_optimal_actuation_x0`, `calculate_optimal_actuation_Xm` as `call:numpy:…`) writes the same config as the hand one; y = (−1.7×10⁻⁷, −7.7×10⁻⁴, 0) at t = 1, as the hand config. Before the fix, `init` refused the method's prefixed `call:` starts. |
+| `debutanizer.model:solve_steady_state` ([Arushan45/Debutanizer-Project](https://github.com/Arushan45/Debutanizer-Project) `f6fe813`) | ✓ | — | ✓ (`init --probe` config, 57 MB) | Debutanizer column, steady state (30 stages). `--start reflux_ratio=2.5 --start alpha=1.9717789099`. **The repository must be installed** (`pip install -e .`): the entry is a package imported by name. |
+| `debutanizer.model:optimize_reflux` ([Arushan45/Debutanizer-Project](https://github.com/Arushan45/Debutanizer-Project) `f6fe813`) | ✓ | — | ✓ (`init --probe` config, 57 MB) | Debutanizer reflux optimization. `--start alpha=1.9717789099`. **The repository must be installed**, as for the steady state. |
+| `apsis/mpc.py:solve_mpc` ([dhruvhaldar/apsis](https://github.com/dhruvhaldar/apsis) `a171cf1`) | ✓ | — | ✓ (`init --probe` config, 62.1 MB) | Linear MPC. The app's defaults. |
+| `process_fopdt.py:ProcessModel` ([BYU-PRISM/Transformer_MPC](https://github.com/BYU-PRISM/Transformer_MPC) `7686735`) | ✓ | — | ✓ (`init --probe` config, 130 MB with matplotlib and scipy) | 2×2 FOPDT process (a `GEKKO` subclass). `--call run --start "u=[1.0, 0.5]"`. |
+| `mpc_gekko.py:MPCModel` ([BYU-PRISM/Transformer_MPC](https://github.com/BYU-PRISM/Transformer_MPC) `7686735`) | ✓ | — | ✓ (`init --probe` config, 62.1 MB) | MPC controller for that process (a `GEKKO` subclass). `--call solve`. Its setpoints are attributes (`y1.SP`): bind an input with `to = "attr:y1.SP"` by hand. |
+| `ethanol_run.py:EthanolBioreactor` ([APMonitor](https://apmonitor.com/do/index.php/Main/EthanolBioreactor)) | ✓ | — | ✓ (`init --probe` config, 62.1 MB) | Ethanol fed-batch bioreactor (APMonitor's script, wrapped in a class: `run()` holds the script's code up to its `solve()`, unchanged, without the plots). `--call run`. The script's model can only be solved once, so `run()` builds it again each step. |
+| `simple_nhes.py:model` ([BYU-PRISM/NHES-opt-sensitivity](https://github.com/BYU-PRISM/NHES-opt-sensitivity) `5e9a6f2`) | ✓ | — | ✓ (`init --probe` config, 128.5 MB) | Nuclear-renewable hybrid energy system. `--probe --start "params=call:simple_nhes:nom_params"`. **Needs input data that isn't published** (`grid_data/more_data_scaled.csv`): it was run on a generated series of hourly `Load`, `Wind` and `Solar` in MW. Also needs seaborn and plotly, which it imports without declaring. |
+| `openhens:OpenHENS` ([waikato-ahuora-smart-energy-systems/OpenHENS](https://github.com/waikato-ahuora-smart-energy-systems/OpenHENS) `5081bab`) | ✗ no useful outputs | ✓ ([config](match-testing-rerun/configs/gk_openhens.toml): one output added, `TAC = { from = "attr:_best_solns.0.case.TAC" }`) | ✓ (hand config, 118 MB; couenne must be on PATH) | Heat exchanger network synthesis. `--call solve`, the README's options. **Needs the COIN-OR `couenne` executable on PATH** (from the [IDAES solver bundle](https://github.com/IDAES/idaes-ext/releases/tag/3.4.2)) and **the repository installed** (`pip install -e .`), as its README says. `init --probe` finds no outputs: the solutions are kept in a private list; the hand config adds the total annual cost. It also reads the solutions saved in its `output_folder`, which `init` doesn't copy into the FMU, so its result differs from running it in the repository. |
 
-  | Model | Conditions | Result | Reference |
-  |---|---|---|---|
-  | PsychroLib | 25 °C, 50 % RH, 101325 Pa | humidity ratio 0.00988 kg/kg | psychrometric chart: ≈ 0.0099 |
-  | CoolProp | water, 101325 Pa, Q = 0 | 373.12 K | normal boiling point of water |
-  | iapws `_TSat_P` | 1 MPa | 453.04 K | steam tables: 179.9 °C |
-  | iapws `IAPWS97` | 400 K, 1 MPa | h = 533.5 kJ/kg, ρ = 937.9 kg/m³ | liquid water at those conditions |
-  | fluids `Reynolds` | V = 1 m/s, D = 0.1 m, ρ = 1000, μ = 0.001 | 1.0 × 10⁵ | ρVD/μ |
-  | fluids `friction_factor` | Re = 10⁵, smooth pipe | 0.0180 | Moody chart |
-  | ht `Nu_conv_internal` | Re = 10⁴, Pr = 0.7 | 30.3 | turbulent pipe-flow correlations |
-  | fluids.units `Reynolds` | V = 5 m/s, D = 0.25 m, ρ = 1.1613 kg/m³, μ = 1.9 × 10⁻⁵ Pa·s | 76401.3 | `fluids.units.Reynolds` called directly with the same quantities |
-  | fluids.units `head_from_P` | P = 100 kPa, ρ = 1000 kg/m³, output in cm | 1019.7 cm | 10.197 m from `fluids.units` directly |
+**Compiling GEKKO models:** with PyInstaller, in a venv with only the model's packages, fmugen, PyInstaller and FMPy, a GEKKO model compiles in 10–25 s to 57–130 MB (matplotlib, which some model files import, adds about 35 MB). In a shared venv with many other packages, a compile took 19 min and made a 195 MB FMU: fmugen collects every gekko submodule, and some of them import scikit-learn, Pyomo and IPython when installed. Nuitka builds with gekko and numpy took over 30 minutes and were stopped. The compiled FMU contains gekko's own solver; a solver the model runs from PATH (OpenHENS's couenne) must be installed where the FMU runs.
 
-- **Dynamic models over time:**
-  - **pythermalcomfort heat stress:** with the fields of `Sports.RUNNING` and `Sports.GOLF` as inputs (38 °C air, 40 °C radiant, 30 % RH), the risk level and the three thresholds are identical to calling `sports_heat_stress_risk` with those `Sports` values, in FMI 2 and 3.
-  - **pvlib TMY3 file:** run from another folder, the station metadata (latitude 36.1, longitude −79.95, altitude 273 m, time zone −5) is identical to `read_tmy3` called directly, in FMI 2 and 3. The same FMU without `cwd` fails with `FileNotFoundError`.
-  - **JOS3 with shivering rate limiting:** 10 °C, 40 one-minute steps: the core temperature (36.3886 °C) is identical to running JOS3 directly. After a rollback (save state at step 20, run 20 steps, restore, run them again), the repeated steps are identical only with `globals`. Without it, `PRE_SHIV` keeps its later value.
-  - **pvlib composite:** for three weather cases (dni 300–950 W/m², 5–38 °C), the plane-of-array irradiance, cell temperature and DC power are identical to calling the three pvlib functions in a chain, in FMI 2 and 3.
-  - **pvlib composite, compiled (2026-10-14):** the same three parts, made again with `init --probe`, built with `--compile pyinstaller`: the FMU holds no `.py` file (only `launch.toml` outside `resources/dist/`), and the three cases give values identical to pvlib.
-  - **dysts `Lorenz` with `[model] integrate` (2026-10-14):** [dysts](https://github.com/williamgilpin/dysts) 0.96's `Lorenz().rhs(X, t)`, unmodified (`call = "rhs"`, `X` a numpy state of 3), integrated by the FMU over 20 steps of 0.05 s through UniFMU: the largest difference from a `solve_ivp` reference at `rtol = atol = 1e-11` is 1.3 × 10⁻⁶ with `"scipy:DOP853"` and the importer's tolerance 10⁻⁹ (FMI 3), and 3.3 × 10⁻⁸ with `"rk4"`, 50 substeps (FMI 2).
-  - **iapws `_TSat_P` with `discard_on` (2026-10-14):** with `discard_on = ["builtins:NotImplementedError"]`, a step at 30 MPa (above the critical pressure, where iapws raises) returns `discard` through UniFMU (FMPy: "fmi2DoStep failed with status 2"); the output keeps its value from 1 MPa (453.04 K), and the step retried at 2 MPa from the same time succeeds (485.53 K).
-  - **pvlib solar position:** Madrid, 21 June 2026 06:00–10:00 UTC, hourly: zenith, azimuth, elevation and equation of time are identical to `get_solarposition` called directly, in FMI 2 and 3.
-  - **highway-env:** with `reset(seed=0)`, the reward and the nested `info` values (`y4.speed`, `y4.crashed`, `y4.rewards.*`) are identical to stepping the environment directly, at every step.
-  - **TCLab:** at 50 % heater power, T1 rises from 21 °C to 50 °C in 10 minutes, and T2 warms to 26 °C through thermal coupling.
-  - **Madgwick:** with `q` [fed back as a state](models.md#what-fmugen-init-infers), turning at 0.1 rad/s for 10 s gives q = [0.878, 0, 0, 0.479], the analytic value. Rerun after FMI 2 got arrays: FMI 2 and FMI 3 both give exactly what calling `updateIMU` 1000 times directly gives.
-  - **CartPole and Pendulum:** their observations evolve step by step.
-  - **GH filter:** it tracks its input.
-- **Results not checked:** the pvlib and chemicals runs used only the code defaults (zeros where there are none), so they show that the FMUs run, not that the numbers mean anything.
+---
+
+## Hand configs
+
+Configs written by hand where `init` can't infer everything. They are linked from the **Hand config** column. The ones not shown here are in [match-testing-rerun/configs](match-testing-rerun/configs/), each with a comment saying what it changes and why. `PropsSI`'s is [shown in models.md](models.md#positional-only-arguments).
+
+### fluids.units
+
+`Reynolds` and `head_from_P` take and return pint quantities: each input gets `convert = "pint"` and a `unit`, and `head_from_P`'s output `unit = "cm"`. Write the units the way pint reads them (`kg/m**3`, `Pa*s`, `m/s**2`): pint rejects the Modelica spelling (`kg/m3`, `Pa.s`), and fmugen then writes no `<BaseUnit>` for them. Checked: `Reynolds` gives 76401.3 and `head_from_P` 1019.7 cm, the values of `fluids.units` called directly.
+
+### JOS3
+
+Inputs bound to attributes (`to = "attr:tdb"`, …) and `setup = ["options.update({'limit_dshiv/dt': True})"]`; `init` writes `globals` for the module state `PRE_SHIV`. Checked: 40 one-minute steps at 10 °C give the core temperature of JOS3 run directly, also after a rollback.
+
+### PyTCI
+
+```toml
+[model]
+entry = "PyTCI.models.propofol:Marsh"
+fmi_version = 2
+call = "wait_time"
+
+[parameters]
+weight = { start = 70.0 }
+
+[inputs]
+time_seconds = { start = 1, type = "Integer" }
+dose = { start = 2.0, unit = "mg", to = "call:give_drug" }
+
+[outputs]
+x1 = {}
+x2 = {}
+x3 = {}
+xeo = {}
+```
+
+The model advances by `time_seconds`, not by the FMI step size. `give_drug` adds a bolus each time it's called, and a `to = "call:…"` setter runs once per step: 60 steps give 60 doses.
+
+The first dose is given at initialization, so the outputs at t = 0 already include it: x1 = 2 mg / (0.228 L/kg × 70 kg) = 0.1253. The first step doesn't give it again. A loop that gives each dose at the start of its step (`give_drug(dose); wait_time(1)`) shows x1 = 0 at t = 0; from t = 1 the two are equal.
+
+### Cantera
+
+```toml
+[model]
+entry = "cantera:Solution"
+fmi_version = 3
+call = "equilibrate"
+setup = ["__setattr__('TPX', (300.0, 101325.0, 'CH4:1, O2:2, N2:7.52'))"]
+
+[parameters]
+infile = { start = "gri30.yaml" }
+
+[inputs]
+XY = { start = "HP" }
+
+[outputs]
+T = { unit = "K" }
+P = { unit = "Pa" }
+density = {}
+mean_molecular_weight = {}
+```
+
+The fuel/air state can only be set in `setup`: Cantera's `TPX` is a tuple property, and there is no way to bind inputs to it.
+
+### metpy
+
+```toml
+[inputs]
+temperature = { start = 25.0, unit = "degC", convert = "pint" }
+relative_humidity = { start = 0.5, unit = "dimensionless", convert = "pint" }
+
+[outputs]
+y = { from = "return", unit = "degC" }
+```
+
+---
+
+## Known problems
+
+- **The backend outlives a failed FMU.** FMPy's `simulate_fmu` raises without calling `freeInstance`, so the UniFMU backend (`main.py`, 2 processes) keeps running and holds the importer's stdout/stderr; anything reading it through a pipe hangs. Not fmugen's: [fmpy-limitations.md §1](fmpy-limitations.md#1-simulate_fmu-doesnt-free-the-instance-after-an-fmu-error), and UniFMU's part in [unifmu-limitations.md §2](unifmu-limitations.md#2-the-backend-keeps-running-after-an-fmu-error). Workaround: free the instance yourself (`simulate_fmu(…, fmu_instance=fmu)`, then `fmu.freeInstance()` in a `finally`).
+- **`fmpy simulate` shows no reason for a failure**, only the failed FMI call. The traceback shows with `simulate_fmu(…, debug_logging=True, logger=print)`. With FMI 2, a log message containing `%` (a URL, a traceback, Pyomo's log) can then crash FMPy: [unifmu-limitations.md §12](unifmu-limitations.md#12-fmi-2-log-messages-are-used-as-printf-format-strings).
+- **Module-level scripts can't be models**: a script that solves at import time has nothing to call (GEKKO's distillation example, the ethanol bioreactor). Wrapping its code in a class works.
+- **Windows long paths:** cantera and pybamm failed to import from a venv in a deeply nested folder. The FMU runs with the build venv, so deeply nested project folders may hit this.
+- **`--convert` is refused for a step method's argument given by its prefixed name** (`--convert calculate_optimal_actuation_x0=…`): `--convert names that are not arguments of the model`. A `call:` start (`--start calculate_optimal_actuation_x0=call:numpy:array(…)`) works instead.
+- **A local package imported by name isn't put in the FMU.** An entry like `debutanizer.model:solve_steady_state` or `openhens:OpenHENS`, from a cloned repository that isn't installed, is found by `init` only because it runs in that folder. The FMU's backend runs elsewhere and fails to import it. Installing the repository (`pip install -e .`) works; `init` gives no warning. Packages installed from PyPI aren't affected.
+- **Files the model reads from a folder it computes aren't put in the FMU.** `init` copies the files the code or the starts name by a path. OpenHENS also reads saved solutions from its `output_folder`, so its FMU gives a different TAC than running it in the repository (154853.86 against 159038.72).
+
+Limitations (not bugs):
+
+- **An output's size can't change during the simulation.** FMI variables have fixed sizes (FMI 3 arrays resize only through structural parameters), so an output that becomes `None` or changes length fails the step instead of giving wrong values. `init --probe` comments out the ones it sees change.
+- **Model files named `model.py`** are refused by `build`: the name clashes with UniFMU's backend module. Rename the file; `init` warns about it.
+
+
+---
+
+## Versions
+
+The versions are in [match-testing-rerun/results.json](match-testing-rerun/results.json) (`versions`): the latest on PyPI for Python 3.13 when the venvs were made. Pinned where it mattered: pandas 2.3.3 for the CGE model, `setuptools<81` for heartpy.
+
+Only RC_BuildingSimulator (commit `97c1cdd`, MIT amended) is copied into this repository, for [examples/rc_building](../examples/rc_building). The others are installed from PyPI or their repositories when needed.
 
 ---
 
 ## Reproducing a run
 
-1. Install the project's package in an environment together with the model's library.
+1. Install fmugen in an environment together with the model's library.
 2. Run `init` with the options from the table.
 3. Build and check the FMU.
 

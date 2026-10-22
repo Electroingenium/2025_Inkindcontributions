@@ -113,3 +113,75 @@ def test_file_paths_are_not_taken_for_hugging_face_models(tmp_path):
         "variables": [{"start": "data/weather.bin"}, {"start": "results/out.csv"}, {"start": "sb3/ppo-x"}],
     }
     assert hf_models(interface, tmp_path) == ["sb3/ppo-x"]
+
+
+def test_compiled_launcher_restores_the_execute_bits_of_the_whole_bundle():
+    # unzipping drops them; gekko runs its solver from inside the bundle (dist/main/_internal/gekko/bin)
+    from fmugen.distribute import compiled_launch_command
+    assert compiled_launch_command("linux") == ["sh", "-c", "chmod -R u+x dist/main && ./dist/main/main"]
+    assert compiled_launch_command("windows")[0] == "powershell"
+
+
+@pytest.mark.parametrize("meipass", [True, False])   # PyInstaller, Nuitka
+def test_data_kept_outside_a_compiled_bundle_is_found(tmp_path, monkeypatch, meipass):
+    from fmugen.templates.fmugen_runtime import _helpers
+    resources = tmp_path / "resources"
+    exe_dir = resources / "dist" / "main"
+    bundle = exe_dir / "_internal" if meipass else exe_dir
+    (bundle / "parts" / "pv").mkdir(parents=True)
+    assert _helpers.outside_bundle(bundle) == bundle   # not compiled: unchanged
+    monkeypatch.setattr(_helpers.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(_helpers.sys, "executable", str(exe_dir / "main"))
+    if meipass:
+        monkeypatch.setattr(_helpers.sys, "_MEIPASS", str(bundle), raising=False)
+    else:
+        monkeypatch.delattr(_helpers.sys, "_MEIPASS", raising=False)
+    assert _helpers.outside_bundle(bundle) == resources.resolve()
+    assert _helpers.outside_bundle(bundle / "parts" / "pv") == (resources / "parts" / "pv").resolve()
+    assert _helpers.outside_bundle(tmp_path) == tmp_path   # not in the bundle
+
+
+@pytest.mark.slow
+def test_compiled_fmu_reads_the_data_files_of_its_working_folder(tmp_path):
+    # like NHES and CGE: [model] cwd, and a file the model reads by a relative path
+    if not importlib.util.find_spec("PyInstaller"):
+        pytest.skip("PyInstaller is not installed")
+    (tmp_path / "data").mkdir()
+    (tmp_path / "data" / "load.csv").write_text("12.5\n")
+    (tmp_path / "grid.py").write_text(
+        "def load(scale: float = 2.0):\n"
+        "    with open('data/load.csv') as f:\n"
+        "        return scale * float(f.read())\n")
+    (tmp_path / "fmugen.toml").write_text(
+        '[model]\nentry = "grid.py:load"\ncwd = "."\nsources = ["data/load.csv"]\n'
+        '[inputs]\nscale = { start = 2.0 }\n[outputs]\ny = { from = "return" }\n')
+    fmu = build(tmp_path / "fmugen.toml", tmp_path / "grid.fmu", compiler="pyinstaller")[0]
+    assert simulate_fmu(str(fmu), stop_time=1, output=["y"])["y"][-1] == 25.0
+
+
+def test_packages_that_import_their_own_submodules_are_collected_whole(monkeypatch):
+    # pyomo.environ imports its plugins by name; pyomo is only a dependency of OpenHENS
+    from fmugen import distribute
+    monkeypatch.setattr(distribute, "IMPORTS_OWN_SUBMODULES", {"numpy"})
+    direct, packages, _, imports = distribute._packages(["fmpy.simulation"])
+    assert "numpy" in direct and "numpy" not in imports   # a dependency of fmpy, collected with its submodules
+
+
+def test_editable_installs_are_put_on_the_freezer_path(tmp_path, monkeypatch):
+    # pip install -e: an import hook finds the project, which isn't on sys.path (the debutanizer project)
+    import importlib.machinery
+    import sys
+    from fmugen.distribute import _editable_paths
+    project = tmp_path / "project"
+    (project / "debutanizer_like").mkdir(parents=True)
+    (project / "debutanizer_like" / "__init__.py").write_text("")
+
+    class EditableFinder:   # what setuptools' __editable___*_finder installs
+        @classmethod
+        def find_spec(cls, name, path=None, target=None):
+            if name == "debutanizer_like":
+                return importlib.machinery.PathFinder.find_spec(name, [str(project)])
+            return None
+
+    monkeypatch.setattr(sys, "meta_path", [EditableFinder, *sys.meta_path])
+    assert _editable_paths(["debutanizer_like", "pytest", "json", "not_installed_anywhere"]) == [project.resolve()]

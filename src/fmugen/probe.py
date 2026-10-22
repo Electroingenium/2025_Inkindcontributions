@@ -91,7 +91,8 @@ def _probe_class(cls, method_name, data, comments, arrays, call_starts, create, 
     except Exception as e:
         comments[("outputs", None)] = f"probe construction failed ({e!r}); outputs below are read from the code"
         if cls is not None:
-            _arguments(getattr(cls, method_name), "inputs", data, comments, skip_self=True,
+            _arguments(getattr(cls, method_name), "inputs", data, comments,
+                       skip_self=not data["model"].get("call_on_class"),
                        constants_key="call_constants", arrays=arrays, starts=call_starts)
             _apply_converts(data, converts)
         return None, set(), set()
@@ -108,12 +109,13 @@ def _probe_class(cls, method_name, data, comments, arrays, call_starts, create, 
         if _writable_attribute(obj, name) and _same(getattr(obj, name), data["parameters"][name].get("start")):
             comments.setdefault(("parameters", name), "kept as an attribute: add variability = \"tunable\" if the step reads it")
 
-    _arguments(method, "inputs", data, comments, skip_self=not factory, constants_key="call_constants",
+    _arguments(method, "inputs", data, comments, skip_self=not factory and not data["model"].get("call_on_class"),
+               constants_key="call_constants",
                arrays=arrays, starts=call_starts)
     _apply_converts(data, converts)
     before, state_before = _numeric_attributes(obj, arrays), _state_bytes(obj)
     try:
-        result = _probe_call(getattr(obj, method_name), data, comments, constants_key="call_constants")
+        result = _probe_call(_step_method(obj, method_name, data), data, comments, constants_key="call_constants")
     except ConstantError:
         raise
     except Exception as e:
@@ -154,6 +156,12 @@ def _probe_class(cls, method_name, data, comments, arrays, call_starts, create, 
         elif not _same(before[attr], value):
             data.setdefault("locals", {})[attr] = _typed({}, value, arrays)
             comments[("locals", attr)] = f"changed by {method_name}()"
+    if "outputs" not in data and data.get("locals"):
+        # nothing else to read: what the step changes is its result (river's intercept)
+        data["outputs"] = data.pop("locals")
+        for attr in data["outputs"]:
+            comments[("outputs", attr)] = f"changed by {method_name}(); an output, since the probe found no other"
+            comments.pop(("locals", attr), None)
     _check_sizes(obj, method_name, data, comments)
     return obj, returned, set(getattr(obj, "__dict__", {})) | set(_property_values(obj, arrays)) | unfit
 
@@ -267,7 +275,7 @@ def _check_sizes(obj, method_name, data, comments):
         return
     from fmugen.templates.fmugen_runtime import get_path, pick
     try:
-        result = _call_with_probe_inputs(getattr(obj, method_name), data, "call_constants")
+        result = _call_with_probe_inputs(_step_method(obj, method_name, data), data, "call_constants")
     except Exception:
         return
     for section, name, info in sized:
@@ -540,7 +548,8 @@ def _call_with_probe_inputs(fn, data, constants_key):
     args, kwargs = _probe_args(data, ("inputs",), fn, constants_key)
     kwargs.update(_time_kwargs(data.get("time", {})))
     kwargs.update(_probe_constants(data, constants_key))
-    return fn(*args, **kwargs)
+    from fmugen.templates.fmugen_runtime import results_of
+    return results_of(fn(*args, **kwargs))
 
 
 def _probe_once(fn, data, comments, constants_key="constants"):
@@ -590,6 +599,10 @@ def _probe_once(fn, data, comments, constants_key="constants"):
                  if "dimensions" in info and not info.get("numpy") and not info.get("convert")]
         if not plain:
             result = _retry_as_arrays(call, data, comments)
+            if result is _FAILED:
+                result = _retry_as_series(call, data, comments)
+            if result is _FAILED:
+                result = _retry_as_pint(call, data, comments)
             if result is _FAILED:
                 raise
             return result
@@ -648,6 +661,118 @@ def _retry_as_arrays(call, data, comments):
         comments[("inputs", name)] = "passed as numpy.atleast_1d(...): the probe failed with plain numbers"
     return result
 
+def _retry_as_series(call, data, comments):
+    """Call again with each number input as a one-value pandas Series indexed by a date (``convert = "series"``).
+
+    Some libraries read the date from their inputs' index (pyet's ``pm_fao56`` takes the day of
+    the year from ``rs.index``). The epoch is today at 00:00, as for date-time arguments.
+
+    :param call: makes the probe call.
+    :type call: callable
+    :param data: the config being inferred; updated in place.
+    :type data: dict
+    :param comments: ``(section, key) -> text`` for :func:`render_toml`; updated in place.
+    :type comments: dict
+    :return: the result, or :data:`_FAILED`.
+    """
+    numbers = {name: info for name, info in data.get("inputs", {}).items()
+               if isinstance(info.get("start"), (int, float)) and not isinstance(info.get("start"), bool)
+               and "dimensions" not in info and not info.get("convert") and not info.get("numpy")}
+    if not numbers or importlib.util.find_spec("pandas") is None:
+        return _FAILED
+    epoch = datetime.datetime.combine(datetime.date.today(), datetime.time()).isoformat()
+    for info in numbers.values():
+        info.update({"convert": "series", "epoch": epoch})
+    try:
+        result = call()
+    except Exception:
+        for info in numbers.values():
+            del info["convert"], info["epoch"]
+        return _FAILED
+    for name in numbers:
+        comments[("inputs", name)] = ("passed as a pandas Series dated epoch + t: the probe failed with plain numbers "
+                                      "and arrays; set the epoch you need")
+    return result
+
+
+#: pint base dimension -> its SI unit, for an argument whose error names only its dimension (metpy).
+PINT_BASE_UNITS = {"[length]": "m", "[mass]": "kg", "[time]": "s", "[temperature]": "K", "[current]": "A",
+                   "[substance]": "mol", "[luminosity]": "cd", "dimensionless": "dimensionless"}
+
+
+def _pint_unit(message, numbers):
+    """The input a pint unit error is about, and the unit it asks for; or None.
+
+    Reads fluids.units' ``Converting 2.5 dimensionless to units of m/s`` (the input is found by
+    its value) and metpy's ``temperature requires "[temperature]"`` (the name in backquotes) (a dimension, given its SI
+    unit: K).
+
+    :param message: the error message.
+    :type message: str
+    :param numbers: ``{name: info}`` of the inputs still dimensionless.
+    :type numbers: dict
+    :rtype: tuple[str, str] or None
+    """
+    import re
+    match = re.search(r"Converting (\S+) dimensionless to units of (\S+)", message)
+    if match:
+        try:
+            value = float(match[1])
+        except ValueError:
+            return None
+        names = [n for n, info in numbers.items() if float(info["start"]) == value]
+        return (names[0], match[2].rstrip(".,")) if len(names) == 1 else None
+    match = re.search(r"`(\w+)` requires \"([^\"]+)\"", message)
+    if match and match[1] in numbers:
+        unit = match[2]
+        for dimension, base in PINT_BASE_UNITS.items():
+            unit = unit.replace(dimension, base)
+        return (match[1], unit) if "[" not in unit else None
+    return None
+
+
+def _retry_as_pint(call, data, comments):
+    """Call again with each number input as a pint quantity (``convert = "pint"``), learning units from the errors.
+
+    Libraries that check units (fluids.units, metpy) refuse plain numbers. Every number input
+    starts dimensionless; each error that names an input's unit sets it, until the call works.
+    The start values are taken as being in those units.
+
+    :param call: makes the probe call.
+    :type call: callable
+    :param data: the config being inferred; updated in place.
+    :type data: dict
+    :param comments: ``(section, key) -> text`` for :func:`render_toml`; updated in place.
+    :type comments: dict
+    :return: the result, or :data:`_FAILED`.
+    """
+    numbers = {name: info for name, info in data.get("inputs", {}).items()
+               if isinstance(info.get("start"), (int, float)) and not isinstance(info.get("start"), bool)
+               and "dimensions" not in info and not info.get("convert") and not info.get("numpy")}
+    if not numbers or importlib.util.find_spec("pint") is None:
+        return _FAILED
+    for info in numbers.values():
+        info.update({"convert": "pint", "unit": "dimensionless"})
+    pending = dict(numbers)
+    for _ in range(len(numbers) + 1):
+        try:
+            result = call()
+        except Exception as e:
+            found = _pint_unit(str(e), pending)
+            if found is None:
+                break
+            name, unit = found
+            pending.pop(name)["unit"] = unit
+            continue
+        for name in numbers:
+            comments[("inputs", name)] = ("passed as a pint quantity: the probe failed with plain numbers; the unit is "
+                                          "the one the model asked for, so check the start is in it")
+        return result
+    for info in numbers.values():
+        del info["convert"], info["unit"]
+    return _FAILED
+
+
 def _state_bytes(obj):
     """The object's attributes pickled, to tell whether a call changed them.
 
@@ -700,6 +825,60 @@ def _check_picklable(obj, data, comments):
         data["model"]["save_state"] = False
         comments[("model", "save_state")] = f"the model object can't be pickled ({error}): " \
                                             "the FMU can't save and restore its state"
+
+def _step_method(obj, method_name, data):
+    """The step method to call: bound to ``obj``, or taken from its class with ``call_on_class``.
+
+    :param obj: the model object.
+    :param method_name: the step method.
+    :type method_name: str
+    :param data: the config being inferred.
+    :type data: dict
+    :rtype: callable
+    """
+    return getattr(type(obj) if data["model"].get("call_on_class") else obj, method_name)
+
+
+def _varargs_by_keyword(constructor, init_starts, data, probe):
+    """Whether a ``(*args, **kwargs)`` constructor needs its ``--start`` values as keywords.
+
+    The signature can't tell: ``StateSpace(A, B, C, D)`` takes them by position,
+    ``Quaternion(axis=..., angle=...)`` by keyword. Without ``--probe`` they go by position.
+    With it, by keyword only when the positional call fails and the keyword one works.
+
+    :param constructor: the class (or ``create`` classmethod).
+    :param init_starts: the values given to the constructor.
+    :type init_starts: dict
+    :param data: the config being inferred (for its setup calls).
+    :type data: dict
+    :param probe: whether ``--probe`` is in effect.
+    :type probe: bool
+    :rtype: bool
+    """
+    try:
+        params = inspect.signature(constructor).parameters.values()
+    except (TypeError, ValueError):
+        return False
+    if not probe or not init_starts or not any(p.kind is p.VAR_KEYWORD for p in params) \
+            or not any(p.kind is p.VAR_POSITIONAL for p in params):
+        return False
+    from fmugen.templates.fmugen_runtime import resolve_constant
+    try:
+        _run_setup(data)
+        values = {n: resolve_constant(v) for n, v in init_starts.items()}
+    except Exception:
+        return False
+    try:
+        constructor(*values.values())
+        return False
+    except Exception:
+        pass
+    try:
+        constructor(**values)
+    except Exception:
+        return False
+    return True
+
 
 def _split_varargs(cls, create, method_name, init_starts, call_starts, data, comments, probe):
     """Split ``--start`` values between a constructor and a step method that both take only ``*args``.
@@ -822,7 +1001,10 @@ def _probe_kwargs(data, sections):
                 kwargs[name] = bytes.fromhex(info["start"])
             else:
                 kwargs[name] = info.get("start", 0.0)
-            if info.get("convert"):
+            if info.get("convert") in ("series", "pint"):   # dated at the epoch, as at time 0; in the unit
+                from fmugen.templates.fmugen_runtime import converter
+                kwargs[name] = converter(info)(kwargs[name])
+            elif info.get("convert"):
                 kwargs[name] = resolve_reference(info["convert"])(kwargs[name])
     return kwargs
 
@@ -870,8 +1052,11 @@ def _outputs_from_return(result, data, comments, default_name, is_class, arrays=
     wrapped = any(info.get("convert") == "numpy:atleast_1d" for info in data.get("inputs", {}).values())
     if wrapped and getattr(result, "size", None) == 1 and hasattr(result, "reshape"):
         result = result.reshape(())[()]   # numbers passed as one-element arrays: a number comes back as one
+    parts = set()   # properties of a returned object, which may share a name with an input (ufloat's nominal_value)
     if isinstance(result, Mapping):
         items = [(str(k), v, f"return:{k}") for k, v in result.items()]
+    elif _table_children(result) == [] and getattr(result, "size", None) == 1:
+        items = [(default_name, result.item(), "return")]   # one value labelled by a date (pyet): read as a number
     elif _table_children(result) is not None:   # pandas Series / one-row DataFrame, xarray Dataset
         items = [(k, v, f"return:{k}") for k, v in _table_children(result)]
     elif arrays and _array_info(result):
@@ -879,22 +1064,28 @@ def _outputs_from_return(result, data, comments, default_name, is_class, arrays=
     elif isinstance(result, tuple) and hasattr(result, "_fields"):   # NamedTuple: use the field names
         items = [(field, getattr(result, field), f"return:{field}") for field in result._fields]
     elif isinstance(result, (tuple, list)):
-        items = [(f"{default_name}{i}", v, f"return:{i}") for i, v in enumerate(result)]
+        items = [leaf for i, v in enumerate(result) for leaf in _positions(f"{default_name}{i}", v, f"return:{i}", arrays)]
     elif _fmi_value(result) or (result is not None and _misfit(result)):
         items = [(default_name, result, "return")]
-    elif result is not None and (hasattr(result, "__dict__") or _public_properties(result)):
+    elif result is not None and (hasattr(result, "__dict__") or _public_properties(result, arrays=True)):
         # an object: its public attributes and properties, e.g. uncertainties' nominal_value, std_dev
         public = {k: v for k, v in getattr(result, "__dict__", {}).items() if not k.startswith("_")}
-        public.update({k: v for k, v in _public_properties(result).items() if k not in public})
-        items = [(k, v, f"return:{k}") for k, v in public.items()]
+        public.update({k: v for k, v in _public_properties(result, arrays=True).items() if k not in public})
+        items = [_single(k, v, f"return:{k}") for k, v in public.items()]
+        parts = set(public) - set(getattr(result, "__dict__", {}))   # computed, not a stored copy of an input
     else:
         items = []
     looked_at = {name for name, _, _ in items}
     items = [leaf for name, value, source in items for leaf in _nested(name, value, source, arrays)]
+    items = [part for item in items for part in _complex_parts(*item)]
     # keys that aren't names (radioactivedecay's "N-14"): a valid name, the real key kept in `from`
     items = [(_valid_name(name), value, source) for name, value, source in items]
     taken = {n for section in ("parameters", "inputs", "states") for n in data.get(section, {})}
     for name, value, source in items:
+        if name in taken and name in parts and not is_class:
+            # a property of the object a function returns, named like an input: y_nominal_value
+            # (a class's step that echoes its input, as pyfluids' with_state, still gives none)
+            name = f"{default_name}_{name}"
         if name in taken:  # e.g. an object that echoes its inputs as attributes
             continue
         if _dotted_name(name) and _unfit_value(comments, "outputs", name, value, source, arrays):
@@ -911,6 +1102,26 @@ def _outputs_from_return(result, data, comments, default_name, is_class, arrays=
     if not outputs:
         data.pop("outputs")
     return looked_at
+
+
+def _complex_parts(name, value, source):
+    """A complex result as two outputs, its real and imaginary parts (FMI has no complex type).
+
+    ``y`` read from ``return`` gives ``y_real`` (``return:real``) and ``y_imag``; anything else
+    is returned as it is.
+
+    :param name: the output name.
+    :type name: str
+    :param value: its probe value.
+    :param source: its ``from`` binding.
+    :type source: str
+    :rtype: list[tuple]
+    """
+    scalar = _scalar_of(value)
+    if not (isinstance(scalar, complex) or "complex" in str(getattr(value, "dtype", ""))):
+        return [(name, value, source)]
+    sep = "." if ":" in source else ":"
+    return [(f"{name}_{part}", getattr(value, part), f"{source}{sep}{part}") for part in ("real", "imag")]
 
 
 #: How deep nested results are split into dotted outputs.
@@ -939,6 +1150,30 @@ def _nested(name, value, source, arrays, depth=0):
             sep = ":" if source == "return" else "."
             return [leaf for key, child in children
                     for leaf in _nested(f"{name}.{key}", child, f"{source}{sep}{key}", arrays, depth + 1)]
+    return [(name, value, source)]
+
+
+def _positions(name, value, source, arrays, depth=0):
+    """``(name, value, source)`` for each item of tuples nested in a tuple result, which would be skipped whole.
+
+    nashpy's ``support_enumeration`` gives ``((sigma_r, sigma_c), ...)``: ``y0`` becomes ``y0_0``
+    (``return:0.0``) and ``y0_1``. Only plain tuples are split, and only when they aren't an FMI
+    value themselves (a tuple of numbers stays one array).
+
+    :param name: the variable name of ``value``.
+    :type name: str
+    :param value: an item of the result.
+    :param source: its ``from`` binding.
+    :type source: str
+    :param arrays: whether arrays may be FMU variables (FMI 3).
+    :type arrays: bool
+    :param depth: the current nesting level.
+    :type depth: int
+    :rtype: list[tuple]
+    """
+    if depth < MAX_NESTING and type(value) is tuple and value and not _fmi_value(value, arrays):
+        return [leaf for i, v in enumerate(value)
+                for leaf in _positions(f"{name}_{i}", v, f"{source}.{i}", arrays, depth + 1)]
     return [(name, value, source)]
 
 
@@ -988,7 +1223,23 @@ def _table_children(value):
     return [(k, v) for k, v in pairs if isinstance(k, str)]
 
 
-def _public_properties(obj):
+def _single(name, value, source):
+    """A one-element array read as its element: ambiance's properties are ``array([288.15])``.
+
+    :param name: the output name.
+    :type name: str
+    :param value: its probe value.
+    :param source: its ``from`` binding.
+    :type source: str
+    :return: ``(name, value, source)``, with ``value[0]`` and ``source.0`` for a one-element array.
+    :rtype: tuple
+    """
+    if getattr(value, "ndim", 0) == 1 and getattr(value, "size", 0) == 1:
+        return name, value[0], f"{source}.0"
+    return name, value, source
+
+
+def _public_properties(obj, arrays=False):
     """``{name: value}`` of the public properties of obj's class whose value is an FMI value.
 
     Of properties that are the same object under several names (uncertainties' n and
@@ -996,6 +1247,8 @@ def _public_properties(obj):
     :func:`inspect.getattr_static`: getattr on the class runs descriptors, which can fail.
 
     :param obj: the object.
+    :param arrays: also numeric arrays.
+    :type arrays: bool
     :rtype: dict
     """
     by_property = {}
@@ -1011,7 +1264,7 @@ def _public_properties(obj):
             value = getattr(obj, name)
         except Exception:
             continue
-        if _fmi_value(value):
+        if _fmi_value(value, arrays):
             values[name] = value
     return values
 

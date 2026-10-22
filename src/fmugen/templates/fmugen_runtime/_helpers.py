@@ -22,7 +22,7 @@ import traceback
 import types
 import typing
 import warnings
-from collections.abc import Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from fractions import Fraction
 from pathlib import Path
 
@@ -487,14 +487,18 @@ def call_argument(node):
                      "calls of those, or lists/tuples/dicts of these")
 
 
-def converter(var):
+def converter(var, now=lambda: 0.0):
     """The function applied to a value before the model gets it (``convert``).
 
     ``"pint"`` makes a quantity in the variable's ``unit`` from pint's application registry;
-    anything else is a reference to a function.
+    ``"series"`` a one-value pandas Series indexed by the date ``epoch`` + ``now()`` seconds (for
+    models that read the date from their inputs' index, such as pyet); anything else is a
+    reference to a function.
 
     :param var: an entry of ``interface["variables"]`` with ``convert``.
     :type var: dict
+    :param now: the FMU time, for ``"series"``.
+    :type now: callable
     :return: the converter.
     :rtype: callable
     """
@@ -502,6 +506,11 @@ def converter(var):
         import pint
         registry, unit = pint.get_application_registry(), var.get("unit", "")
         return lambda value: registry.Quantity(value, unit)
+    if var["convert"] == "series":
+        import pandas
+        epoch = datetime.datetime.fromisoformat(var["epoch"])
+        return lambda value: pandas.Series(
+            [value], index=pandas.DatetimeIndex([epoch + datetime.timedelta(seconds=now())]))
     return resolve_reference(var["convert"])
 
 
@@ -515,6 +524,19 @@ def _labelled(obj):
     :rtype: bool
     """
     return type(obj).__module__.split(".")[0] in ("pandas", "xarray") and hasattr(obj, "keys")
+
+
+def results_of(result):
+    """What a model call returned, with a generator read into a tuple.
+
+    A generator (nashpy's ``support_enumeration``) can only be read once; as a tuple, several
+    outputs can read it and it can be saved with the FMU state. Anything else is returned
+    unchanged.
+
+    :param result: what the model returned.
+    :return: ``tuple(result)`` for a generator, else ``result``.
+    """
+    return tuple(result) if isinstance(result, types.GeneratorType) else result
 
 
 def plain_number(value, unit=None):
@@ -541,11 +563,71 @@ def plain_number(value, unit=None):
     return value
 
 
+def _indexable(obj):
+    """Whether a path part like ``"0"`` or ``"-1"`` indexes ``obj`` by position.
+
+    Lists, tuples and arrays (numpy, torch: anything with ``ndim`` of 1 or more), but not pandas or
+    xarray objects, whose ``[0]`` is a label.
+
+    :param obj: any object.
+    :rtype: bool
+    """
+    if isinstance(obj, (tuple, list)):
+        return True
+    module = type(obj).__module__.split(".")[0]
+    return module not in ("pandas", "xarray") and (getattr(obj, "ndim", 0) or 0) >= 1 \
+        and hasattr(obj, "__getitem__")
+
+
+_MISSING = object()   # _nth / _item: the fallback doesn't apply
+
+
+def _nth(obj, part):
+    """Element ``part`` (``"0"``, ``"-1"``) of an iterable that can't be indexed, such as a ``dict_keys`` view.
+
+    Only tried where an attribute lookup has failed. Strings, mappings, pandas/xarray objects and
+    iterators (which reading would consume) are left out.
+
+    :param obj: any object.
+    :param part: the path part.
+    :type part: str
+    :return: the element, or ``_MISSING`` when this doesn't apply.
+    :raises IndexError: ``obj`` has fewer elements.
+    """
+    if not (part.lstrip("-").isdigit() and part.count("-") <= 1) or isinstance(obj, (str, bytes, Mapping)) \
+            or type(obj).__module__.split(".")[0] in ("pandas", "xarray") or not isinstance(obj, Iterable) \
+            or isinstance(obj, Iterator):
+        return _MISSING
+    return list(obj)[int(part)]
+
+
+def _item(obj, part):
+    """``obj[part]`` for an object that isn't a mapping but takes keys, such as pybamm's ``Solution``.
+
+    Only tried where an attribute lookup has failed. Strings and mappings are left out (a
+    mapping's part is already a key).
+
+    :param obj: any object.
+    :param part: the path part, used as the key.
+    :type part: str
+    :return: the item, or ``_MISSING`` when ``obj`` has no such item.
+    """
+    if isinstance(obj, (str, bytes, Mapping)) or not hasattr(type(obj), "__getitem__"):
+        return _MISSING
+    try:
+        return obj[part]
+    except (KeyError, IndexError, TypeError, ValueError):
+        return _MISSING
+
+
 def get_path(obj, path):
     """Follow a dotted path through attributes, mapping keys and sequence indexes.
 
     ``"state.T"``, ``"rewards.speed"``, ``"4.x"``, ``"X.value.-1"`` (the last element). On a
     mapping a part is a key, unless it's only an attribute (``"options.update"``: the method).
+    A number on any other iterable without indexing (``"bodies.0"`` on a ``dict_keys`` view)
+    picks that element, and on an object that takes keys (``obj["Voltage [V]"]``) a part is
+    then tried as a key, but both only where there's no such attribute.
 
     :param obj: the start object (usually the model object or a call result).
     :param path: the dotted path.
@@ -556,13 +638,21 @@ def get_path(obj, path):
     for part in path.split("."):
         if isinstance(obj, Mapping) and (part in obj or not hasattr(obj, part)) or _labelled(obj) and part in obj:   # "options.update": the method
             obj = obj[part]
-        elif part.lstrip("-").isdigit() and part.count("-") <= 1 and isinstance(obj, (tuple, list)):
+        elif part.lstrip("-").isdigit() and part.count("-") <= 1 and _indexable(obj):
             try:
                 obj = obj[int(part)]
             except TypeError as e:   # a list-like wrapping a single value (a GEKKO variable before its first solve)
                 raise IndexError(f"{part}: {e}") from e
         else:
-            obj = getattr(obj, part)
+            try:
+                obj = getattr(obj, part)
+            except AttributeError:
+                element = _nth(obj, part)
+                if element is _MISSING:
+                    element = _item(obj, part)
+                if element is _MISSING:
+                    raise
+                obj = element
     return obj
 
 
@@ -746,3 +836,26 @@ def fraction(value):
     if f.denominator > UINT64_MAX:
         f = f.limit_denominator(UINT64_MAX)
     return f.numerator, f.denominator
+
+
+def outside_bundle(path):
+    """The folder of the FMU's ``resources/`` that ``path`` stands for, when the backend is compiled.
+
+    A compiled backend (``fmugen build --compile``) reads its code and ``interface.json`` from the
+    bundle: ``resources/dist/main/_internal`` (PyInstaller's ``sys._MEIPASS``) or
+    ``resources/dist/main`` (Nuitka). The data the build keeps outside it (``[model] cwd`` folders,
+    ``hf_cache``) stays at the same place under ``resources/``. Uncompiled, ``path`` is returned as is.
+
+    :param path: a folder inside the bundle, e.g. the resources folder the engine was given.
+    :type path: str or pathlib.Path
+    :rtype: pathlib.Path
+    """
+    path = Path(path)
+    if not getattr(sys, "frozen", False) and "__compiled__" not in globals():
+        return path
+    exe_dir = Path(sys.executable).resolve().parent   # resources/dist/main
+    bundle = Path(getattr(sys, "_MEIPASS", exe_dir)).resolve()
+    try:
+        return exe_dir.parent.parent / path.resolve().relative_to(bundle)
+    except ValueError:   # not inside the bundle
+        return path

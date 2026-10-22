@@ -218,7 +218,8 @@ def test_probe_adds_what_only_the_code_shows(tmp_path):
 
 
 def test_probe_comments_out_values_that_cant_be_fmi_variables(tmp_path):
-    # like impedance (complex result), pyproj (a str property that is None) and seirsplus (a growing history)
+    # like pyproj (a str property that is None) and seirsplus (a growing history); impedance's
+    # complex result is split into its real and imaginary parts
     model = write(tmp_path, '''
         import numpy as np
 
@@ -235,16 +236,42 @@ def test_probe_comments_out_values_that_cant_be_fmi_variables(tmp_path):
                 return np.array([1 + 2j, 3 - 1j]) * f
     ''')
     data, comments = infer(model, probe=True, fmi_version=3)
-    assert "outputs" not in data and "locals" not in data
-    assert comments[("outputs", "#y#0")] == 'y_real = { from = "return:real", dimensions = [2] }'
-    assert comments[("outputs", "#y#1")] == 'y_imag = { from = "return:imag", dimensions = [2] }'
+    assert data["outputs"] == {"y_real": {"from": "return:real", "dimensions": [2]},
+                               "y_imag": {"from": "return:imag", "dimensions": [2]}}
+    assert "locals" not in data
     assert comments[("outputs", "#remarks#0")] == 'remarks = { from = "attr:remarks", type = ... }'
     assert "from [2] to [3]" in comments[("locals", "#history#why")]
     with isolated_imports():
         output, _ = init(str(model), probe=True, fmi_version=3, output=str(tmp_path / "fmugen.toml"))
     text = output.read_text()
-    assert "# y_real = " in text and "# remarks: None in the probe" in text
+    assert "# remarks: None in the probe" in text
     assert "remarks" not in tomllib.loads(text).get("outputs", {})
+
+
+def test_probe_reads_the_properties_of_a_returned_object(tmp_path):
+    # like uncertainties' ufloat (properties named like its arguments) and ambiance's Atmosphere
+    # (properties that are one-element arrays)
+    model = write(tmp_path, '''
+        import numpy as np
+
+        class Value:
+            def __init__(self, nominal_value, std_dev):
+                self._v, self._s = nominal_value, std_dev
+
+            @property
+            def nominal_value(self):
+                return self._v
+
+            @property
+            def temperature(self):
+                return np.array([288.15 - 0.0065 * self._v])
+
+        def measure(nominal_value=1.0, std_dev=0.1):
+            return Value(nominal_value, std_dev)
+    ''')
+    data, _ = infer(f"{model}:measure", probe=True)
+    assert data["outputs"] == {"y_nominal_value": {"from": "return:nominal_value"},
+                               "temperature": {"from": "return:temperature.0"}}
 
 
 def test_init_prints_the_assumptions_it_wrote_as_comments(tmp_path, capsys):
@@ -270,3 +297,33 @@ def test_init_writes_the_static_config(tmp_path):
         output, _ = init(str(model))
     config = tomllib.loads(output.read_text())
     assert config["outputs"] == {"b": {}}
+
+
+def test_pint_units_are_read_from_the_errors():
+    # fluids.units names the unit and the value, metpy the argument and its dimension
+    from fmugen.probe import _pint_unit
+    numbers = {"V": {"start": 2.5}, "D": {"start": 0.25}}
+    assert _pint_unit("Converting 2.5 dimensionless to units of m/s raised DimensionalityError", numbers) == ("V", "m/s")
+    assert _pint_unit("Converting 9.0 dimensionless to units of m raised", numbers) is None
+    assert _pint_unit('`D` requires "[length] / [time]" but given "dimensionless"', numbers) == ("D", "m / s")
+    assert _pint_unit("something else", numbers) is None
+
+
+def test_probe_outputs_what_the_step_changes_when_nothing_else(tmp_path):
+    # like river's LinearRegression (learns intercept); a history that grows each step stays left out
+    model = write(tmp_path, '''
+        import numpy as np
+
+        class Learner:
+            def __init__(self, lr=0.1):
+                self.lr = lr
+                self.intercept = 0.0
+                self.history = np.zeros(1)
+
+            def learn_one(self, y=3.0):
+                self.intercept += self.lr * (y - self.intercept)
+                self.history = np.append(self.history, self.intercept)
+    ''')
+    data, _ = infer(f"{model}:Learner", call="learn_one", probe=True)
+    assert data["outputs"] == {"intercept": {}}
+    assert "locals" not in data

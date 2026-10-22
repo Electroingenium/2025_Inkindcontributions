@@ -28,12 +28,12 @@ from fmugen.toml_output import render_toml
 from fmugen.arguments import (
     SCALARS, POSITIONAL_STARTS, START_ERRORS, NO_SIGNATURE, PROBED,
     _number_like, _array_info, _dotted_names, _arguments, _apply_converts,
-    _assign_starts, assumptions, guessed_outputs, unfit_outputs,
+    _assign_starts, assumptions, guessed_outputs, unfit_outputs, class_called,
 )
 from fmugen.probe import (
     ConstantError, _run_setup, _probe_call, _probe_class,
     _outputs_from_return, _add_returned, _add_attributes, _detect_states,
-    _taken, _split_varargs,
+    _taken, _split_varargs, _varargs_by_keyword,
 )
 
 #: Step method names tried in order when a class is given without ``--call``.
@@ -287,8 +287,11 @@ def _infer_config(target, call, config_dir, fmi_version, starts, setup, kind, cr
     unknown = set(converts or {}) - variables
     if unknown:
         raise InterfaceError(f"--convert names that are not arguments of the model: {sorted(unknown)}")
+    # a call: start for the method's copy of a shared name is stored under the argument's own name
+    prefix = f"{data['model'].get('call', 'call').strip('_')}_"
     unused = set(starts) - variables - set(comments.get(POSITIONAL_STARTS, {})) \
         - {n for table in ("constants", "call_constants") for n in data["model"].get(table, {})} \
+        - {prefix + n for n in data["model"].get("call_constants", {})} \
         - {str(info.get("to", "")).partition(":")[2].partition("[")[0]
            for sec in ("parameters", "inputs", "states") for info in data.get(sec, {}).values()} \
         - {str(info["to"]).partition(":")[2] for sec in ("parameters", "inputs", "states")
@@ -420,7 +423,8 @@ def _local_sources(entry_file, config_dir):
         if not file:
             continue
         file = Path(file).resolve()
-        if not file.is_relative_to(config_dir) or "site-packages" in file.parts or file == entry_file:
+        if not file.is_relative_to(config_dir) or "site-packages" in file.parts or file == entry_file \
+                or _in_venv(file, config_dir):
             continue
         rel = file.relative_to(config_dir)
         sources.add(rel.parts[0] if len(rel.parts) > 1 else rel.as_posix())
@@ -428,6 +432,20 @@ def _local_sources(entry_file, config_dir):
     if len(entry_rel.parts) > 1:
         sources.add(entry_rel.parts[0])
     return sorted(sources)
+
+
+def _in_venv(file, root):
+    """Whether ``file`` is inside a virtual environment under ``root`` (a folder with ``pyvenv.cfg``).
+
+    A venv next to the model (``cftoc/.venv``) isn't part of it: its packages are not the model's imports.
+
+    :param file: a file under ``root``.
+    :type file: pathlib.Path
+    :param root: the source folder.
+    :type root: pathlib.Path
+    :rtype: bool
+    """
+    return any((root / folder / "pyvenv.cfg").is_file() for folder in file.relative_to(root).parents[:-1])
 
 
 def _add_data_files(data, comments, config_dir, entry_file):
@@ -563,7 +581,7 @@ def _add_requirements(data, comments, module_name, config_dir, entry_file):
     files = [entry_file] if entry_file else []
     for source in data["model"].get("sources", []):
         source = config_dir / source
-        files += sorted(source.rglob("*.py")) if source.is_dir() else [source] if source.suffix == ".py" else []
+        files += sorted(f for f in source.rglob("*.py") if not _in_venv(f, source)) if source.is_dir()             else [source] if source.suffix == ".py" else []
     for file in files:
         try:
             tree = ast.parse(file.read_text(encoding="utf-8"))
@@ -580,6 +598,8 @@ def _add_requirements(data, comments, module_name, config_dir, entry_file):
     references += [info[key] for section in ("parameters", "inputs", "states")
                    for info in data.get(section, {}).values() for key in ("convert", "enum") if key in info]
     for ref in references:
+        if ref == "series":   # convert = "series": a pandas Series
+            tops.add("pandas")
         if ":" in ref:   # module:function(numpy.linspace(...)): the module, and the dotted names in the arguments
             tops.add(ref.partition(":")[0].split(".")[0])
             tops |= {name.split(".")[0] for name in _dotted_names(ref.partition("(")[2])}
@@ -588,9 +608,12 @@ def _add_requirements(data, comments, module_name, config_dir, entry_file):
     distributions = static.packages_distributions()
     found, unknown = {}, []
     for top in sorted(tops):
-        if top in sys.stdlib_module_names or top == "fmugen" or importlib.util.find_spec(top) is None:
+        try:
+            spec = importlib.util.find_spec(top)
+        except (ImportError, ValueError):   # __main__ has no spec under a console script
             continue
-        spec = importlib.util.find_spec(top)
+        if top in sys.stdlib_module_names or top == "fmugen" or spec is None:
+            continue
         origin = Path(spec.origin).resolve() if spec.origin else None
         if origin is not None and origin.is_relative_to(config_dir) and "site-packages" not in origin.parts:
             continue   # one of the model's own files
@@ -750,14 +773,21 @@ def _infer_class(cls, call, data, comments, arrays=False, starts=None, create=No
         init_starts, call_starts = _assign_starts(constructor, getattr(cls, method_name, None), starts or {})
         init_starts, call_starts = _split_varargs(cls, create, method_name, init_starts, call_starts, data,
                                                   comments, probe)
+    by_keyword = not factory and _varargs_by_keyword(getattr(cls, create) if create else cls, init_starts, data,
+                                                     probe)
     _arguments(constructor, "parameters", data, comments, skip_self=not (create or factory), allow_time=False,
-               arrays=arrays, starts=init_starts, positional=False)
+               arrays=arrays, starts=init_starts, positional=False, by_keyword=by_keyword)
     _apply_converts(data, converts)
 
     if method_name != "__call__" or call:
         data["model"]["call"] = method_name
     if not factory and not callable(getattr(cls, method_name, None)):
         raise InterfaceError(f"{cls.__name__} has no method {method_name!r}")
+    on_class = not factory and class_called(cls, method_name)
+    if on_class:
+        data["model"]["call_on_class"] = True
+        comments[("model", "call_on_class")] = (f"{method_name}() has no self: it's called as {cls.__name__}."
+                                                f"{method_name}(...); remove this if it's a normal method")
 
     seen_returns, seen_attrs, obj = set(), set(), None
     if probe:
@@ -769,7 +799,8 @@ def _infer_class(cls, call, data, comments, arrays=False, starts=None, create=No
     else:
         method = inspect.getattr_static(cls, method_name)
         _arguments(getattr(cls, method_name), "inputs", data, comments,
-                   skip_self=not isinstance(method, (staticmethod, classmethod)), constants_key="call_constants",
+                   skip_self=not isinstance(method, (staticmethod, classmethod)) and not on_class,
+                   constants_key="call_constants",
                    arrays=arrays, starts=call_starts)
         _apply_converts(data, converts)
         copies = static.init_copies(cls) if not factory and not create else set()

@@ -65,7 +65,7 @@ SECTIONS = {
 MODEL_KEYS = {
     "entry", "call", "name", "description", "author", "sources", "requirements",
     "constants", "call_constants", "init_call", "terminate", "fmi_version", "setup", "kind", "create",
-    "save_state", "cwd", "globals", "discard_on", "integrate", "substeps", "annotations",
+    "save_state", "cwd", "globals", "discard_on", "integrate", "substeps", "annotations", "call_on_class",
 }
 #: Keys allowed in ``[experiment]`` (the default experiment).
 EXPERIMENT_KEYS = {"start_time", "stop_time", "step_size", "tolerance", "fixed_step"}
@@ -80,7 +80,7 @@ WIDER_THAN_FMI2_INTEGER = ("Int64", "UInt32", "UInt64")
 #: Keys allowed in every variable section.
 COMMON_VAR_KEYS = {
     "type", "start", "unit", "description", "variability", "initial",
-    "min", "max", "nominal", "quantity", "items", "enum", "dimensions", "numpy", "convert", "extra",
+    "min", "max", "nominal", "quantity", "items", "enum", "dimensions", "numpy", "convert", "epoch", "extra",
 }
 #: Variable section -> keys allowed in its variables (common keys plus the bindings that fit
 #: the section: ``to`` for values passed in, ``from`` for values read out, ``next`` / ``der`` for states).
@@ -658,6 +658,7 @@ def normalize(config, entry_obj, module_name, sys_path, model_name=None, author=
             "create": create,
             "factory": factory,
             "call": call if is_class and step_call else None,
+            "call_on_class": bool(model.get("call_on_class")) and is_class,
             "step": step_call,
             "init_call": init_call,
             "terminate": model.get("terminate"),
@@ -1078,6 +1079,17 @@ def _variable(section, causality, name, info, is_class, type_definitions, versio
             if not info.get("unit"):
                 raise InterfaceError(f"{where}: convert = \"pint\" needs a unit")
             reference = "pint:get_application_registry"
+        elif info["convert"] == "series":   # a one-value pandas Series indexed by the date epoch + t
+            if "epoch" not in info:
+                raise InterfaceError(f"{where}: convert = \"series\" needs an epoch (the date at time 0)")
+            if "dimensions" in info:
+                raise InterfaceError(f"{where}: convert = \"series\" only applies to single values, not arrays")
+            try:
+                datetime.datetime.fromisoformat(str(info["epoch"]))
+            except ValueError as e:
+                raise InterfaceError(f"{where}: epoch {info['epoch']!r} is not an ISO 8601 date-time") from e
+            var["epoch"] = str(info["epoch"])
+            reference = "pandas:Series"
         else:
             reference = str(info["convert"])
         try:
@@ -1087,6 +1099,8 @@ def _variable(section, causality, name, info, is_class, type_definitions, versio
         if not callable(converter):
             raise InterfaceError(f"{where}: convert {info['convert']!r} is not callable")
         var["convert"] = str(info["convert"])
+    elif "epoch" in info:
+        raise InterfaceError(f"{where}: epoch only applies with convert = \"series\"")
 
     if "clocks" in info:
         if version == 2:

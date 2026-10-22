@@ -1,0 +1,22 @@
+# tellurium: the `init --probe` config, with the species concentrations read from the
+# RoadRunner object after oneStep (`r.S1`, `r.S2`). `seed` (RoadRunner's clock-based random seed)
+# is left out.
+[model]
+entry = "tellurium:loada"
+call = "oneStep"
+init_call = true
+globals = ["tellurium.tellurium:__default_plotting_engine", "tellurium.tellurium:__save_plots_to_pdf"]
+requirements = ["tellurium==2.2.13.1"]
+
+[parameters]
+ant = { start = "S1 -> S2; k1*S1; S1 = 10; k1 = 0.1" }
+
+[inputs]
+currentTime = { start = 0.0 }
+stepSize = { start = 0.1 }
+reset = { start = true }
+
+[outputs]
+y = { from = "return" }
+S1 = { from = "attr:S1" }
+S2 = { from = "attr:S2" }

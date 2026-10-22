@@ -1,0 +1,27 @@
+# sgp4: Satrec's methods are C built-ins with no signature, so `init` can't tell which
+# argument is which. Built with the `twoline2rv` classmethod from the two TLE lines, bound by
+# position; each step propagates to the Julian date jd + fr, also bound by position.
+# sgp4() returns (error, position, velocity): TEME frame, km and km/s.
+[model]
+entry = "sgp4.api:Satrec"
+create = "twoline2rv"
+call = "sgp4"
+init_call = true
+requirements = ["sgp4==2.27"]
+
+[parameters]
+line1 = { start = "1 25544U 98067A   19343.69339541  .00001764  00000-0  38792-4 0  9991", to = "pos:0", attr = false }
+line2 = { start = "2 25544  51.6439 211.2001 0007417  17.6667  85.6398 15.50103472202482", to = "pos:1", attr = false }
+
+[inputs]
+jd = { start = 2458826.5, to = "pos:0" }
+fr = { start = 0.8625, to = "pos:1" }
+
+[outputs]
+error = { from = "return:0" }
+x = { from = "return:1.0", unit = "km" }
+y = { from = "return:1.1", unit = "km" }
+z = { from = "return:1.2", unit = "km" }
+vx = { from = "return:2.0", unit = "km/s" }
+vy = { from = "return:2.1", unit = "km/s" }
+vz = { from = "return:2.2", unit = "km/s" }

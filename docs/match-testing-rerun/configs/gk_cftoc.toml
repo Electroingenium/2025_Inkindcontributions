@@ -1,0 +1,27 @@
+# CFTOCSolverV2 (ollyme102b/ros_workspace 03f5938) with the starts of the repo's test (tests/demo2.py,
+# through FollyHighLevelControllerV2): A = I, B = dt I with dt = 0.5, folly at (1, 0, 0), molly's
+# expected path at rest, horizon 50, max speed 0.2, object length 1, the road barrier y <= 0.5.
+# Written by hand: `init` can't give the step method's x0 and Xm numpy values (it rejects
+# `--start calculate_optimal_actuation_x0=call:...` and `--convert` of those names), and the
+# method indexes Xm[i, t]. Every argument here is a constant; the output is the first move.
+[model]
+entry = "CFTOCSolverV2.py:CFTOCSolverV2"
+call = "calculate_optimal_actuation"
+requirements = ["gekko==1.3.2", "numpy==2.5.4"]
+
+[model.constants]
+A = { call = "numpy:eye(3)" }
+B = { call = "numpy:diag([0.5, 0.5, 0.5])" }
+x0 = { call = "numpy:array([1.0, 0.0, 0.0])" }
+Xm = { call = "numpy:zeros((3, 50))" }
+N = 50
+umax = 0.2
+l = 1
+path_constraints = { call = "numpy:array([[0.0, 1.0, -0.5]])" }
+
+[model.call_constants]
+x0 = { call = "numpy:array([1.0, 0.0, 0.0])" }
+Xm = { call = "numpy:zeros((3, 50))" }
+
+[outputs]
+y = { from = "return", dimensions = [3] }

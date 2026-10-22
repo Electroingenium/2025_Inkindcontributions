@@ -1,0 +1,13 @@
+# uncertainties: the `init --probe` config, reading the ufloat's nominal value and standard
+# deviation instead of the object itself.
+[model]
+entry = "uncertainties:ufloat"
+requirements = ["uncertainties==3.2.3"]
+
+[inputs]
+nominal_value = { start = 1.0 }
+std_dev = { start = 0.1 }
+
+[outputs]
+n = { from = "return:nominal_value" }
+s = { from = "return:std_dev" }

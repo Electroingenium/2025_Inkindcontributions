@@ -4,6 +4,7 @@ import dataclasses
 import datetime
 import enum
 import inspect
+import types
 import json
 import keyword
 import math
@@ -325,6 +326,38 @@ def _assign_starts(init, method, starts):
     return init_starts, call_starts
 
 
+def class_called(cls, name):
+    """Whether method ``name`` of ``cls`` is written to be called on the class, without an instance.
+
+    A plain function in the class body whose first parameter isn't ``self``:
+    ``def building(df, ...)``, called as ``Model.building(df, ...)``. Called on
+    an instance, it would get the instance as ``df``. A ``staticmethod`` doesn't need this.
+
+    :param cls: the model class, or None.
+    :param name: the step method.
+    :type name: str
+    :rtype: bool
+    """
+    raw = inspect.getattr_static(cls, name, None) if cls is not None else None
+    if not isinstance(raw, types.FunctionType):
+        return False
+    params = list(inspect.signature(raw).parameters.values())
+    return not params or (params[0].name != "self"
+                          and params[0].kind in (params[0].POSITIONAL_ONLY, params[0].POSITIONAL_OR_KEYWORD))
+
+
+def _keywordless(fn):
+    """Whether ``fn`` is a ufunc, which takes its arguments only by position.
+
+    numpy ufuncs and numba ``@vectorize`` functions (``DUFunc``; psychrolib's with numba installed)
+    report named parameters but reject keyword arguments.
+
+    :param fn: a callable.
+    :rtype: bool
+    """
+    return hasattr(fn, "nin") and type(fn).__module__.split(".")[0] in ("numpy", "numba")
+
+
 def _only_varargs(fn, skip_self=True):
     """Whether ``fn`` declares no named arguments, only ``*args`` (and maybe ``**kwargs``).
 
@@ -344,7 +377,7 @@ def _only_varargs(fn, skip_self=True):
 # ---------------- shared ----------------
 
 def _arguments(fn, section, data, comments, skip_self=False, allow_time=True, constants_key="constants",
-               arrays=False, starts=None, positional=True):
+               arrays=False, starts=None, positional=True, by_keyword=False):
     """Sort the arguments of ``fn`` into variables of ``section`` and time arguments.
 
     Reads the signature with :func:`inspect.signature`. Each parameter becomes, in order of
@@ -375,6 +408,9 @@ def _arguments(fn, section, data, comments, skip_self=False, allow_time=True, co
     :type starts: dict or None
     :param positional: whether positional-only parameters are included.
     :type positional: bool
+    :param by_keyword: give ``--start`` values for ``*args, **kwargs`` as keywords, not by position
+        (the probe found the callable needs them so).
+    :type by_keyword: bool
     :raises InterfaceError: an array ``--start`` for FMI 2, or an unusable value for ``*args``.
     """
     variables = data.setdefault(section, {})
@@ -390,6 +426,7 @@ def _arguments(fn, section, data, comments, skip_self=False, allow_time=True, co
     if skip_self and params:
         params = params[1:]
     params = [_unwrap_descriptor(p) for p in params]
+    keywordless = _keywordless(fn)
     position = 0
     for p in params:
         if p.kind in (p.VAR_POSITIONAL, p.VAR_KEYWORD):
@@ -459,7 +496,7 @@ def _arguments(fn, section, data, comments, skip_self=False, allow_time=True, co
             elif converter:
                 variables[p.name]["convert"] = converter
                 comments.setdefault((section, p.name), f"passed as {converter.replace(':', '.')}(...)")
-        if p.kind is p.POSITIONAL_ONLY and len(variables) > before:
+        if (p.kind is p.POSITIONAL_ONLY or keywordless) and len(variables) > before:
             variables[p.name]["to"] = f"pos:{position}"
             position += 1
     names = {p.name for p in params}
@@ -469,7 +506,7 @@ def _arguments(fn, section, data, comments, skip_self=False, allow_time=True, co
     only_varargs = any(p.kind is p.VAR_POSITIONAL for p in params) \
         and all(p.kind in (p.VAR_POSITIONAL, p.VAR_KEYWORD) for p in params)
     # by position: for a constructor, for computed constants, and when there's no **kwargs to take them
-    by_position = only_varargs and (section == "parameters" or not any(p.kind is p.VAR_KEYWORD for p in params)
+    by_position = only_varargs and not by_keyword and (section == "parameters" or not any(p.kind is p.VAR_KEYWORD for p in params)
                                     or any(isinstance(starts[n], dict) and "call" in starts[n] for n in extra))
     for name in extra:
         computed = isinstance(starts[name], dict) and "call" in starts[name]   # call:...: a constant

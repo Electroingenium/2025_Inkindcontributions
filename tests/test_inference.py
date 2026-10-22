@@ -217,7 +217,7 @@ def test_number_like_outputs_are_kept(tmp_path):
             return {"d": Decimal("1.5"), "q": Fraction(1, 3), "h": numpy.float16(2.0), "c": 1j}
     """))
     data, _ = infer(tmp_path / "nums.py")
-    assert list(data["outputs"]) == ["d", "q", "h"]   # complex is not an FMI value
+    assert list(data["outputs"]) == ["d", "q", "h", "c_real", "c_imag"]   # complex: its two parts
 
 
 def test_pint_outputs_get_their_unit(tmp_path):
@@ -325,8 +325,9 @@ def test_fmi3_time_attribute_is_renamed(tmp_path):
                 self.time += dt
     """))
     data, _ = infer(tmp_path / "clock.py", fmi_version=3)
-    assert "time" not in data.get("locals", {})
-    assert data["locals"]["model_time"] == {"from": "attr:time"}
+    # the step's only result, so an output rather than a local
+    assert "time" not in data.get("outputs", {})
+    assert data["outputs"]["model_time"] == {"from": "attr:time"}
 
 
 @pytest.mark.parametrize("kind", ["series", "frame", "xarray"])
@@ -501,6 +502,45 @@ def test_entry_keeps_the_name_it_was_given(tmp_path):
     assert load_config(output).model["entry"] == "carbonate.py:MolWt"
 
 
+def test_generator_results_are_read_and_nested_tuples_split(tmp_path):
+    # like nashpy's Game.support_enumeration: a generator of (row strategy, column strategy) pairs
+    (tmp_path / "gen.py").write_text(textwrap.dedent('''
+        class Game:
+            def __init__(self, a=2.0):
+                self.a = a
+
+            def equilibria(self, tol=1e-9):
+                yield (0.4, 0.6), (self.a, 1.0, 0.5)
+
+            def pairs(self):
+                return (1.0, 2.0), 3.0
+    '''))
+    data, _ = infer(f"{tmp_path / 'gen.py'}:Game", call="equilibria")
+    assert data["outputs"] == {"y0_0": {"from": "return:0.0", "dimensions": [2]},
+                               "y0_1": {"from": "return:0.1", "dimensions": [3]}}
+    # a tuple of numbers stays one array, as before
+    data, _ = infer(f"{tmp_path / 'gen.py'}:Game", call="pairs")
+    assert data["outputs"] == {"y0": {"from": "return:0", "dimensions": [2]}, "y1": {"from": "return:1"}}
+
+
+def test_inputs_that_need_a_date_index_are_passed_as_series(tmp_path):
+    pytest.importorskip("pandas")
+    # like pyet's pm_fao56: the day of the year comes from an input's index
+    (tmp_path / "evap.py").write_text(textwrap.dedent('''
+        def pet(tmean=20.0, rs=10.0):
+            day = rs.index.dayofyear
+            return (tmean * 0.1 + rs * 0.01 + day * 0.0).rename("PET")
+    '''))
+    data, _ = infer(f"{tmp_path / 'evap.py'}:pet")
+    assert {name: info["convert"] for name, info in data["inputs"].items()} == {"tmean": "series", "rs": "series"}
+    assert data["outputs"] == {"y": {"from": "return"}}
+    output = tmp_path / "fmugen.toml"
+    with isolated_imports():
+        init(f"{tmp_path / 'evap.py'}:pet", output=output, probe=True)
+    config = load_config(output)
+    assert "pandas" in " ".join(config.model["requirements"])
+
+
 def test_results_that_refuse_float_are_read_through_their_properties(tmp_path):
     (tmp_path / "errors.py").write_text(textwrap.dedent('''
         class Affine:   # like uncertainties' AffineScalarFunc: __float__ raises
@@ -573,6 +613,38 @@ def test_requirements_are_the_installed_distributions_the_model_uses(tmp_path):
     data, comments = infer(tmp_path / "uses.py", probe=False)
     assert data["model"]["requirements"] == [f"pytest=={importlib.metadata.version('pytest')}"]
     assert "requirements = [" in render_toml(data, comments)
+
+
+def test_requirements_skip_a_venv_next_to_the_model(tmp_path):
+    import importlib
+    import sys
+    from fmugen.interface import _local_sources
+    # like cftoc/.venv beside cftoc/CFTOCSolverV2.py: its packages aren't the model's imports,
+    # and one of them imports __main__, which has no spec under the fmugen console script
+    import importlib.metadata
+    folder = tmp_path / "cftoc"
+    (folder / ".venv" / "lib" / "site-packages").mkdir(parents=True)
+    (folder / ".venv" / "pyvenv.cfg").write_text("home = /usr/bin\n")
+    (folder / ".venv" / "lib" / "site-packages" / "tool.py").write_text("import __main__\nimport numpy\n")
+    (folder / "solver.py").write_text(textwrap.dedent('''
+        import pytest
+
+        def f(x=1.0):
+            return {"y": 2 * x}
+    '''))
+    data, _ = infer(folder / "solver.py", config_dir=tmp_path, probe=False)
+    assert data["model"]["sources"] == ["cftoc"]
+    assert data["model"]["requirements"] == [f"pytest=={importlib.metadata.version('pytest')}"]
+    # with the config beside the model, a module imported from the venv isn't a source
+    (folder / ".venv" / "lib" / "venvtool.py").write_text("X = 1\n")
+    with isolated_imports():
+        sys.path.insert(0, str(folder / ".venv" / "lib"))
+        try:
+            importlib.import_module("venvtool")
+            sources = _local_sources((folder / "solver.py").resolve(), folder.resolve())
+        finally:
+            sys.path.pop(0)
+    assert sources == []
 
 
 def test_result_keys_that_are_not_names_get_valid_ones(tmp_path):
@@ -651,3 +723,70 @@ def test_model_files_named_like_standard_library_modules_are_refused(tmp_path):
                                           '[inputs]\nx = { start = 1.0 }\n[outputs]\ny = {}\n')
     with pytest.raises(InterfaceError, match="queue.*standard library"):
         build(tmp_path / "fmugen.toml", tmp_path / "out", output_format="folder")
+
+
+def test_ufunc_arguments_go_by_position(tmp_path):
+    # like numba's DUFunc (psychrolib with numba installed): named parameters, but no keyword arguments
+    (tmp_path / "vec.py").write_text(textwrap.dedent("""
+        import inspect
+
+        class DUFunc:
+            nin = 2
+
+            def __init__(self, fn):
+                self.fn, self.__signature__ = fn, inspect.signature(fn)
+
+            def __call__(self, *args, **kwargs):
+                if kwargs:
+                    raise TypeError("unexpected keyword arguments to ufunc")
+                return self.fn(*args)
+
+        DUFunc.__module__ = "numba.np.ufunc.dufunc"
+
+        def _ratio(dry=25.0, rh=0.5):
+            return dry * rh
+
+        ratio = DUFunc(_ratio)
+    """))
+    data, _ = infer(f"{tmp_path / 'vec.py'}:ratio", probe=False)
+    assert data["inputs"]["dry"]["to"] == "pos:0" and data["inputs"]["rh"]["to"] == "pos:1"
+
+
+def test_star_args_kwargs_constructor_gets_keywords_when_the_probe_needs_them(tmp_path):
+    # like pyquaternion's Quaternion(*args, **kwargs): Quaternion(axis=..., angle=...), not by position
+    (tmp_path / "rot.py").write_text(textwrap.dedent("""
+        class Turn:
+            def __init__(self, *args, **kwargs):
+                if args:
+                    raise ValueError("expected 4 values")
+                self.angle = kwargs["angle"] * kwargs["scale"]
+
+            def rotate(self, x=1.0):
+                return x * self.angle
+    """))
+    data, _ = infer(f"{tmp_path / 'rot.py'}:Turn", call="rotate", starts={"angle": 0.5, "scale": 2.0, "x": 3.0})
+    assert data["parameters"]["angle"] == {"start": 0.5} and data["parameters"]["scale"] == {"start": 2.0}
+    assert "x" in data["inputs"]
+
+
+@pytest.mark.parametrize("probe", [False, True])
+def test_method_without_self_is_called_on_the_class(tmp_path, probe):
+    # like Model.building(df, ...): a plain function in the class body, called on the class
+    (tmp_path / "heat.py").write_text(textwrap.dedent("""
+        class Model:
+            def building(load=2.0, gain=3.0):
+                return load * gain
+    """))
+    data, comments = infer(f"{tmp_path / 'heat.py'}:Model", call="building", probe=probe)
+    assert data["model"]["call_on_class"] is True and "has no self" in comments[("model", "call_on_class")]
+    assert set(data["inputs"]) == {"load", "gain"}   # load isn't dropped as if it were self
+
+
+def test_normal_method_is_not_called_on_the_class(tmp_path):
+    (tmp_path / "heat.py").write_text(textwrap.dedent("""
+        class Model:
+            def building(self, load=2.0):
+                return load
+    """))
+    data, _ = infer(f"{tmp_path / 'heat.py'}:Model", call="building")
+    assert "call_on_class" not in data["model"]

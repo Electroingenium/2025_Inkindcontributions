@@ -1,0 +1,254 @@
+model,config used,library version,FMU simulates?,outputs compared,max rel diff,verdict,notes
+ex_psychrometry,probe,filterpy 1.4.5,yes,24,0,match,
+ex_psychrometry,plain,filterpy 1.4.5,yes,24,0,match,
+ex_psychrometry,repo,filterpy 1.4.5,yes,24,0,match,
+ex_simple_pid,probe,simple-pid 2.0.1,yes,27,0,match,
+ex_simple_pid,plain,simple-pid 2.0.1,yes,3,0,match,
+ex_simple_pid,repo,simple-pid 2.0.1,yes,3,0,match,
+ex_rc_building,probe,filterpy 1.4.5,yes,87,0,match,
+ex_rc_building,plain,filterpy 1.4.5,yes,72,0,match,
+ex_rc_building,repo,filterpy 1.4.5,yes,15,0,match,
+ex_kalman,probe,filterpy 1.4.5,yes,12,0,match,
+ex_kalman,plain,filterpy 1.4.5,yes,0,0,not comparable,the FMU has no outputs
+ex_sampled_pid,probe,simple-pid 2.0.1,yes,27,0,match,
+ex_sampled_pid,plain,simple-pid 2.0.1,yes,3,0,match,
+pvwatts_dc,probe,pvlib 0.16.1,yes,4,0,match,
+pvwatts_dc,plain,pvlib 0.16.1,yes,4,0,match,
+sapm_cell,probe,pvlib 0.16.1,yes,4,0,match,
+sapm_cell,plain,pvlib 0.16.1,yes,4,0,match,
+alt2pres,probe,pvlib 0.16.1,yes,4,0,match,
+alt2pres,plain,pvlib 0.16.1,yes,4,0,match,
+aoi,probe,pvlib 0.16.1,yes,4,0,match,
+aoi,plain,pvlib 0.16.1,yes,4,0,match,
+effectiveness_from_NTU,probe,ht 1.2.0,yes,4,0,match,
+effectiveness_from_NTU,plain,ht 1.2.0,yes,4,0,match,
+Antoine,probe,chemicals 1.5.2,yes,4,0,match,
+Antoine,plain,chemicals 1.5.2,yes,4,0,match,
+friction_factor,probe,fluids 1.3.1,yes,4,0,match,
+friction_factor,plain,fluids 1.3.1,yes,4,0,match,
+Reynolds,probe,fluids 1.3.1,yes,4,0,match,
+Reynolds,plain,fluids 1.3.1,yes,4,0,match,
+Nu_conv_internal,probe,ht 1.2.0,yes,4,0,match,
+Nu_conv_internal,plain,ht 1.2.0,yes,4,0,match,
+TSat_P,probe,iapws 1.5.5,yes,4,0,match,
+TSat_P,plain,iapws 1.5.5,yes,4,0,match,
+Q_discrete_white_noise,probe,filterpy 1.4.5,yes,12,0,match,
+Q_discrete_white_noise,plain,filterpy 1.4.5,no,,,FMU fails,"FMICallException: fmi2DoStep failed with status 3 (error). | FMU log:                     ""fmugen init --probe finds them"") / TypeError: y is an array of shape [2, 2], not a single value: give it dimensions = [2, 2] (FMI 3) or read one element (from = ""...:0""); fmugen init --probe finds them / Send free instance message to shut down backend."
+GetHumRatioFromRelHum,probe,psychrolib 2.5.0,yes,4,0,match,
+GetHumRatioFromRelHum,plain,psychrolib 2.5.0,yes,4,0,match,
+PropsSI,probe,coolprop 8.0.0,no (build),,,FMU fails,$ /home/pc-simulacion2/cmp/v/coolprop/bin/python -m fmugen build /home/pc-simulacion2/cmp/w/m/PropsSI/probe.toml -o /home/pc-simulacion2/cmp/w/m/PropsSI/probe.fmu --capture-output --fmi 2 | fmugen: error: the config defines no FMU variables: add [inputs]/[parameters] and [outputs] (the model's arguments and results could not be inferred)
+PropsSI,plain,coolprop 8.0.0,no (build),,,FMU fails,$ /home/pc-simulacion2/cmp/v/coolprop/bin/python -m fmugen build /home/pc-simulacion2/cmp/w/m/PropsSI/plain.toml -o /home/pc-simulacion2/cmp/w/m/PropsSI/plain.fmu --capture-output --fmi 2 | fmugen: error: the config defines no FMU variables: add [inputs]/[parameters] and [outputs] (the model's arguments and results could not be inferred)
+PropsSI,hand,coolprop 8.0.0,yes,4,0,match,
+IAPWS97,probe,iapws 1.5.5,yes,213,0,match,
+IAPWS97,plain,iapws 1.5.5,no,,,FMU fails,"FMICallException: fmi2ExitInitializationMode failed with status 3 (error). | FMU log:     return float(value) / TypeError: float() argument must be a string or a real number, not 'dict' / Send free instance message to shut down backend."
+GHFilter,probe,filterpy 1.4.5,yes,6,0,match,
+GHFilter,plain,filterpy 1.4.5,yes,6,0,match,
+TCLabModel,probe,tclab 1.0.0,yes,28,0.907,not comparable,random: two direct runs differ
+TCLabModel,plain,tclab 1.0.0,yes,3,0,match,
+CartPoleEnv,probe,gymnasium 1.4.0,yes,25,1.9,not comparable,random: two direct runs differ
+CartPoleEnv,plain,gymnasium 1.4.0,no,,,FMU fails,"FMICallException: fmi2ExitInitializationMode failed with status 3 (error). | FMU log:     raise ValueError(f""{value} is out of range for {fmi_type}"") / ValueError: 232559707762415567918718384796580367064 is out of range for Integer / Send free instance message to shut down backend."
+CartPoleEnv,seeded,gymnasium 1.4.0,yes,25,0,match,
+PendulumEnv,probe,gymnasium 1.4.0,yes,25,1.69,not comparable,random: two direct runs differ
+PendulumEnv,plain,gymnasium 1.4.0,no,,,FMU fails,"FMICallException: fmi2ExitInitializationMode failed with status 3 (error). | FMU log:     raise ValueError(f""{value} is out of range for {fmi_type}"") / ValueError: 325021225623376077206281823775331846603 is out of range for Integer / Send free instance message to shut down backend."
+PendulumEnv,seeded,gymnasium 1.4.0,yes,25,0,match,
+Madgwick,probe,ahrs 0.4.0,yes,16,0,match,
+Madgwick,plain,ahrs 0.4.0,yes,0,0,not comparable,the FMU has no outputs
+Mahony,probe,ahrs 0.4.0,yes,12,0,match,
+Mahony,plain,ahrs 0.4.0,no,,,FMU fails,"FMICallException: fmi2ExitInitializationMode failed with status 3 (error). | FMU log:                     ""fmugen init --probe finds them"") / TypeError: b is an array of shape [3], not a single value: give it dimensions = [3] (FMI 3) or read one element (from = ""...:0""); fmugen init --probe finds them / Send free instance message to shut down backend."
+units_Reynolds,probe,fluids 1.3.1,no,,,FMU fails,"FMICallException: fmi2ExitInitializationMode failed with status 3 (error). | FMU log:     raise TypeError(f""{val} has no quantity"") / TypeError: 1.0 has no quantity / Send free instance message to shut down backend."
+units_Reynolds,plain,fluids 1.3.1,no,,,FMU fails,"FMICallException: fmi2ExitInitializationMode failed with status 3 (error). | FMU log:     raise TypeError(f""{val} has no quantity"") / TypeError: 1.0 has no quantity / Send free instance message to shut down backend."
+units_Reynolds,hand,fluids 1.3.1,yes,4,0,match,
+units_head_from_P,probe,fluids 1.3.1,no,,,FMU fails,"FMICallException: fmi2ExitInitializationMode failed with status 3 (error). | FMU log:     raise TypeError(f""{val} has no quantity"") / TypeError: 100000.0 has no quantity / Send free instance message to shut down backend."
+units_head_from_P,plain,fluids 1.3.1,no,,,FMU fails,"FMICallException: fmi2ExitInitializationMode failed with status 3 (error). | FMU log:     raise TypeError(f""{val} has no quantity"") / TypeError: 100000.0 has no quantity / Send free instance message to shut down backend."
+units_head_from_P,hand,fluids 1.3.1,yes,4,0,match,
+HighwayEnv,probe,highway-env 1.12.1,yes,105,1.93,not comparable,random: two direct runs differ
+HighwayEnv,plain,highway-env 1.12.1,no,,,FMU fails,"FMICallException: fmi2DoStep failed with status 3 (error). | FMU log:                     ""fmugen init --probe finds them"") / TypeError: y0 is an array of shape [5, 5], not a single value: give it dimensions = [5, 5] (FMI 3) or read one element (from = ""...:0""); fmugen init --probe finds them / Send free instance message to shut down backend."
+HighwayEnv,seeded,highway-env 1.12.1,yes,105,0,match,
+get_solarposition,probe,pvlib 0.16.1,yes,24,0,match,
+get_solarposition,plain,pvlib 0.16.1,no,,,FMU fails,"FMICallException: fmi2ExitInitializationMode failed with status 3 (error). | FMU log:     return float(value) / TypeError: float() argument must be a string or a real number, not 'DataFrame' / Send free instance message to shut down backend."
+sports_heat_stress_risk,probe,pythermalcomfort 4.6.2,yes,19,0,match,
+sports_heat_stress_risk,plain,pythermalcomfort 4.6.2,no,,,FMU fails,FMICallException: fmi2ExitInitializationMode failed with status 3 (error). | FMU log:     return float(value) / ValueError: could not convert string to float: 'Increase frequency and/or duration of rest breaks' / Send free instance message to shut down backend.
+read_tmy3,probe,pvlib 0.16.1,yes,26,0,match,
+read_tmy3,plain,pvlib 0.16.1,no,,,FMU fails,"FMICallException: fmi2ExitInitializationMode failed with status 3 (error). | FMU log: initialization failed: TypeError(""float() argument must be a string or a real number, not 'DataFrame'"") / TypeError: float() argument must be a string or a real number, not 'DataFrame'"
+JOS3,probe,pythermalcomfort 4.6.2,yes,1379,0,match,
+JOS3,plain,pythermalcomfort 4.6.2,yes,12,0,match,
+JOS3,hand,pythermalcomfort 4.6.2,yes,80,0,match,
+chronos,probe,chronos-forecasting 2.3.2,yes,2348,0,match,
+chronos,plain,chronos-forecasting 2.3.2,yes,8,0,match,
+silero_vad,probe,silero-vad 6.2.3,yes,4,0,match,
+silero_vad,plain,silero-vad 6.2.3,,,,no config,`init` wrote no config (see init_plain.log)
+granite_ttm,probe,granite-tsfm 0.3.10,yes,12680,0,match,
+granite_ttm,plain,granite-tsfm 0.3.10,,,,no config,`init` wrote no config (see init_plain.log)
+sb3_ppo,probe,stable-baselines3 2.9.0,yes,3,0,match,
+sb3_ppo,plain,stable-baselines3 2.9.0,yes,0,0,not comparable,the FMU has no outputs
+surfaces,probe,(repo example),yes,3,0.0848,not comparable,random: two direct runs differ
+surfaces,plain,(repo example),yes,3,0.222,not comparable,random: two direct runs differ
+surfaces,seeded,(repo example),yes,3,0,match,
+torchani,probe,torchani 2.9.0,yes,24,0,match,
+torchani,plain,torchani 2.9.0,no,,,FMU fails,"FMICallException: fmi2DoStep failed with status 3 (error). | FMU log: doStep failed: TypeError('species is an array of shape [1, 5], not a single value: give it dimensions = [1, 5] (FMI 3) or read one element (from = ""...:0""); fmugen init --probe finds them') /     raise TypeError(f""{var['name']} is {kind} of shape {list(shape)}, not a single value: give it "" / TypeError: species is an array of shape [1, 5], not a single value: give it dimensions = [1, 5] (FMI 3) or read one element (from = ""...:0""); fmugen init --probe finds them"
+ambiance,probe,ambiance 1.3.1,yes,0,0,not comparable,the FMU has no outputs
+ambiance,plain,ambiance 1.3.1,yes,0,0,not comparable,the FMU has no outputs
+astral,probe,astral 3.2,yes,4,0,match,
+astral,plain,astral 3.2,yes,4,0,match,
+cantera,probe,cantera 3.2.0,yes,0,0,not comparable,the FMU has no outputs
+cantera,plain,cantera 3.2.0,yes,0,0,not comparable,the FMU has no outputs
+cantera,hand,cantera 3.2.0,yes,16,0,match,
+colour,probe,colour-science 0.4.7,yes,8,0,match,
+colour,plain,colour-science 0.4.7,no,,,FMU fails,"FMICallException: fmi2ExitInitializationMode failed with status 3 (error). | FMU log: initialization failed: TypeError('y is an array of shape [2], not a single value: give it dimensions = [2] (FMI 3) or read one element (from = ""...:0""); fmugen init --probe finds them') /     raise TypeError(f""{var['name']} is {kind} of shape {list(shape)}, not a single value: give it "" / TypeError: y is an array of shape [2], not a single value: give it dimensions = [2] (FMI 3) or read one element (from = ""...:0""); fmugen init --probe finds them"
+control,probe,control 0.10.2,yes,21,0,match,
+control,plain,control 0.10.2,no,,,FMU fails,"FMICallException: fmi2DoStep failed with status 3 (error). | FMU log: doStep failed: TypeError('y is an array of shape [2], not a single value: give it dimensions = [2] (FMI 3) or read one element (from = ""...:0""); fmugen init --probe finds them') /     raise TypeError(f""{var['name']} is {kind} of shape {list(shape)}, not a single value: give it "" / TypeError: y is an array of shape [2], not a single value: give it dimensions = [2] (FMI 3) or read one element (from = ""...:0""); fmugen init --probe finds them"
+erfa,probe,pyerfa 2.0.1.5,yes,4,0,match,
+erfa,plain,pyerfa 2.0.1.5,yes,4,0,match,
+gsw,probe,gsw 3.6.23,yes,4,0,match,
+gsw,plain,gsw 3.6.23,yes,4,0,match,
+hplib,probe,hplib 1.9,yes,32,0,match,
+hplib,plain,hplib 1.9,yes,24,0,match,
+impedance,probe,impedance 1.7.1,yes,0,0,not comparable,the FMU has no outputs
+impedance,plain,impedance 1.7.1,no,,,FMU fails,"FMICallException: fmi2DoStep failed with status 3 (error). | FMU log: doStep failed: TypeError('y is an array of shape [4], not a single value: give it dimensions = [4] (FMI 3) or read one element (from = ""...:0""); fmugen init --probe finds them') /     raise TypeError(f""{var['name']} is {kind} of shape {list(shape)}, not a single value: give it "" / TypeError: y is an array of shape [4], not a single value: give it dimensions = [4] (FMI 3) or read one element (from = ""...:0""); fmugen init --probe finds them"
+mesa,probe,mesa 3.5.1,yes,4,0.0179,not comparable,random: two direct runs differ
+mesa,plain,mesa 3.5.1,no (build),,,FMU fails,$ /home/pc-simulacion2/cmp/v/mesa/bin/python -m fmugen build /home/pc-simulacion2/cmp/w/m/mesa/plain.toml -o /home/pc-simulacion2/cmp/w/m/mesa/plain.fmu --capture-output --fmi 2 | fmugen: error: the config defines no FMU variables: add [inputs]/[parameters] and [outputs] (the model's arguments and results could not be inferred)
+mesa,seeded,mesa 3.5.1,yes,4,0,match,
+metpy,probe,metpy 1.7.1,no,,,FMU fails,"FMICallException: fmi2ExitInitializationMode failed with status 3 (error). | FMU log: initialization failed: ValueError('This function changed in version(s) [\'1.0\']--double check that the function is being called properly.\n`dewpoint_from_relative_humidity` given arguments with incorrect units: `temperature` requires ""[temperature]"" but given ""none""\nA xarray DataArray or numpy array `x` can be assigned a unit as follows:\n    from metpy.units import units\n    x = x * units(""m/s"")\nFor more information see the Units Tutorial: https://unidata.github.io/MetPy/latest/tutorials/unit_tutorial.html') /     raise ValueError(msg) / ValueError: This function changed in version(s) ['1.0']--double c"
+metpy,plain,metpy 1.7.1,no,,,FMU fails,"FMICallException: fmi2ExitInitializationMode failed with status 3 (error). | FMU log: initialization failed: ValueError('This function changed in version(s) [\'1.0\']--double check that the function is being called properly.\n`dewpoint_from_relative_humidity` given arguments with incorrect units: `temperature` requires ""[temperature]"" but given ""none""\nA xarray DataArray or numpy array `x` can be assigned a unit as follows:\n    from metpy.units import units\n    x = x * units(""m/s"")\nFor more information see the Units Tutorial: https://unidata.github.io/MetPy/latest/tutorials/unit_tutorial.html') /     raise ValueError(msg) / ValueError: This function changed in version(s) ['1.0']--double c"
+metpy,hand,metpy 1.7.1,yes,4,0,match,
+neurokit2,probe,neurokit2 0.2.13,yes,400,0,match,
+neurokit2,plain,neurokit2 0.2.13,no,,,FMU fails,"FMICallException: fmi2ExitInitializationMode failed with status 3 (error). | FMU log: initialization failed: TypeError('y is an array of shape [100], not a single value: give it dimensions = [100] (FMI 3) or read one element (from = ""...:0""); fmugen init --probe finds them') /     raise TypeError(f""{var['name']} is {kind} of shape {list(shape)}, not a single value: give it "" / TypeError: y is an array of shape [100], not a single value: give it dimensions = [100] (FMI 3) or read one element (from = ""...:0""); fmugen init --probe finds them"
+pandapower,probe,pandapower 3.5.6,yes,0,0,not comparable,the FMU has no outputs
+pandapower,plain,pandapower 3.5.6,yes,0,0,not comparable,the FMU has no outputs
+ppigrf,probe,ppigrf 2.1.0,yes,12,0,match,
+ppigrf,plain,ppigrf 2.1.0,yes,12,0,match,
+pybamm,probe,pybamm 26.10.1.1,yes,11,0,match,
+pybamm,plain,pybamm 26.10.1.1,no,,,FMU fails,"FMICallException: fmi2DoStep failed with status 3 (error). | FMU log:     return float(value) / TypeError: float() argument must be a string or a real number, not 'Solution' / Send free instance message to shut down backend."
+pyet,probe,pyet 1.5.0,no,,,FMU fails,"FMICallException: fmi2ExitInitializationMode failed with status 3 (error). | FMU log: initialization failed: AttributeError(""'float' object has no attribute 'time'"") / AttributeError: 'float' object has no attribute 'index' / AttributeError: 'float' object has no attribute 'time'"
+pyet,plain,pyet 1.5.0,no,,,FMU fails,"FMICallException: fmi2ExitInitializationMode failed with status 3 (error). | FMU log: initialization failed: AttributeError(""'float' object has no attribute 'time'"") / AttributeError: 'float' object has no attribute 'index' / AttributeError: 'float' object has no attribute 'time'"
+pymsis,probe,pymsis 0.13.0,yes,44,0,match,
+pymsis,plain,pymsis 0.13.0,no,,,FMU fails,"FMICallException: fmi2ExitInitializationMode failed with status 3 (error). | FMU log: initialization failed: TypeError('y is an array of shape [1, 11], not a single value: give it dimensions = [1, 11] (FMI 3) or read one element (from = ""...:0""); fmugen init --probe finds them') /     raise TypeError(f""{var['name']} is {kind} of shape {list(shape)}, not a single value: give it "" / TypeError: y is an array of shape [1, 11], not a single value: give it dimensions = [1, 11] (FMI 3) or read one element (from = ""...:0""); fmugen init --probe finds them"
+pyproj,probe,pyproj 3.8.0,yes,29,0,match,
+pyproj,plain,pyproj 3.8.0,no,,,FMU fails,"FMICallException: fmi2DoStep failed with status 3 (error). | FMU log: doStep failed: TypeError('y is a tuple of shape [2], not a single value: give it dimensions = [2] (FMI 3) or read one element (from = ""...:0""); fmugen init --probe finds them') /     raise TypeError(f""{var['name']} is {kind} of shape {list(shape)}, not a single value: give it "" / TypeError: y is a tuple of shape [2], not a single value: give it dimensions = [2] (FMI 3) or read one element (from = ""...:0""); fmugen init --probe finds them"
+pyromat,probe,pyromat 2.2.6,yes,4,0,match,
+pyromat,plain,pyromat 2.2.6,,,,no config,`init` wrote no config (see init_plain.log)
+pysolar,probe,pysolar 0.13,yes,4,0,match,
+pysolar,plain,pysolar 0.13,no,,,FMU fails,"FMICallException: fmi2ExitInitializationMode failed with status 3 (error). | FMU log: initialization failed: NoTimeZoneInfoError() /     raise NoTimeZoneInfoError(argname, dt) / pysolar.tzinfo_check.NoTimeZoneInfoError: datetime value '2026-10-21 00:00:00' given for arg 'when' should be made timezone-aware."
+pytci,probe,pytci 1.2.0,yes,0,0,not comparable,the FMU has no outputs
+pytci,plain,pytci 1.2.0,yes,16,0,match,
+pytci,hand,pytci 1.2.0,yes,16,0,match,
+river,probe,river 0.26.1,yes,0,0,not comparable,the FMU has no outputs
+river,plain,river 0.26.1,no,,,FMU fails,"FMICallException: fmi2DoStep failed with status 3 (error). | FMU log: AttributeError: 'LinearRegression' object has no attribute 'max_cum_l1' /     raise LookupError(f""{v['name']}: cannot read {describe(v['from'])} ({e!r})"") from e / LookupError: max_cum_l1: cannot read attribute 'max_cum_l1' (AttributeError(""'LinearRegression' object has no attribute 'max_cum_l1'""))"
+rtb,probe,roboticstoolbox-python 1.4.4,yes,482,0,match,
+rtb,plain,roboticstoolbox-python 1.4.4,no,,,FMU fails,"FMICallException: fmi2DoStep failed with status 3 (error). | FMU log: doStep failed: TypeError(""float() argument must be a string or a real number, not 'SE3'"") / TypeError: float() argument must be a string or a real number, not 'SE3'"
+seirsplus,probe,seirsplus 1.0.9,yes,0,0,not comparable,the FMU has no outputs
+seirsplus,plain,seirsplus 1.0.9,yes,0,0,not comparable,the FMU has no outputs
+sgp4,probe,sgp4 2.27,,,,no config,`init` wrote no config (see init_probe.log)
+sgp4,plain,sgp4 2.27,,,,no config,`init` wrote no config (see init_plain.log)
+simglucose,probe,simglucose 0.2.11,yes,64,0,match,
+simglucose,plain,simglucose 0.2.11,yes,0,0,not comparable,the FMU has no outputs
+skops,probe,scikit-learn 1.9.1,yes,3,0,match,
+skops,plain,scikit-learn 1.9.1,,,,no config,`init` wrote no config (see init_plain.log)
+thermo,probe,thermo 0.6.1,yes,823,0,match,
+thermo,plain,thermo 0.6.1,no,,,FMU fails,"FMICallException: fmi2ExitInitializationMode failed with status 3 (error). | FMU log: initialization failed: TypeError('CAS is a string (\'7732-18-5\'), not a Real: set type = ""String"" for it in the config') /     raise TypeError(f""{var['name']} is a string ({value[:80]!r}), not a {var['type']}: "" / TypeError: CAS is a string ('7732-18-5'), not a Real: set type = ""String"" for it in the config"
+vollib,probe,py-vollib 1.0.12,yes,4,0,match,
+vollib,plain,py-vollib 1.0.12,yes,4,0,match,
+windpowerlib,probe,windpowerlib 0.2.2,yes,4,0,match,
+windpowerlib,plain,windpowerlib 0.2.2,yes,4,0,match,
+anastruct,probe,anastruct 1.7.0,yes,209,0,match,
+anastruct,plain,anastruct 1.7.0,no,,,FMU fails,"FMICallException: fmi2DoStep failed with status 3 (error). | FMU log: doStep failed: TypeError('buckling_factor is None') /     raise TypeError(f""{var['name']} is None"") / TypeError: buckling_factor is None"
+antropy2,probe,antropy 0.2.3,yes,4,0,match,
+antropy2,plain,antropy 0.2.3,yes,4,0,match,
+astropy,probe,astropy 8.0.2,yes,12,0,match,
+astropy,plain,astropy 8.0.2,yes,12,0,match,
+biopython,probe,biopython 1.88,yes,4,0,match,
+biopython,plain,biopython 1.88,yes,4,0,match,
+blackscholes,probe,blackscholes 0.2.2,yes,4,0,match,
+blackscholes,plain,blackscholes 0.2.2,yes,3,0,match,
+commpy,probe,scikit-commpy 0.8.0,yes,0,0,not comparable,the FMU has no outputs
+commpy,plain,scikit-commpy 0.8.0,no,,,FMU fails,"FMICallException: fmi2DoStep failed with status 3 (error). | FMU log: doStep failed: TypeError('y is an array of shape [2], not a single value: give it dimensions = [2] (FMI 3) or read one element (from = ""...:0""); fmugen init --probe finds them') /     raise TypeError(f""{var['name']} is {kind} of shape {list(shape)}, not a single value: give it "" / TypeError: y is an array of shape [2], not a single value: give it dimensions = [2] (FMI 3) or read one element (from = ""...:0""); fmugen init --probe finds them"
+electricpy,probe,electricpy 0.3.0,yes,16,0,match,
+electricpy,plain,electricpy 0.3.0,yes,0,0,not comparable,the FMU has no outputs
+haversine,probe,haversine 2.9.0,yes,4,0,match,
+haversine,plain,haversine 2.9.0,yes,4,0,match,
+heartpy,probe,heartpy 1.2.7,yes,208484,0,match,
+heartpy,plain,heartpy 1.2.7,no,,,FMU fails,"FMICallException: fmi2ExitInitializationMode failed with status 3 (error). | FMU log: initialization failed: TypeError(""float() argument must be a string or a real number, not 'dict'"") / TypeError: float() argument must be a string or a real number, not 'dict'"
+librosa,probe,librosa 1.0.0,yes,4,0,match,
+librosa,plain,librosa 1.0.0,yes,4,0,match,
+mendeleev,probe,mendeleev 1.3.0,yes,291,0,match,
+mendeleev,plain,mendeleev 1.3.0,yes,4,0,match,
+meteocalc,probe,meteocalc 1.1.0,yes,4,0,match,
+meteocalc,plain,meteocalc 1.1.0,yes,4,0,match,
+nashpy,probe,nashpy 0.0.43,yes,0,0,not comparable,the FMU has no outputs
+nashpy,plain,nashpy 0.0.43,no,,,FMU fails,"FMICallException: fmi2DoStep failed with status 3 (error). | FMU log: doStep failed: TypeError(""float() argument must be a string or a real number, not 'generator'"") / TypeError: float() argument must be a string or a real number, not 'generator'"
+npf,probe,numpy-financial 1.1.0,yes,4,0,match,
+npf,plain,numpy-financial 1.1.0,yes,4,0,match,
+numdifftools,probe,numdifftools 0.11.1,yes,7,0,match,
+numdifftools,plain,numdifftools 0.11.1,yes,7,0,match,
+obspy,probe,obspy 1.5.1,yes,12,0,match,
+obspy,plain,obspy 1.5.1,yes,0,0,not comparable,the FMU has no outputs
+openap,probe,openap 2.6.2,yes,4,0,match,
+openap,plain,openap 2.6.2,yes,3,0,match,
+opencv,probe,opencv-python 5.0.0.93,yes,8,0,match,
+opencv,plain,opencv-python 5.0.0.93,yes,0,0,not comparable,the FMU has no outputs
+openturns,probe,openturns 1.27.post1,yes,8,0,match,
+openturns,plain,openturns 1.27.post1,no,,,FMU fails,"FMICallException: fmi2ExitInitializationMode failed with status 3 (error). | FMU log: initialization failed: TypeError(""Wrong number or type of arguments for overloaded function 'new_Normal'.\n  Possible C/C++ prototypes are:\n    OT::Normal::Normal(OT::UnsignedInteger const)\n    OT::Normal::Normal()\n    OT::Normal::Normal(OT::Scalar const,OT::Scalar const)\n    OT::Normal::Normal(OT::Point const &,OT::Point const &)\n    OT::Normal::Normal(OT::Point const &,OT::Point const &,OT::CorrelationMatrix const &)\n    OT::Normal::Normal(OT::Point const &,OT::CovarianceMatrix const &)\n    OT::Normal::Normal(OT::Normal const &)\n"") / TypeError: Wrong number or type of arguments for overloaded func"
+pedon,probe,pedon 0.1.0,yes,4,0,match,
+pedon,plain,pedon 0.1.0,yes,0,0,not comparable,the FMU has no outputs
+pyco2sys,probe,pyco2sys 1.8.3.4,yes,360,0,match,
+pyco2sys,plain,pyco2sys 1.8.3.4,no,,,FMU fails,"FMICallException: fmi2ExitInitializationMode failed with status 3 (error). | FMU log: initialization failed: TypeError(""float() argument must be a string or a real number, not 'dict'"") / TypeError: float() argument must be a string or a real number, not 'dict'"
+pyfluids,plain,pyfluids 4.0.0,no,,,FMU fails,"FMICallException: fmi2ExitInitializationMode failed with status 3 (error). | FMU log: initialization failed: ValueError('Invalid or not defined state!') /     raise ValueError(""Invalid or not defined state!"") / ValueError: Invalid or not defined state!"
+pyfluids,probe,pyfluids 4.0.0,yes,111,0,match,
+pygfunction,probe,pygfunction 2.3.1,yes,4,0,match,
+pygfunction,plain,pygfunction 2.3.1,yes,4,0,match,
+pykalman,probe,pykalman 0.11.2,yes,8,0,match,
+pykalman,plain,pykalman 0.11.2,yes,6,0,match,
+pyloudnorm,probe,pyloudnorm 0.2.0,no,,,FMU fails,"FMICallException: fmi2ExitInitializationMode failed with status 3 (error). | FMU log: initialization failed: ValueError('blockwise_loudness has 0 values, expected 17') /     raise ValueError(f""{var['name']} has {len(flat)} values, expected {n}"") / ValueError: blockwise_loudness has 0 values, expected 17"
+pyloudnorm,plain,pyloudnorm 0.2.0,yes,3,0,match,
+pymap3d,probe,pymap3d 3.2.0,yes,12,0,match,
+pymap3d,plain,pymap3d 3.2.0,no,,,FMU fails,"FMICallException: fmi2ExitInitializationMode failed with status 3 (error). | FMU log: initialization failed: TypeError('y is a tuple of shape [3], not a single value: give it dimensions = [3] (FMI 3) or read one element (from = ""...:0""); fmugen init --probe finds them') /     raise TypeError(f""{var['name']} is {kind} of shape {list(shape)}, not a single value: give it "" / TypeError: y is a tuple of shape [3], not a single value: give it dimensions = [3] (FMI 3) or read one element (from = ""...:0""); fmugen init --probe finds them"
+pymunk,probe,pymunk 7.3.1,yes,36,0,match,
+pymunk,plain,pymunk 7.3.1,yes,36,0,match,
+pyorbital,probe,pyorbital 1.14.0,yes,4,0,match,
+pyorbital,plain,pyorbital 1.14.0,yes,4,0,match,
+pyquaternion,probe,pyquaternion 0.9.9,no,,,FMU fails,"FMICallException: fmi2ExitInitializationMode failed with status 3 (error). | FMU log: initialization failed: ValueError('Unexpected number of elements in sequence. Got: 2, Expected: 4.') /     raise ValueError(""Unexpected number of elements in sequence. Got: {}, Expected: {}."".format(len(seq), n)) / ValueError: Unexpected number of elements in sequence. Got: 2, Expected: 4."
+pyquaternion,plain,pyquaternion 0.9.9,no,,,FMU fails,"FMICallException: fmi2ExitInitializationMode failed with status 3 (error). | FMU log: initialization failed: ValueError('Unexpected number of elements in sequence. Got: 2, Expected: 4.') /     raise ValueError(""Unexpected number of elements in sequence. Got: {}, Expected: {}."".format(len(seq), n)) / ValueError: Unexpected number of elements in sequence. Got: 2, Expected: 4."
+pyteomics,probe,pyteomics 5.0.1,yes,4,0,match,
+pyteomics,plain,pyteomics 5.0.1,yes,4,0,match,
+pythermalcomfort,probe,pythermalcomfort 4.6.2,yes,11,0,match,
+pythermalcomfort,plain,pythermalcomfort 4.6.2,no,,,FMU fails,"FMICallException: fmi2ExitInitializationMode failed with status 3 (error). | FMU log: initialization failed: TypeError('tsv is a string (\'Neutral\'), not a Real: set type = ""String"" for it in the config') /     raise TypeError(f""{var['name']} is a string ({value[:80]!r}), not a {var['type']}: "" / TypeError: tsv is a string ('Neutral'), not a Real: set type = ""String"" for it in the config"
+pywt,probe,pywavelets 1.10.0,yes,72,0,match,
+pywt,plain,pywavelets 1.10.0,no,,,FMU fails,"FMICallException: fmi2ExitInitializationMode failed with status 3 (error). | FMU log: initialization failed: TypeError('y0 is an array of shape [9], not a single value: give it dimensions = [9] (FMI 3) or read one element (from = ""...:0""); fmugen init --probe finds them') /     raise TypeError(f""{var['name']} is {kind} of shape {list(shape)}, not a single value: give it "" / TypeError: y0 is an array of shape [9], not a single value: give it dimensions = [9] (FMI 3) or read one element (from = ""...:0""); fmugen init --probe finds them"
+pyxirr,probe,pyxirr 0.10.8,yes,4,0,match,
+pyxirr,plain,pyxirr 0.10.8,yes,0,0,not comparable,the FMU has no outputs
+quantecon,probe,quantecon 0.13.1,yes,45,0,match,
+quantecon,plain,quantecon 0.13.1,yes,30,0,match,
+quantlib,probe,quantlib 1.44,yes,4,0,match,
+quantlib,plain,quantlib 1.44,yes,4,0,match,
+radioactivedecay,probe,radioactivedecay 0.6.1,yes,8,0,match,
+radioactivedecay,plain,radioactivedecay 0.6.1,no,,,FMU fails,"FMICallException: fmi2DoStep failed with status 3 (error). | FMU log: doStep failed: TypeError(""float() argument must be a string or a real number, not 'Inventory'"") / TypeError: float() argument must be a string or a real number, not 'Inventory'"
+rainflow,probe,rainflow 3.2.0,yes,32,0,match,
+rainflow,plain,rainflow 3.2.0,no,,,FMU fails,"FMICallException: fmi2ExitInitializationMode failed with status 3 (error). | FMU log: initialization failed: TypeError('y is a list of shape [4], not a single value: give it dimensions = [4] (FMI 3) or read one element (from = ""...:0""); fmugen init --probe finds them') /     raise TypeError(f""{var['name']} is {kind} of shape {list(shape)}, not a single value: give it "" / TypeError: y is a list of shape [4], not a single value: give it dimensions = [4] (FMI 3) or read one element (from = ""...:0""); fmugen init --probe finds them"
+rdkit,probe,rdkit 2026.9.1,yes,4,0,match,
+rdkit,plain,rdkit 2026.9.1,no (build),,,FMU fails,$ /home/pc-simulacion2/cmp/v/rdkit/bin/python -m fmugen build /home/pc-simulacion2/cmp/w/m/rdkit/plain.toml -o /home/pc-simulacion2/cmp/w/m/rdkit/plain.fmu --capture-output --fmi 2 | fmugen: error: the config defines no FMU variables: add [inputs]/[parameters] and [outputs] (the model's arguments and results could not be inferred)
+scipysignal,probe,scipy 1.18.1,yes,16,0,match,
+scipysignal,plain,scipy 1.18.1,yes,0,0,not comparable,the FMU has no outputs
+shapely,probe,shapely 2.2.0,yes,68,0,match,
+shapely,plain,shapely 2.2.0,yes,0,0,not comparable,the FMU has no outputs
+simpy,probe,simpy 4.1.2,no,,,FMU fails,FMICallException: fmi2DoStep failed with status 3 (error). | FMU log: doStep failed: ValueError('until (1.0) must be greater than the current simulation time') /     raise ValueError( / ValueError: until (1.0) must be greater than the current simulation time
+simpy,plain,simpy 4.1.2,no,,,FMU fails,"FMICallException: fmi2DoStep failed with status 3 (error). | FMU log: doStep failed: TypeError('y is None') /     raise TypeError(f""{var['name']} is None"") / TypeError: y is None"
+skfuzzy,probe,scikit-fuzzy 0.5.0,yes,4,0,match,
+skfuzzy,plain,scikit-fuzzy 0.5.0,yes,4,0,match,
+skimage,probe,scikit-image 0.26.0,yes,12,0,match,
+skimage,plain,scikit-image 0.26.0,yes,0,0,not comparable,the FMU has no outputs
+statsmodels,probe,statsmodels 0.15.0,yes,8,0,match,
+statsmodels,plain,statsmodels 0.15.0,yes,8,0,match,
+tellurium,plain,tellurium 2.2.13.1,yes,3,0,match,
+tellurium,probe,tellurium 2.2.13.1,yes,4,0,match,"random by design, not compared: seed"
+thermofeel,probe,thermofeel 2.3.0,yes,4,0,match,
+thermofeel,plain,thermofeel 2.3.0,no,,,FMU fails,"FMICallException: fmi2ExitInitializationMode failed with status 3 (error). | FMU log: initialization failed: ValueError('Calling nonzero on 0d arrays is not allowed. Use np.atleast_1d(scalar).nonzero() instead. If the context of this error is of the form `arr[nonzero(cond)]`, just use `arr[cond]`.') / ValueError: Calling nonzero on 0d arrays is not allowed. Use np.atleast_1d(scalar).nonzero() instead. If the context of this error is of the form `arr[nonzero(cond)]`, just use `arr[cond]`."
+timezonefinder,probe,timezonefinder 9.1.0,yes,18,0,match,
+timezonefinder,plain,timezonefinder 9.1.0,yes,18,0,match,
+tmm2,probe,tmm 0.2.0,yes,60,0,match,
+tmm2,plain,tmm 0.2.0,no,,,FMU fails,"FMICallException: fmi2ExitInitializationMode failed with status 3 (error). | FMU log: initialization failed: TypeError('kz_list is an array of shape [3], not a single value: give it dimensions = [3] (FMI 3) or read one element (from = ""...:0""); fmugen init --probe finds them') /     raise TypeError(f""{var['name']} is {kind} of shape {list(shape)}, not a single value: give it "" / TypeError: kz_list is an array of shape [3], not a single value: give it dimensions = [3] (FMI 3) or read one element (from = ""...:0""); fmugen init --probe finds them"
+transforms3d,probe,transforms3d 0.4.2,yes,16,0,match,
+transforms3d,plain,transforms3d 0.4.2,yes,0,0,not comparable,the FMU has no outputs
+uncertainties,probe,uncertainties 3.2.3,yes,4,0,match,
+uncertainties,plain,uncertainties 3.2.3,no,,,FMU fails,"FMICallException: fmi2ExitInitializationMode failed with status 3 (error). | FMU log:   File ""/home/pc-simulacion2/cmp/v/uncertainties/lib/python3.13/site-packages/uncertainties/ops.py"", line 285, in raise_error /     raise TypeError( / TypeError: can't convert an affine function (<class 'uncertainties.core.Variable'>) to float; use x.nominal_value"
+ex_kalman_repo3,"repo (FMI 3, run.py)",filterpy 1.4.5,yes (run.py loop),350,0,match,
+ex_sampled_pid_repo3,"repo (FMI 3, run.py)",simple-pid 2.0.1,yes (run.py loop),82,1.35e-16,match,

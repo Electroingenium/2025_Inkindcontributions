@@ -1,0 +1,35 @@
+--- last run
++++ rerun
+@@ -4,10 +4,6 @@
+ [inputs]
+ ids = { start = "Fe" }  # start from --start
+ [outputs]
+-dipole_polarizability_unc = {}
+-molcas_gv_color = { type = "String" }
+-discoverers = { type = "String" }
+-name = { type = "String" }
+ name_origin = { type = "String" }
+ period = {}  # an int in the probe; Real, since results often vary: type = "Integer" if it is a count
+ electron_affinity = {}
+@@ -24,9 +20,9 @@
+ symbol = { type = "String" }
+ en_pauling = {}
+ thermal_conductivity = {}
+-uses = { type = "String" }
+ en_gunnarsson_lundqvist = {}
+ econf = { type = "String" }
++uses = { type = "String" }
+ abundance_crust = {}
+ en_robles_bartolotti = {}
+ vdw_radius = {}
+@@ -79,6 +75,10 @@
+ description = { type = "String" }
+ molar_heat_capacity = {}
+ dipole_polarizability = {}
++molcas_gv_color = { type = "String" }
++dipole_polarizability_unc = {}
++name = { type = "String" }
++discoverers = { type = "String" }
+ boiling_point = {}
+ melting_point = {}
+ nist_webbook_url = { type = "String" }

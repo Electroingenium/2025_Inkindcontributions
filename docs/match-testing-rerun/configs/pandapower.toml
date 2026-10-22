@@ -1,0 +1,19 @@
+# pandapower: runpp(net) returns None and writes its results onto net, which a function entry
+# can't read back. run_contingency(net, nminus1_cases={}) runs the same runpp on net (its N-0
+# case, with runpp's default options) and returns the results as a dict of arrays, so it is the
+# entry here. Each step runs the power flow again on the same net.
+[model]
+entry = "pandapower.contingency:run_contingency"
+requirements = ["pandapower==3.5.6"]
+
+[model.constants]
+net = { call = "pandapower.networks:example_simple()" }
+nminus1_cases = {}
+
+[inputs]
+write_to_net = { start = true }
+
+[outputs]
+vm_pu = { from = "return:bus.vm_pu", dimensions = [7] }                     # net.res_bus.vm_pu
+line_loading_percent = { from = "return:line.loading_percent", dimensions = [4] }   # net.res_line.loading_percent
+trafo_loading_percent = { from = "return:trafo.loading_percent.0" }          # net.res_trafo.loading_percent

@@ -1,6 +1,6 @@
 # UniFMU: bugs and limitations
 
-Problems that come from [UniFMU](https://github.com/INTO-CPS-Association/unifmu) **0.14.0** (the version fmugen requires), not from fmugen. Each entry says where it was found, its effect on fmugen FMUs, and the workaround, if any. Sources: fmugen's own testing ([tested-models.md](tested-models.md), [tested-models-round2.md](tested-models-round2.md), [tested-models-rerun.md](tested-models-rerun.md)) and the [UniFMU README](https://github.com/INTO-CPS-Association/unifmu/blob/master/README.md).
+Problems that come from [UniFMU](https://github.com/INTO-CPS-Association/unifmu) **0.14.0** (the version fmugen requires), not from fmugen. Each entry says where it was found, its effect on fmugen FMUs, and the workaround, if any. Sources: fmugen's own testing ([tested-models.md](tested-models.md)) and the [UniFMU README](https://github.com/INTO-CPS-Association/unifmu/blob/master/README.md).
 
 | # | Problem | Kind | Workaround in fmugen |
 |---|---|---|---|
@@ -49,7 +49,7 @@ When an importer exits without calling `fmi2FreeInstance` / `fmi3FreeInstance`, 
 
 Effects: the orphaned backend holds the importer's stdout/stderr, so anything reading them through a pipe waits forever, and the orphans pile up. Details in [fmpy-limitations.md §1](fmpy-limitations.md#1-simulate_fmu-doesnt-free-the-instance-after-an-fmu-error).
 
-Found in [tested-models-round2.md](tested-models-round2.md) (problem 1). Reproduce: `fmpy simulate failing.fmu 2>&1 | Out-Null` in PowerShell never returns, and the count of `main.py` processes goes up by 2.
+Found in [tested models](tested-models.md) (problem 1). Reproduce: `fmpy simulate failing.fmu 2>&1 | Out-Null` in PowerShell never returns, and the count of `main.py` processes goes up by 2.
 
 **Workaround:** free the instance after an error (see the FMPy entry). With `fmpy simulate`, send the output to a file, not a pipe, and kill leftover `main.py` processes.
 
@@ -59,7 +59,7 @@ Found in [tested-models-round2.md](tested-models-round2.md) (problem 1). Reprodu
 
 fmugen sends the full Python traceback of a failure to the FMI log (`logStatusError`). UniFMU drops log messages when the importer instantiates the FMU with `loggingOn=False`, which `fmpy simulate` does, even with `--fmi-logging`. The user then sees only `fmi3ExitInitializationMode failed with status 3`, with no reason.
 
-Found in [tested-models-round2.md](tested-models-round2.md) (problem 7).
+Found in [tested models](tested-models.md) (problem 7).
 
 **Workaround:** turn on debug logging in the importer, e.g. `fmpy.simulate_fmu(…, debug_logging=True, logger=print)`.
 
@@ -126,12 +126,12 @@ The callback type is variadic (`fmiapi/src/fmi2/fmi2_types.rs`, `Fmi2CallbackLog
 
 **FMI 3 is not affected:** its logger takes a plain message, not a format string.
 
-**Found with:** `joblib:load` + `julien-c/skops-digits` in FMI 2 ([tested-models-round2.md](tested-models-round2.md#rerun-after-the-fixes-2026-10-07)). While the FMU initializes, `huggingface_hub` downloads the model and its HTTP library logs the download URL, which contains `%3B`, `%22s` and `%27s`. fmugen forwards the record. FMPy formats FMI 2 messages in a native proxy (`fmpy.logging.addLoggerProxy`) with the variadic arguments, so `simulate_fmu(…, debug_logging=True, logger=…)` crashed with `OSError: access violation reading 0x…21xx`, 4 times out of 4.
+**Found with:** `joblib:load` + `julien-c/skops-digits` in FMI 2 ([tested models](tested-models.md)). While the FMU initializes, `huggingface_hub` downloads the model and its HTTP library logs the download URL, which contains `%3B`, `%22s` and `%27s`. fmugen forwards the record. FMPy formats FMI 2 messages in a native proxy (`fmpy.logging.addLoggerProxy`) with the variadic arguments, so `simulate_fmu(…, debug_logging=True, logger=…)` crashed with `OSError: access violation reading 0x…21xx`, 4 times out of 4.
 - With `HF_HUB_OFFLINE=1` (no download, no URL in the log), the same FMU ran 2 times out of 2 and predicted 0.
 - Calling FMPy's proxy directly with a message containing `%27%27x` returns `%27x`, which shows the text is formatted.
 - Plain `fmpy simulate` doesn't crash, because logging is off and nothing is formatted.
 
-**Also found with:** psychrolib's `GetHumRatioFromRelHum` in FMI 2 ([tested-models-rerun.md](tested-models-rerun.md)). The FMU fails at initialization for its own reason: the function is a numba ufunc, which takes no keyword arguments (`TypeError: unexpected keyword arguments to ufunc: 'Pressure', 'RelHum', 'TDryBulb'`). fmugen sends the traceback to the log, and the traceback quotes numba's source line `raise TypeError("unexpected keyword arguments to ufunc: %s" % …)`, so the message contains `%s`. Results:
+**Also found with:** psychrolib's `GetHumRatioFromRelHum` in FMI 2 ([tested models](tested-models.md)). The FMU fails at initialization for its own reason: the function is a numba ufunc, which takes no keyword arguments (`TypeError: unexpected keyword arguments to ufunc: 'Pressure', 'RelHum', 'TDryBulb'`). fmugen sends the traceback to the log, and the traceback quotes numba's source line `raise TypeError("unexpected keyword arguments to ufunc: %s" % …)`, so the message contains `%s`. Results:
 - `simulate_fmu(…, debug_logging=True, logger=…)`: `OSError: exception: access violation reading 0x00000000000009AA`, before the logger gets any message.
 - Logging off: a clean `fmi2ExitInitializationMode failed with status 3`, no crash.
 - The same model in FMI 3, with logging on: the `TypeError` is reported cleanly.
@@ -151,7 +151,7 @@ When the backend process exits while UniFMU waits for its reply, UniFMU's native
 
 The underlying failure is in the backend, not in UniFMU. UniFMU's part is turning it into a process abort instead of an error. Other backend exits are reported cleanly: in the same runs, three PyTorch FMUs whose backend exited at instantiation got `Instantiation of fmi2 slave failed; … backend exited unexpectedly with exit status 1`, and so did the round-3 FMUs whose `{ call = … }` constant failed. What decides between the clean error and the panic wasn't established.
 
-**Found with:** 12 FMUs built with `fmugen build --compile pyinstaller` in [tested-models-rerun.md](tested-models-rerun.md). The same configs without `--compile` simulate. Running each frozen backend (`resources/dist/main/main.exe`) directly against a ZeroMQ REP socket, and sending it UniFMU's own FMI 2 commands, showed that each backend **exits** during a call:
+**Found with:** 12 FMUs built with `fmugen build --compile pyinstaller` in [tested models](tested-models.md). The same configs without `--compile` simulate. Running each frozen backend (`resources/dist/main/main.exe`) directly against a ZeroMQ REP socket, and sending it UniFMU's own FMI 2 commands, showed that each backend **exits** during a call:
 
 | FMU | Call | Backend error |
 |---|---|---|
@@ -166,7 +166,7 @@ The underlying failure is in the backend, not in UniFMU. UniFMU's part is turnin
 | cantera `Solution` | instantiate | `ImportError: dynamic module does not define module export function (PyInit_drawnetwork)` |
 | pymsis `calculate` | exitInitializationMode | `MSIS parameter set …\pymsis/msis21.parm not found. Stopping.` (Fortran `STOP`, exit code 0) |
 
-Every one of these is a file, module or extension that PyInstaller left out of the frozen FMU, which is an fmugen `--compile` problem ([tested-models-rerun.md](tested-models-rerun.md)). fmugen now collects them ([packaging.md](packaging.md#what-the-compiler-is-told)), and all 12 compiled FMUs simulate. The UniFMU behaviour described here is unchanged: any other backend exit still aborts the importer. Through FMPy, each of these 12 FMUs aborted the Python process with the panic above, every time. `_TSat_P` was rerun alone, with no other load: 3 aborts out of 3. Building without `--capture-output` didn't make the backend's output visible either.
+Every one of these is a file, module or extension that PyInstaller left out of the frozen FMU, which is an fmugen `--compile` problem ([tested models](tested-models.md)). fmugen now collects them ([packaging.md](packaging.md#what-the-compiler-is-told)), and all 12 compiled FMUs simulate. The UniFMU behaviour described here is unchanged: any other backend exit still aborts the importer. Through FMPy, each of these 12 FMUs aborted the Python process with the panic above, every time. `_TSat_P` was rerun alone, with no other load: 3 aborts out of 3. Building without `--capture-output` didn't make the backend's output visible either.
 
 **Who is affected:** any UniFMU FMU whose backend can exit during a call, e.g. a frozen backend with a missing file, an uncaught exception in the backend's own code, or native code that calls `exit`. Since the importer process dies, a co-simulation master loses every other FMU too.
 

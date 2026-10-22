@@ -23,8 +23,8 @@ from fmugen.templates.fmugen_runtime._helpers import (
     _capture_output, _clock_of, _is_number, _quiet_debug_logging,
     assemble_items, coerce, converter, describe, dump_state,
     flatten, get_path, is_literal_constant, keyword_constants,
-    load_entry, load_state, pick, plain_number, reshape,
-    resolve_constant, resolve_reference, rng_states, set_path,
+    load_entry, load_state, outside_bundle, pick, plain_number, reshape,
+    resolve_constant, resolve_reference, results_of, rng_states, set_path,
     set_rng_states, split_global,
 )
 
@@ -208,11 +208,12 @@ class Engine:
 
         self.logging_on = True
         _quiet_debug_logging()
-        hf_cache = self.resources_dir / "hf_cache"
+        hf_cache = outside_bundle(self.resources_dir) / "hf_cache"
         if hf_cache.is_dir():   # Hugging Face models bundled by fmugen build: load them from the FMU, offline
             os.environ.update(HF_HUB_CACHE=str(hf_cache), HF_HUB_OFFLINE="1", TRANSFORMERS_OFFLINE="1")
         cwd = self.interface.get("cwd")
-        self.cwd = self.resources_dir / cwd if cwd is not None else None
+        # kept outside a compiled backend's bundle, at the same place under resources/
+        self.cwd = outside_bundle(self.resources_dir) / cwd if cwd is not None else None
         with self._in_model_dir():   # the model may read files when it is imported
             self.module, self.entry = load_entry(self.interface, self.resources_dir)
             self.enums = {
@@ -222,7 +223,8 @@ class Engine:
             # constants ({ call = ... } may download or compute) are resolved when the FMU initializes,
             # where a failure is reported to the importer with its traceback (resolve_constants)
             self.constants = self.call_constants = None
-            self.converters = {v["name"]: converter(v) for v in self.variables if v.get("convert")}
+            # "series" dates its value at the FMU time (the start of the step being made)
+            self.converters = {v["name"]: converter(v, lambda: self.time) for v in self.variables if v.get("convert")}
             # [model] globals: module-level state, put back to its import-time value on reset
             self.globals = [split_global(ref) for ref in self.interface.get("globals", [])]
             self.global_starts = copy.deepcopy(self._read_globals())
@@ -274,6 +276,8 @@ class Engine:
         self.mode = "instantiated"
         self.time = self.experiment.get("start_time", 0.0)
         self.start_time, self.stop_time, self.tolerance = self.time, None, None
+        # call: setters: value last passed, run at initialization and not yet by a step, run this step
+        self._setter_last, self._setter_fresh, self._setter_called = {}, set(), set()
         self.clock_active = {name: False for name in self.clocks}
         self.clock_interval = {name: c.get("interval") for name, c in self.clocks.items()}
         self.clock_shift = {name: c.get("shift", 0.0) for name, c in self.clocks.items()}
@@ -353,9 +357,10 @@ class Engine:
                 self.obj = self._invoke(getattr(self.entry, create) if create else self.entry,
                                         *self._positional(kind="initpos"), **kwargs)
                 self._run_setup(after_construction=True)
-                self._apply_attributes(clock=None)
+                self._setter_last, self._setter_fresh, self._setter_called = {}, set(), set()
+                self._apply_attributes(clock=None, initial=True)
                 for name in self.clocks:
-                    self._apply_attributes(clock=name)
+                    self._apply_attributes(clock=name, initial=True)
             if self.interface["entry"].get("init_call"):
                 result = self._call(self.time, self.experiment.get("step_size", 0.0))
                 self._read_results(result, have_result=True, update_states=False, missing_ok=True)
@@ -404,6 +409,7 @@ class Engine:
         saved = self.serialize()[1] if self.discard_on and self.interface.get("save_state", True) else None
 
         ticked = []
+        self._setter_called.clear()   # setters run once in this step
 
         def advance():
             """Run one step of the user's code and collect its results.
@@ -552,6 +558,7 @@ class Engine:
                 last = self.clock_last_tick.get(name)
                 step_size = self.time - last if last is not None else (self.clock_interval.get(name) or 0.0)
                 self.clock_last_tick[name] = self.time
+                self._setter_called.clear()   # setters run once in this tick
                 result = self._call(self.time, step_size, clock=name)
                 self._read_results(result, have_result=True, update_states=False, missing_ok=False, clock=name)
                 # the clock's code may also have changed attributes behind unclocked outputs
@@ -1451,23 +1458,42 @@ class Engine:
         objects = any("." in name and "[" not in name for name in bound)
         return assemble_items(bound, self._bound_target(kind, clock) if objects else None)
 
-    def _apply_attributes(self, clock=None):
+    def _apply_attributes(self, clock=None, initial=False):
         """Write variables bound to attributes or setter methods onto the model object.
 
         ``to = "attr:path"`` sets the attribute; ``to = "call:method"`` calls the method with the
         value. Runs after construction and before every call of that clock (or of the step).
 
+        A setter method runs once per model call, as setters that accumulate need (PyTCI's
+        ``give_drug`` adds a dose each call): the first call after initialization skips it when the
+        value hasn't changed since initialization ran it, and the integration stages of one step
+        skip it unless the value changed.
+
         :param clock: only variables of this clock (None: unclocked ones).
         :type clock: str or None
+        :param initial: the run right after construction.
+        :type initial: bool
         """
         for v in self.variables:
             kind = v.get("to", {}).get("kind")
-            if kind in ("attr", "call") and _clock_of(v) == clock:
-                value = self._to_python(v, self.values[v["name"]])
-                if kind == "attr":
-                    set_path(self.obj, v["to"]["name"], value)
-                else:
-                    get_path(self.obj, v["to"]["name"])(value)
+            if kind not in ("attr", "call") or _clock_of(v) != clock:
+                continue
+            if kind == "attr":
+                set_path(self.obj, v["to"]["name"], self._to_python(v, self.values[v["name"]]))
+                continue
+            name, raw = v["name"], self.values[v["name"]]
+            unchanged = name in self._setter_last and self._setter_last[name] == raw
+            fresh = name in self._setter_fresh
+            self._setter_fresh.discard(name)
+            if not initial and unchanged and (fresh or name in self._setter_called):
+                self._setter_called.add(name)
+                continue
+            get_path(self.obj, v["to"]["name"])(self._to_python(v, raw))
+            self._setter_last[name] = copy.deepcopy(raw)
+            if initial:
+                self._setter_fresh.add(name)
+            else:
+                self._setter_called.add(name)
 
     def _call(self, time, step_size, clock=None):
         """Call the model once: the step method/function, or a clock's call.
@@ -1499,7 +1525,7 @@ class Engine:
                 if arg in epochs:   # a date-time: the epoch plus the FMU time in seconds
                     kwargs[arg] = datetime.datetime.fromisoformat(epochs[arg]) + datetime.timedelta(seconds=kwargs[arg])
         self._apply_attributes(clock=clock)
-        return self._invoke(self._target(clock), *self._positional(clock), **kwargs)
+        return results_of(self._invoke(self._target(clock), *self._positional(clock), **kwargs))
 
     def _integrate(self, time, step_size):
         """``[model] integrate``: advance the states over the step, with the model as right-hand side.
@@ -1593,7 +1619,10 @@ class Engine:
         :rtype: callable
         """
         if clock is None:
-            return getattr(self.obj, self.interface["entry"]["call"]) if self.is_class else self.entry
+            if not self.is_class:
+                return self.entry
+            owner = type(self.obj) if self.interface["entry"].get("call_on_class") else self.obj
+            return getattr(owner, self.interface["entry"]["call"])
         call = self.clocks[clock]["call"]
         if ":" in call:
             return resolve_reference(call)
@@ -1637,8 +1666,8 @@ class Engine:
         :param update_states: also read ``next`` sources into the state variables (normal steps;
             not with ``integrate``, which updates the states itself).
         :type update_states: bool
-        :param missing_ok: skip outputs that can't be read or are None (initialization, before the
-            model set them) instead of failing.
+        :param missing_ok: skip outputs that can't be read, are None or are arrays of the wrong size
+            (initialization, before the model set them) instead of failing.
         :type missing_ok: bool
         :param clock: read the variables of this clock, or None for unclocked ones.
         :type clock: str or None
@@ -1655,7 +1684,12 @@ class Engine:
                 raise LookupError(f"{v['name']}: cannot read {describe(v['from'])} ({e!r})") from e
             if found and value is None and missing_ok:
                 continue  # e.g. an attribute the model only sets after its first step
-            if found:
+            if found and missing_ok and v.get("dimensions"):
+                try:
+                    self.values[v["name"]] = self._from_python(v, value)
+                except ValueError:
+                    continue   # e.g. an array that stays empty until the first step (pyloudnorm's blockwise_loudness)
+            elif found:
                 self.values[v["name"]] = self._from_python(v, value)
         if update_states:
             for v in self.variables:

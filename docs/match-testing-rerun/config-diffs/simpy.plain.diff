@@ -1,0 +1,14 @@
+--- last run
++++ rerun
+@@ -2,9 +2,9 @@
+ entry = "simpy:Environment"
+ call = "run"
+ requirements = ["simpy==4.1.2"]  # the versions installed here; installed into Docker images and by --vendor
++[time]
++until = "end_time"
+ [parameters]
+ initial_time = { start = 0 }  # Integer because the default is an int; write a float start for Real
+-[inputs]
+-until = { start = 1.0 }  # from --start, so a fixed value; to pass the simulation time instead, remove it and add [time] until = "end_time"
+ [outputs]
+ y = { from = "return" }  # the code can also return None, which fails the step: check it, or run init --probe

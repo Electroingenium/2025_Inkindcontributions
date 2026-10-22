@@ -355,6 +355,92 @@ def test_setter_method_inputs_and_property_outputs(tmp_path, make_fmu, adapter):
     assert fmu.get("temperature") == 22.0
 
 
+def test_accumulating_setter_runs_once_per_step(tmp_path, make_fmu, adapter):
+    # like PyTCI's give_drug: each call adds a dose, so an extra call is an extra dose
+    write(tmp_path, "pump.py", '''
+        class Pump:
+            def __init__(self):
+                self.total, self.calls = 0.0, 0
+
+            def give(self, dose):
+                self.total += dose
+                self.calls += 1
+
+            def wait(self, dt):
+                return self.total
+    ''')
+    (tmp_path / "fmugen.toml").write_text(textwrap.dedent('''
+        [model]
+        entry = "pump.py:Pump"
+        call = "wait"
+        [time]
+        dt = "step_size"
+        [inputs]
+        dose = { start = 2.0, to = "call:give" }
+        [outputs]
+        total = {}
+        calls = { type = "Integer" }
+    '''))
+    fmu = adapter(make_fmu(tmp_path))
+    fmu.initialize()
+    for k in range(3):
+        assert fmu.fmi2DoStep(float(k), 1.0, False) == OK
+    assert fmu.get("calls", "total") == [3, 6.0]   # 3 steps, 3 doses (not 4)
+    fmu.set("dose", 5.0)
+    assert fmu.fmi2DoStep(3.0, 1.0, False) == OK
+    assert fmu.get("calls", "total") == [4, 11.0]
+
+
+def test_setter_changed_after_initialization_reaches_the_first_step(tmp_path, make_fmu, adapter):
+    write(tmp_path, "pump.py", '''
+        class Pump:
+            def __init__(self):
+                self.doses = []
+
+            def give(self, dose):
+                self.doses.append(dose)
+
+            def wait(self):
+                return sum(self.doses)
+    ''')
+    (tmp_path / "fmugen.toml").write_text(textwrap.dedent('''
+        [model]
+        entry = "pump.py:Pump"
+        call = "wait"
+        [inputs]
+        dose = { start = 2.0, to = "call:give" }
+        [outputs]
+        y = { from = "return" }
+    '''))
+    fmu = adapter(make_fmu(tmp_path))
+    fmu.initialize()
+    fmu.set("dose", 7.0)
+    assert fmu.fmi2DoStep(0.0, 1.0, False) == OK
+    assert fmu.get("y") == 9.0   # 2 at initialization, then the new 7
+
+
+def test_call_on_class_passes_no_instance(tmp_path, make_fmu, adapter):
+    write(tmp_path, "heat.py", '''
+        class Model:
+            def building(load, gain=3.0):
+                return load * gain
+    ''')
+    (tmp_path / "fmugen.toml").write_text(textwrap.dedent('''
+        [model]
+        entry = "heat.py:Model"
+        call = "building"
+        call_on_class = true
+        [inputs]
+        load = { start = 2.0 }
+        [outputs]
+        y = { from = "return" }
+    '''))
+    fmu = adapter(make_fmu(tmp_path))
+    fmu.initialize()
+    assert fmu.fmi2DoStep(0.0, 1.0, False) == OK
+    assert fmu.get("y") == 6.0
+
+
 def test_build_does_not_run_the_model(tmp_path, make_fmu):
     # like tclab: constructing the model needs hardware (or a network) that isn't there at build time
     write(tmp_path, "hw.py", '''
@@ -552,6 +638,83 @@ def test_dotted_path_reads_the_last_element():
     assert get_path({"x": Wrapper([4.0, 5.0])}, "x.-1") == 5.0
     with pytest.raises(IndexError):   # read as missing, as for an attribute not set yet
         get_path({"x": Wrapper(4.0)}, "x.-1")
+
+
+def test_dotted_path_indexes_any_iterable():
+    from fmugen.templates.fmugen_runtime import get_path
+
+    class Space:   # like pymunk's Space: bodies is a dict_keys view
+        def __init__(self):
+            self._bodies = {"a": 1, "b": 2}
+
+        @property
+        def bodies(self):
+            return self._bodies.keys()
+
+    assert get_path(Space(), "bodies.0") == "a" and get_path(Space(), "bodies.-1") == "b"
+    assert get_path({"s": frozenset([7])}, "s.0") == 7
+    with pytest.raises(IndexError):
+        get_path(Space(), "bodies.2")
+    with pytest.raises(AttributeError):   # strings, mappings and iterators aren't indexed this way
+        get_path({"s": "abc"}, "s.0")
+    with pytest.raises(KeyError):   # a mapping's part is a key, as before
+        get_path({"d": {"x": 1}}, "d.0")
+    with pytest.raises(AttributeError):
+        get_path({"g": iter([1, 2])}, "g.0")
+
+
+def test_dotted_path_reads_items_of_objects_with_getitem():
+    from fmugen.templates.fmugen_runtime import get_path
+
+    class Solution:   # like pybamm's Solution: not a mapping, variables built on demand by key
+        t = [0.0, 100.0]
+
+        def __getitem__(self, key):
+            if key != "Voltage [V]":
+                raise KeyError(key)
+            return {"entries": [4.1, 4.0]}
+
+    assert get_path(Solution(), "Voltage [V].entries.-1") == 4.0
+    assert get_path(Solution(), "t.-1") == 100.0   # an attribute comes first
+    with pytest.raises(AttributeError):   # no such key: the attribute error, as before
+        get_path(Solution(), "Current [A]")
+
+
+def test_series_convert_dates_the_value_at_the_fmu_time(tmp_path):
+    pd = pytest.importorskip("pandas")
+    from fmugen.config import Config, normalize
+    from fmugen.templates.fmugen_runtime import converter
+    series = converter({"convert": "series", "epoch": "2026-06-21T00:00:00"}, lambda: 86400.0)(3.5)
+    assert list(series) == [3.5] and series.index[0] == pd.Timestamp("2026-06-22")
+    (tmp_path / "m.py").write_text("def f(x=1.0):\n    return x\n")
+
+    def f(x=1.0):
+        return x
+
+    for info, error in (({"start": 1.0, "convert": "series"}, "needs an epoch"),
+                        ({"start": 1.0, "convert": "series", "epoch": "noon"}, "not an ISO 8601"),
+                        ({"start": 1.0, "epoch": "2026-06-21"}, "only applies with convert"),
+                        ({"start": [1.0, 2.0], "dimensions": [2], "convert": "series", "epoch": "2026-06-21"},
+                         "single values")):
+        with pytest.raises(InterfaceError, match=error):
+            normalize(Config({"model": {"entry": "m.py:f"}, "inputs": {"x": info}}, tmp_path), f, "m", [str(tmp_path)])
+
+
+def test_generator_results_become_tuples():
+    from fmugen.templates.fmugen_runtime import results_of
+    assert results_of(x for x in (1, 2)) == (1, 2)
+    values = [1, 2]
+    assert results_of(values) is values   # anything else is unchanged
+    it = iter(values)
+    assert results_of(it) is it
+
+
+def test_dotted_path_indexes_numpy_arrays():
+    np = pytest.importorskip("numpy")
+    from fmugen.templates.fmugen_runtime import get_path
+    model = {"t_core": np.array([20.0, 21.0, 22.0]), "grid": np.array([[1.0, 2.0], [3.0, 4.0]])}
+    assert get_path(model, "t_core.0") == 20.0 and get_path(model, "t_core.-1") == 22.0
+    assert get_path(model, "grid.1.0") == 3.0
 
 
 COUNTER = """
@@ -798,6 +961,22 @@ def test_misspelled_field_and_unknown_argument_are_named(tmp_path):
         init(f"{tmp_path / 'objs.py'}:f", starts={"w.T": 1.0, "v.T": 1.0})
 
 
+def test_call_start_for_the_step_method_copy_of_a_shared_name(tmp_path):
+    # x0 in both: the method's one is given as solve_x0, and a call: start keeps the argument's name
+    write(tmp_path, "ctrl.py", """
+        class Ctrl:
+            def __init__(self, x0):
+                self.x0 = x0
+
+            def solve(self, x0):
+                return {"y": float(sum(x0)) + self.x0[0]}
+    """)
+    _, data = init(f"{tmp_path / 'ctrl.py'}:Ctrl", call="solve", probe=True,
+                   starts={"x0": {"call": "builtins:list([1.0])"}, "solve_x0": {"call": "builtins:list([2.0, 3.0])"}})
+    assert data["model"]["call_constants"]["x0"] == {"call": "builtins:list([2.0, 3.0])"}
+    assert data["model"]["constants"]["x0"] == {"call": "builtins:list([1.0])"}
+
+
 def test_init_start_for_a_callable_without_signature():
     from fmugen.config import InterfaceError
 
@@ -839,6 +1018,15 @@ def test_warning_names_only_outputs_of_unknown_type(tmp_path, capsys):
     err = capsys.readouterr().err
     assert "warning: label: type not shown by the code" in err
     assert "count" not in err and "y" not in err.split(":")[1]
+
+
+def test_init_warns_about_a_file_named_like_a_backend_module(tmp_path, capsys):
+    write(tmp_path, "model.py", """
+        def area(r=1.0):
+            return 3.14 * r * r
+    """)
+    init(f"{tmp_path / 'model.py'}:area")
+    assert "warning: model.py clashes with a UniFMU backend module" in capsys.readouterr().err
 
 
 def test_numeric_strings_still_become_numbers(tmp_path, make_fmu, adapter):
