@@ -40,7 +40,7 @@ Columns: **`init` / `init --probe`**: ✓ if the config of either one builds, si
 |---|---|
 | `init` writes a config | 125 |
 | `init --probe` writes a config | 129 |
-| **Simulates with useful results** (a config from `init` or `init --probe`) | **119** |
+| **Simulates with useful results** (a config from `init` or `init --probe`) | **120** |
 | …or with a hand-written config | **131** |
 | Fails | 0 |
 | **Compiled FMU simulates** | **131**: every model |
@@ -52,12 +52,12 @@ How far each step gets:
 | Config | Models | Success |
 |---|---|---|
 | `init` (code only) | 45 of 131 | 34 % |
-| `init --probe` (or `init`, when it already works) | 119 of 131 | 91 % |
+| `init --probe` (or `init`, when it already works) | 120 of 131 | 92 % |
 | `init --probe` + a hand-written config (for the examples, the repository's `fmugen.toml`) | 131 of 131 | 100 % |
 
-The `init` config fails mostly on models that return arrays, tuples, strings or objects, which only `--probe` types correctly; the error message points to it. Of the 67 `init` configs of the first group that simulate, 23 only output parameters, settings or constants. GEKKO models keep their results in GEKKO variables, which only `--probe` finds. The hand configs add `PropsSI`, cantera, PyTCI and the kalman example ([Hand configs](#hand-configs)), pandapower, seirsplus, river, tellurium, the GEKKO model OpenHENS, sgp4, pymunk and pybamm ([configs](match-testing-rerun/configs/)).
+The `init` config fails mostly on models that return arrays, tuples, strings or objects, which only `--probe` types correctly; the error message points to it. Of the 67 `init` configs of the first group that simulate, 23 only output parameters, settings or constants. GEKKO models keep their results in GEKKO variables, which only `--probe` finds. The hand configs add `PropsSI`, cantera, PyTCI and the kalman example ([Hand configs](#hand-configs)), pandapower, seirsplus, tellurium, the GEKKO model OpenHENS, sgp4, pymunk and pybamm ([configs](match-testing-rerun/configs/)).
 
-Later, `init --probe` got 8 more without a hand config, each checked with a build and a simulation in WSL 2 against the model called directly (not compiled again): commpy and impedance (complex results split into real and imaginary parts), uncertainties and ambiance (a returned object's properties, one-element arrays read as their element), `fluids.units` ×2 and metpy (inputs retried as pint quantities, with units read from the errors) and CFTOC (a `call:` start for the step method's copy of a shared argument is no longer refused).
+Later, `init --probe` got 9 more without a hand config, each checked with a build and a simulation in WSL 2 against the model called directly (not compiled again): commpy and impedance (complex results split into real and imaginary parts), uncertainties and ambiance (a returned object's properties, one-element arrays read as their element), `fluids.units` ×2 and metpy (inputs retried as pint quantities, with units read from the errors) CFTOC (a `call:` start for the step method's copy of a shared argument is no longer refused) and river (when the probe finds no outputs, what the step changes becomes the outputs). seirsplus now gets its counts as outputs too (a history that grows each step is read as its latest value, `attr:numS.-1`), but still needs the hand config: `init` binds `dt` to the step size, and with `dt` = 1 `run_epoch` doesn't advance.
 
 No model fails. The last 4 needed fmugen features, added after the main run and checked on these 4 models only (built, simulated, compiled and compared with a direct run; the other models weren't rerun with them):
 
@@ -183,7 +183,7 @@ Errors such as `y is an array of shape […], not a single value` in the `init` 
 | `radioactivedecay:Inventory` | ✓ | — | ✓ (`init --probe` config, 135.5 MB) |  |
 | `rainflow:count_cycles` | ✓ | — | ✓ (`init --probe` config, 48.8 MB) |  |
 | `rdkit.Chem.Descriptors:MolWt` | ✓ | — | ✓ (`init --probe` config, 110.7 MB) |  |
-| `river.linear_model:LinearRegression` | ✗ no useful outputs | ✓ ([config](match-testing-rerun/configs/river.toml)) | ✓ (hand config, 92.9 MB) | `init`: only hyperparameters (`l1`, `l2`, …). The hand config reads the learned weights (`attr:weights.a`, …) and the intercept. |
+| `river.linear_model:LinearRegression` | ✓ | ✓ ([config](match-testing-rerun/configs/river.toml)) | ✓ (hand config, 92.9 MB) | `init --probe` outputs the learned `intercept` (0.06 after the first step, as `learn_one` called directly): with no other outputs found, the attributes the step changes become outputs instead of locals. The weights (a dict) still need the hand config. Before: `init`: only hyperparameters (`l1`, `l2`, …). The hand config reads the learned weights (`attr:weights.a`, …) and the intercept. |
 | `roboticstoolbox.models.DH:Panda` | ✓ | — | ✓ (`init --probe` config, 172.7 MB) |  |
 | `scipy.signal:lfilter` | ✓ | — | ✓ (`init --probe` config, 98.3 MB) |  |
 | `seirsplus.models:SEIRSModel` | ✗ no useful outputs | ✓ ([config](match-testing-rerun/configs/seirsplus.toml)) | ✓ (hand config, 94.8 MB) | `init`: outputs only echo the parameters; the state arrays grow each step and are left out. The hand config reads the latest counts (`attr:numS.-1`, …) and sets `dt = 0.1`: with `dt` = the step size (1), `run_epoch` keeps only the start point and `t` never advances. |

@@ -156,6 +156,12 @@ def _probe_class(cls, method_name, data, comments, arrays, call_starts, create, 
         elif not _same(before[attr], value):
             data.setdefault("locals", {})[attr] = _typed({}, value, arrays)
             comments[("locals", attr)] = f"changed by {method_name}()"
+    if "outputs" not in data and data.get("locals"):
+        # nothing else to read: what the step changes is its result (river's intercept)
+        data["outputs"] = data.pop("locals")
+        for attr in data["outputs"]:
+            comments[("outputs", attr)] = f"changed by {method_name}(); an output, since the probe found no other"
+            comments.pop(("locals", attr), None)
     _check_sizes(obj, method_name, data, comments)
     return obj, returned, set(getattr(obj, "__dict__", {})) | set(_property_values(obj, arrays)) | unfit
 
@@ -283,6 +289,13 @@ def _check_sizes(obj, method_name, data, comments):
             new = _array_info(_scalar_of(value))
             size = new["dimensions"] if new else "not an array"
         if size == info["dimensions"]:
+            continue
+        if section == "outputs" and kind == "attr" and len(info["dimensions"]) == 1 and isinstance(size, list) \
+                and len(size) == 1 and size[0] > info["dimensions"][0]:
+            # a history that grows each step (seirsplus' numS): its latest value
+            del info["dimensions"]
+            info["from"] = f"{source}.-1"
+            comments[("outputs", name)] = f"the latest value of {path}, which grows by each step"
             continue
         del data[section][name]
         comments.pop((section, name), None)

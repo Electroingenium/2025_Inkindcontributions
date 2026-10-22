@@ -307,3 +307,23 @@ def test_pint_units_are_read_from_the_errors():
     assert _pint_unit("Converting 9.0 dimensionless to units of m raised", numbers) is None
     assert _pint_unit('`D` requires "[length] / [time]" but given "dimensionless"', numbers) == ("D", "m / s")
     assert _pint_unit("something else", numbers) is None
+
+
+def test_probe_outputs_what_the_step_changes_when_nothing_else(tmp_path):
+    # like river's LinearRegression (learns intercept) and seirsplus (histories that grow each step)
+    model = write(tmp_path, '''
+        import numpy as np
+
+        class Learner:
+            def __init__(self, lr=0.1):
+                self.lr = lr
+                self.intercept = 0.0
+                self.history = np.zeros(1)
+
+            def learn_one(self, y=3.0):
+                self.intercept += self.lr * (y - self.intercept)
+                self.history = np.append(self.history, self.intercept)
+    ''')
+    data, _ = infer(f"{model}:Learner", call="learn_one", probe=True)
+    assert data["outputs"] == {"intercept": {}, "history": {"from": "attr:history.-1"}}
+    assert "locals" not in data

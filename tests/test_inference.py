@@ -325,8 +325,9 @@ def test_fmi3_time_attribute_is_renamed(tmp_path):
                 self.time += dt
     """))
     data, _ = infer(tmp_path / "clock.py", fmi_version=3)
-    assert "time" not in data.get("locals", {})
-    assert data["locals"]["model_time"] == {"from": "attr:time"}
+    # the step's only result, so an output rather than a local
+    assert "time" not in data.get("outputs", {})
+    assert data["outputs"]["model_time"] == {"from": "attr:time"}
 
 
 @pytest.mark.parametrize("kind", ["series", "frame", "xarray"])
