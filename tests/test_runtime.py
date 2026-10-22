@@ -680,6 +680,26 @@ def test_dotted_path_reads_items_of_objects_with_getitem():
         get_path(Solution(), "Current [A]")
 
 
+def test_series_convert_dates_the_value_at_the_fmu_time(tmp_path):
+    pd = pytest.importorskip("pandas")
+    from fmugen.config import Config, normalize
+    from fmugen.templates.fmugen_runtime import converter
+    series = converter({"convert": "series", "epoch": "2026-06-21T00:00:00"}, lambda: 86400.0)(3.5)
+    assert list(series) == [3.5] and series.index[0] == pd.Timestamp("2026-06-22")
+    (tmp_path / "m.py").write_text("def f(x=1.0):\n    return x\n")
+
+    def f(x=1.0):
+        return x
+
+    for info, error in (({"start": 1.0, "convert": "series"}, "needs an epoch"),
+                        ({"start": 1.0, "convert": "series", "epoch": "noon"}, "not an ISO 8601"),
+                        ({"start": 1.0, "epoch": "2026-06-21"}, "only applies with convert"),
+                        ({"start": [1.0, 2.0], "dimensions": [2], "convert": "series", "epoch": "2026-06-21"},
+                         "single values")):
+        with pytest.raises(InterfaceError, match=error):
+            normalize(Config({"model": {"entry": "m.py:f"}, "inputs": {"x": info}}, tmp_path), f, "m", [str(tmp_path)])
+
+
 def test_generator_results_become_tuples():
     from fmugen.templates.fmugen_runtime import results_of
     assert results_of(x for x in (1, 2)) == (1, 2)

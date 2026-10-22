@@ -522,6 +522,24 @@ def test_generator_results_are_read_and_nested_tuples_split(tmp_path):
     assert data["outputs"] == {"y0": {"from": "return:0", "dimensions": [2]}, "y1": {"from": "return:1"}}
 
 
+def test_inputs_that_need_a_date_index_are_passed_as_series(tmp_path):
+    pytest.importorskip("pandas")
+    # like pyet's pm_fao56: the day of the year comes from an input's index
+    (tmp_path / "evap.py").write_text(textwrap.dedent('''
+        def pet(tmean=20.0, rs=10.0):
+            day = rs.index.dayofyear
+            return (tmean * 0.1 + rs * 0.01 + day * 0.0).rename("PET")
+    '''))
+    data, _ = infer(f"{tmp_path / 'evap.py'}:pet")
+    assert {name: info["convert"] for name, info in data["inputs"].items()} == {"tmean": "series", "rs": "series"}
+    assert data["outputs"] == {"y": {"from": "return"}}
+    output = tmp_path / "fmugen.toml"
+    with isolated_imports():
+        init(f"{tmp_path / 'evap.py'}:pet", output=output, probe=True)
+    config = load_config(output)
+    assert "pandas" in " ".join(config.model["requirements"])
+
+
 def test_results_that_refuse_float_are_read_through_their_properties(tmp_path):
     (tmp_path / "errors.py").write_text(textwrap.dedent('''
         class Affine:   # like uncertainties' AffineScalarFunc: __float__ raises

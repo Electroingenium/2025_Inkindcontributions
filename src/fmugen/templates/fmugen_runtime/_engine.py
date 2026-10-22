@@ -223,7 +223,8 @@ class Engine:
             # constants ({ call = ... } may download or compute) are resolved when the FMU initializes,
             # where a failure is reported to the importer with its traceback (resolve_constants)
             self.constants = self.call_constants = None
-            self.converters = {v["name"]: converter(v) for v in self.variables if v.get("convert")}
+            # "series" dates its value at the FMU time (the start of the step being made)
+            self.converters = {v["name"]: converter(v, lambda: self.time) for v in self.variables if v.get("convert")}
             # [model] globals: module-level state, put back to its import-time value on reset
             self.globals = [split_global(ref) for ref in self.interface.get("globals", [])]
             self.global_starts = copy.deepcopy(self._read_globals())

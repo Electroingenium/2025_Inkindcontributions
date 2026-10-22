@@ -487,14 +487,18 @@ def call_argument(node):
                      "calls of those, or lists/tuples/dicts of these")
 
 
-def converter(var):
+def converter(var, now=lambda: 0.0):
     """The function applied to a value before the model gets it (``convert``).
 
     ``"pint"`` makes a quantity in the variable's ``unit`` from pint's application registry;
-    anything else is a reference to a function.
+    ``"series"`` a one-value pandas Series indexed by the date ``epoch`` + ``now()`` seconds (for
+    models that read the date from their inputs' index, such as pyet); anything else is a
+    reference to a function.
 
     :param var: an entry of ``interface["variables"]`` with ``convert``.
     :type var: dict
+    :param now: the FMU time, for ``"series"``.
+    :type now: callable
     :return: the converter.
     :rtype: callable
     """
@@ -502,6 +506,11 @@ def converter(var):
         import pint
         registry, unit = pint.get_application_registry(), var.get("unit", "")
         return lambda value: registry.Quantity(value, unit)
+    if var["convert"] == "series":
+        import pandas
+        epoch = datetime.datetime.fromisoformat(var["epoch"])
+        return lambda value: pandas.Series(
+            [value], index=pandas.DatetimeIndex([epoch + datetime.timedelta(seconds=now())]))
     return resolve_reference(var["convert"])
 
 

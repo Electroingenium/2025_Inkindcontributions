@@ -351,7 +351,8 @@
           "items": { "oneOf": [{ "type": "integer", "minimum": 1 }, { "type": "string" }] }
         },
         "numpy": { "const": true },
-        "convert": { "description": "\"module:function\" or \"pint\".", "type": "string" },
+        "convert": { "description": "\"module:function\", \"pint\" or \"series\".", "type": "string" },
+        "epoch": { "description": "convert = \"series\": the ISO 8601 date-time at FMU time 0.", "type": "string" },
         "clocks": {
           "description": "FMI 3: the one clock this variable belongs to.",
           "type": "array", "minItems": 1, "maxItems": 1, "items": { "type": "string" }

@@ -580,6 +580,8 @@ def _add_requirements(data, comments, module_name, config_dir, entry_file):
     references += [info[key] for section in ("parameters", "inputs", "states")
                    for info in data.get(section, {}).values() for key in ("convert", "enum") if key in info]
     for ref in references:
+        if ref == "series":   # convert = "series": a pandas Series
+            tops.add("pandas")
         if ":" in ref:   # module:function(numpy.linspace(...)): the module, and the dotted names in the arguments
             tops.add(ref.partition(":")[0].split(".")[0])
             tops |= {name.split(".")[0] for name in _dotted_names(ref.partition("(")[2])}

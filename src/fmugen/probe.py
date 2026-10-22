@@ -594,6 +594,8 @@ def _probe_once(fn, data, comments, constants_key="constants"):
         if not plain:
             result = _retry_as_arrays(call, data, comments)
             if result is _FAILED:
+                result = _retry_as_series(call, data, comments)
+            if result is _FAILED:
                 raise
             return result
         for converter in ARRAY_RETRIES:
@@ -650,6 +652,40 @@ def _retry_as_arrays(call, data, comments):
     for name in numbers:
         comments[("inputs", name)] = "passed as numpy.atleast_1d(...): the probe failed with plain numbers"
     return result
+
+def _retry_as_series(call, data, comments):
+    """Call again with each number input as a one-value pandas Series indexed by a date (``convert = "series"``).
+
+    Some libraries read the date from their inputs' index (pyet's ``pm_fao56`` takes the day of
+    the year from ``rs.index``). The epoch is today at 00:00, as for date-time arguments.
+
+    :param call: makes the probe call.
+    :type call: callable
+    :param data: the config being inferred; updated in place.
+    :type data: dict
+    :param comments: ``(section, key) -> text`` for :func:`render_toml`; updated in place.
+    :type comments: dict
+    :return: the result, or :data:`_FAILED`.
+    """
+    numbers = {name: info for name, info in data.get("inputs", {}).items()
+               if isinstance(info.get("start"), (int, float)) and not isinstance(info.get("start"), bool)
+               and "dimensions" not in info and not info.get("convert") and not info.get("numpy")}
+    if not numbers or importlib.util.find_spec("pandas") is None:
+        return _FAILED
+    epoch = datetime.datetime.combine(datetime.date.today(), datetime.time()).isoformat()
+    for info in numbers.values():
+        info.update({"convert": "series", "epoch": epoch})
+    try:
+        result = call()
+    except Exception:
+        for info in numbers.values():
+            del info["convert"], info["epoch"]
+        return _FAILED
+    for name in numbers:
+        comments[("inputs", name)] = ("passed as a pandas Series dated epoch + t: the probe failed with plain numbers "
+                                      "and arrays; set the epoch you need")
+    return result
+
 
 def _state_bytes(obj):
     """The object's attributes pickled, to tell whether a call changed them.
@@ -879,7 +915,10 @@ def _probe_kwargs(data, sections):
                 kwargs[name] = bytes.fromhex(info["start"])
             else:
                 kwargs[name] = info.get("start", 0.0)
-            if info.get("convert"):
+            if info.get("convert") == "series":   # dated at the epoch, as at time 0
+                from fmugen.templates.fmugen_runtime import converter
+                kwargs[name] = converter(info)(kwargs[name])
+            elif info.get("convert"):
                 kwargs[name] = resolve_reference(info["convert"])(kwargs[name])
     return kwargs
 
@@ -929,6 +968,8 @@ def _outputs_from_return(result, data, comments, default_name, is_class, arrays=
         result = result.reshape(())[()]   # numbers passed as one-element arrays: a number comes back as one
     if isinstance(result, Mapping):
         items = [(str(k), v, f"return:{k}") for k, v in result.items()]
+    elif _table_children(result) == [] and getattr(result, "size", None) == 1:
+        items = [(default_name, result.item(), "return")]   # one value labelled by a date (pyet): read as a number
     elif _table_children(result) is not None:   # pandas Series / one-row DataFrame, xarray Dataset
         items = [(k, v, f"return:{k}") for k, v in _table_children(result)]
     elif arrays and _array_info(result):
