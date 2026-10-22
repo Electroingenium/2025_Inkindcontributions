@@ -7,6 +7,7 @@ from pathlib import Path
 
 from fmugen.templates.fmugen_runtime._constants import SPEC_VERSION, Status
 from fmugen.templates.fmugen_runtime._engine import Engine
+from fmugen.templates.fmugen_runtime._helpers import outside_bundle
 
 
 def make_engine(resources_dir, log, info_category="logAll"):
@@ -94,7 +95,7 @@ class CompositeEngine:
         self.resources_dir = Path(resources_dir)
         self.log = log
         self.interface = json.loads((self.resources_dir / "interface.json").read_text())
-        hf_cache = self.resources_dir / "hf_cache"
+        hf_cache = outside_bundle(self.resources_dir) / "hf_cache"
         if hf_cache.is_dir():   # Hugging Face models bundled by fmugen build, shared by the parts
             os.environ.update(HF_HUB_CACHE=str(hf_cache), HF_HUB_OFFLINE="1", TRANSFORMERS_OFFLINE="1")
         for p in self.interface["parts"]:

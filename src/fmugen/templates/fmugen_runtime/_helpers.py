@@ -762,3 +762,26 @@ def fraction(value):
     if f.denominator > UINT64_MAX:
         f = f.limit_denominator(UINT64_MAX)
     return f.numerator, f.denominator
+
+
+def outside_bundle(path):
+    """The folder of the FMU's ``resources/`` that ``path`` stands for, when the backend is compiled.
+
+    A compiled backend (``fmugen build --compile``) reads its code and ``interface.json`` from the
+    bundle: ``resources/dist/main/_internal`` (PyInstaller's ``sys._MEIPASS``) or
+    ``resources/dist/main`` (Nuitka). The data the build keeps outside it (``[model] cwd`` folders,
+    ``hf_cache``) stays at the same place under ``resources/``. Uncompiled, ``path`` is returned as is.
+
+    :param path: a folder inside the bundle, e.g. the resources folder the engine was given.
+    :type path: str or pathlib.Path
+    :rtype: pathlib.Path
+    """
+    path = Path(path)
+    if not getattr(sys, "frozen", False) and "__compiled__" not in globals():
+        return path
+    exe_dir = Path(sys.executable).resolve().parent   # resources/dist/main
+    bundle = Path(getattr(sys, "_MEIPASS", exe_dir)).resolve()
+    try:
+        return exe_dir.parent.parent / path.resolve().relative_to(bundle)
+    except ValueError:   # not inside the bundle
+        return path

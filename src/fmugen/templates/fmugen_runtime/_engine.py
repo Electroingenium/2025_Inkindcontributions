@@ -23,7 +23,7 @@ from fmugen.templates.fmugen_runtime._helpers import (
     _capture_output, _clock_of, _is_number, _quiet_debug_logging,
     assemble_items, coerce, converter, describe, dump_state,
     flatten, get_path, is_literal_constant, keyword_constants,
-    load_entry, load_state, pick, plain_number, reshape,
+    load_entry, load_state, outside_bundle, pick, plain_number, reshape,
     resolve_constant, resolve_reference, rng_states, set_path,
     set_rng_states, split_global,
 )
@@ -208,11 +208,12 @@ class Engine:
 
         self.logging_on = True
         _quiet_debug_logging()
-        hf_cache = self.resources_dir / "hf_cache"
+        hf_cache = outside_bundle(self.resources_dir) / "hf_cache"
         if hf_cache.is_dir():   # Hugging Face models bundled by fmugen build: load them from the FMU, offline
             os.environ.update(HF_HUB_CACHE=str(hf_cache), HF_HUB_OFFLINE="1", TRANSFORMERS_OFFLINE="1")
         cwd = self.interface.get("cwd")
-        self.cwd = self.resources_dir / cwd if cwd is not None else None
+        # kept outside a compiled backend's bundle, at the same place under resources/
+        self.cwd = outside_bundle(self.resources_dir) / cwd if cwd is not None else None
         with self._in_model_dir():   # the model may read files when it is imported
             self.module, self.entry = load_entry(self.interface, self.resources_dir)
             self.enums = {

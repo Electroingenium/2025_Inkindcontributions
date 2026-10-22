@@ -232,6 +232,7 @@ def compile_fmu(compiler, resources, interface, work, requirements=()):
         data.append((resources / "endpoint.toml", "."))
     local = {"model", "fmugen_runtime"}
     direct, packages, distributions, imports = _packages([m for m in modules if m not in local], requirements)
+    paths += _editable_paths({m.split(".")[0] for m in modules if m not in local} | set(packages))
 
     if compiler == "pyinstaller":
         cmd = [sys.executable, "-m", "PyInstaller", "--noconfirm", "--log-level", "WARN", "--name", EXE_NAME,
@@ -374,8 +375,10 @@ def compiled_launch_command(system):
     """
     if system == "windows":
         return ["powershell", "-command", f"./{EXE_DIR}/{EXE_NAME}.exe"]
+    # unzipping the FMU drops execute bits: also those of executables the model's packages run
+    # (gekko's solver), not only the backend's
     exe = f"{EXE_DIR}/{EXE_NAME}"
-    return ["sh", "-c", f"chmod +x {exe} && ./{exe}"]
+    return ["sh", "-c", f"chmod -R u+x {EXE_DIR} && ./{exe}"]
 
 
 def _modules(interface):
@@ -413,6 +416,9 @@ def _modules(interface):
 
 
 NOT_COLLECTED = {"fmugen", "pyinstaller", "pyinstaller-hooks-contrib", "nuitka", "pip", "setuptools", "wheel"}
+#: Packages that import their own submodules by name, so they are collected with all of them even when
+#: they are only a dependency (``pyomo.environ`` imports its plugins: OpenHENS).
+IMPORTS_OWN_SUBMODULES = {"pyomo"}
 
 
 def _packages(modules, requirements=()):
@@ -467,7 +473,36 @@ def _packages(modules, requirements=()):
     usable = lambda top: top.isidentifier() and top not in sys.stdlib_module_names
     imports = {top for name in imported & seen for top in tops_of.get(name, ()) if usable(top)}
     packages = {top for name in seen for top in tops_of.get(name, ()) if usable(top)}
+    direct |= packages & IMPORTS_OWN_SUBMODULES
     return sorted(direct), sorted(packages | direct), sorted(seen), sorted(imports - direct)
+
+
+def _editable_paths(tops):
+    """Folders to add to the freezer's search path for packages installed in editable mode.
+
+    ``pip install -e`` with setuptools installs an import hook (a finder in a ``.pth`` file)
+    instead of putting the project's folder on ``sys.path``, and freezers don't follow it: the
+    package would be missing from the frozen FMU (the debutanizer and OpenHENS projects).
+
+    :param tops: top-level module names the model imports.
+    :type tops: collections.abc.Iterable[str]
+    :return: the folders holding those of them that aren't found through ``sys.path``.
+    :rtype: list[pathlib.Path]
+    """
+    on_path = {Path(p).resolve() for p in sys.path if p}
+    folders = []
+    for top in sorted(tops):
+        try:
+            spec = importlib.util.find_spec(top)
+        except (ImportError, ValueError):
+            continue
+        if spec is None or not spec.origin or spec.origin in ("built-in", "frozen"):
+            continue
+        location = Path(spec.origin).resolve().parent
+        folder = location.parent if spec.submodule_search_locations else location
+        if folder not in on_path and folder not in folders:
+            folders.append(folder)
+    return folders
 
 
 NEEDS_SOURCE = {"transformers"}   # libraries that read the source of code built on them (inspect.getsource)
