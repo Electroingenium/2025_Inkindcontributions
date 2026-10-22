@@ -41,9 +41,9 @@ Columns: **`init` / `init --probe`**: ✓ if the config of either one builds, si
 | `init` writes a config | 125 |
 | `init --probe` writes a config | 129 |
 | **Simulates with useful results** (a config from `init` or `init --probe`) | **109** |
-| …or with a hand-written config | **126** |
-| Fails | 5 |
-| **Compiled FMU simulates** | **126**: every model with a working config |
+| …or with a hand-written config | **127** |
+| Fails | 4 |
+| **Compiled FMU simulates** | **127**: every model with a working config |
 
 A config only counts as a success if the FMU simulates **and** gives the model's results. An FMU that runs but only outputs its own parameters, settings or constants counts as a failure.
 
@@ -53,22 +53,22 @@ How far each step gets:
 |---|---|---|
 | `init` (code only) | 45 of 131 | 34 % |
 | `init --probe` (or `init`, when it already works) | 109 of 131 | 83 % |
-| `init --probe` + a hand-written config (for the examples, the repository's `fmugen.toml`) | 126 of 131 | 96 % |
+| `init --probe` + a hand-written config (for the examples, the repository's `fmugen.toml`) | 127 of 131 | 97 % |
 
-The `init` config fails mostly on models that return arrays, tuples, strings or objects, which only `--probe` types correctly; the error message points to it. Of the 67 `init` configs of the first group that simulate, 23 only output parameters, settings or constants. GEKKO models keep their results in GEKKO variables, which only `--probe` finds. The hand configs add `PropsSI`, `fluids.units` ×2, metpy, cantera, PyTCI and the kalman example ([Hand configs](#hand-configs)), ambiance, pandapower, seirsplus, impedance, commpy, river, tellurium, uncertainties and the GEKKO models CFTOC and OpenHENS ([configs](match-testing-rerun/configs/)).
+The `init` config fails mostly on models that return arrays, tuples, strings or objects, which only `--probe` types correctly; the error message points to it. Of the 67 `init` configs of the first group that simulate, 23 only output parameters, settings or constants. GEKKO models keep their results in GEKKO variables, which only `--probe` finds. The hand configs add `PropsSI`, `fluids.units` ×2, metpy, cantera, PyTCI and the kalman example ([Hand configs](#hand-configs)), ambiance, pandapower, seirsplus, impedance, commpy, river, tellurium, uncertainties and the GEKKO models CFTOC and OpenHENS, and sgp4 ([configs](match-testing-rerun/configs/)).
 
-The 5 failures, by cause:
+The 4 failures, by cause:
 
 | Cause | Models | What it means |
 |---|---|---|
-| **Not supported by fmugen**: the model's inputs or results have a shape fmugen can't map to FMU variables | sgp4 (C built-ins with no signature; a hand config with `to = "pos:N"` bindings might work, not written yet), pyet (needs a pandas Series with a date index as input), nashpy (the method returns a generator) | A new fmugen feature, or for sgp4 a hand config. |
+| **Not supported by fmugen**: the model's inputs or results have a shape fmugen can't map to FMU variables | pyet (needs a pandas Series with a date index as input), nashpy (the method returns a generator) | A new fmugen feature. |
 | **A path can't reach the result**: the result exists, but no `from` path can read it | pymunk (`Space.bodies` is a `dict_keys` view, which a path can't index), pybamm (the voltage is `solution["Voltage [V]"]` on an object that isn't a mapping) | Small fmugen features: indexing any iterable, and item access by key on objects with `__getitem__`. |
 | **Model bug**: the published model doesn't run on its own | none | |
 | **Output mismatch**: the FMU runs but gives different values than the model run directly | none | Every model was compared value by value with a direct run: see below. |
 
-**FMU vs direct run** ([report](match-testing-rerun/report.md)): every model was built into FMUs (`init --probe`, plain `init`, and the repository or hand configs; no `--compile`) and compared, output by output and step by step, with the model called directly in plain Python without fmugen. 130 of 134 match (236,621 values; largest relative difference 1.3 × 10⁻¹⁶, otherwise identical), counting psychrolib with numba and the two FMI 3 repository configs as separate entries. Models random by design were compared seeded. The other 4 are nashpy (no outputs to compare), pyet (the FMU fails), sgp4 (no config) and PyTCI's hand config, which differs from a per-step loop only at t = 0 ([PyTCI](#pytci)).
+**FMU vs direct run** ([report](match-testing-rerun/report.md)): every model was built into FMUs (`init --probe`, plain `init`, and the repository or hand configs; no `--compile`) and compared, output by output and step by step, with the model called directly in plain Python without fmugen. 130 of 134 match (236,621 values; largest relative difference 1.3 × 10⁻¹⁶, otherwise identical), counting psychrolib with numba and the two FMI 3 repository configs as separate entries. Models random by design were compared seeded. The other 4 are nashpy (no outputs to compare), pyet (the FMU fails), sgp4 (no config then; its hand config, written later, matches: 66 values, identical) and PyTCI's hand config, which differs from a per-step loop only at t = 0 ([PyTCI](#pytci)).
 
-The 5 failures: sgp4, pyet and nashpy (not supported), pymunk and pybamm (no path reaches the result). CGE counts as a success after renaming its `model.py`, NHES with synthetic input data, OpenHENS with a hand-added output and the COIN-OR couenne solver.
+The 4 failures: pyet and nashpy (not supported), pymunk and pybamm (no path reaches the result). CGE counts as a success after renaming its `model.py`, NHES with synthetic input data, OpenHENS with a hand-added output and the COIN-OR couenne solver.
 
 ---
 
@@ -183,7 +183,7 @@ Errors such as `y is an array of shape […], not a single value` in the `init` 
 | `roboticstoolbox.models.DH:Panda` | ✓ | — | ✓ (`init --probe` config, 172.7 MB) |  |
 | `scipy.signal:lfilter` | ✓ | — | ✓ (`init --probe` config, 98.3 MB) |  |
 | `seirsplus.models:SEIRSModel` | ✗ no useful outputs | ✓ ([config](match-testing-rerun/configs/seirsplus.toml)) | ✓ (hand config, 94.8 MB) | `init`: outputs only echo the parameters; the state arrays grow each step and are left out. The hand config reads the latest counts (`attr:numS.-1`, …) and sets `dt = 0.1`: with `dt` = the step size (1), `run_epoch` keeps only the start point and `t` never advances. |
-| `sgp4.api:Satrec` | ✗ no config | ✗ not written yet | — | C built-ins with no signature: `--start fr, jd, line1, line2: cannot tell which arguments these are …`. A hand config with `to = "pos:N"` bindings might work. |
+| `sgp4.api:Satrec` | ✗ no config | ✓ ([config](match-testing-rerun/configs/sgp4.toml)) | ✓ (hand config, 44.9 MB) | `init`: C built-ins with no signature: `--start fr, jd, line1, line2: cannot tell which arguments these are …`. The hand config builds the satellite with `create = "twoline2rv"` from the two TLE lines and binds `sgp4(jd, fr)` by position (`to = "pos:N"`); outputs the error code, position (km) and velocity (km/s). Checked against `Satrec.sgp4` called directly: identical; the compiled FMU (PyInstaller 6.22.3, WSL 2) is identical to the uncompiled one. |
 | `shapely:Point` | ✓ | — | ✓ (`init --probe` config, 50.3 MB) |  |
 | `simglucose.patient.t1dpatient:T1DPatient` | ✓ | — | ✓ (`init --probe` config, 134.0 MB) |  |
 | `simpy:Environment` | ✓ | — | ✓ (`init --probe` config, 44.8 MB) | `--call run`: `until` is bound to the step's end time. |
