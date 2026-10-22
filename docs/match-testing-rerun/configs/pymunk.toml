@@ -1,6 +1,6 @@
 # pymunk: the `init --probe` config, with gravity and one falling body added in `setup`, and
-# the body's position and velocity as outputs. Space.bodies is a dict_keys view, which a path
-# can't index, so `attr:bodies.0...` is expected to fail.
+# the body's position and velocity as outputs. Space.bodies is a dict_keys view: `attr:bodies.0...`
+# picks its first element by position (a path indexes any iterable where there's no such attribute).
 [model]
 entry = "pymunk:Space"
 call = "step"
