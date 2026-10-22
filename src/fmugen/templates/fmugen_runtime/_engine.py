@@ -24,7 +24,7 @@ from fmugen.templates.fmugen_runtime._helpers import (
     assemble_items, coerce, converter, describe, dump_state,
     flatten, get_path, is_literal_constant, keyword_constants,
     load_entry, load_state, outside_bundle, pick, plain_number, reshape,
-    resolve_constant, resolve_reference, rng_states, set_path,
+    resolve_constant, resolve_reference, results_of, rng_states, set_path,
     set_rng_states, split_global,
 )
 
@@ -1524,7 +1524,7 @@ class Engine:
                 if arg in epochs:   # a date-time: the epoch plus the FMU time in seconds
                     kwargs[arg] = datetime.datetime.fromisoformat(epochs[arg]) + datetime.timedelta(seconds=kwargs[arg])
         self._apply_attributes(clock=clock)
-        return self._invoke(self._target(clock), *self._positional(clock), **kwargs)
+        return results_of(self._invoke(self._target(clock), *self._positional(clock), **kwargs))
 
     def _integrate(self, time, step_size):
         """``[model] integrate``: advance the states over the step, with the model as right-hand side.

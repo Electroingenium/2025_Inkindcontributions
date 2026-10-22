@@ -517,6 +517,19 @@ def _labelled(obj):
     return type(obj).__module__.split(".")[0] in ("pandas", "xarray") and hasattr(obj, "keys")
 
 
+def results_of(result):
+    """What a model call returned, with a generator read into a tuple.
+
+    A generator (nashpy's ``support_enumeration``) can only be read once; as a tuple, several
+    outputs can read it and it can be saved with the FMU state. Anything else is returned
+    unchanged.
+
+    :param result: what the model returned.
+    :return: ``tuple(result)`` for a generator, else ``result``.
+    """
+    return tuple(result) if isinstance(result, types.GeneratorType) else result
+
+
 def plain_number(value, unit=None):
     """A quantity or one-value pandas/xarray object as a plain number.
 

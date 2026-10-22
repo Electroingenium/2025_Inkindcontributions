@@ -680,6 +680,15 @@ def test_dotted_path_reads_items_of_objects_with_getitem():
         get_path(Solution(), "Current [A]")
 
 
+def test_generator_results_become_tuples():
+    from fmugen.templates.fmugen_runtime import results_of
+    assert results_of(x for x in (1, 2)) == (1, 2)
+    values = [1, 2]
+    assert results_of(values) is values   # anything else is unchanged
+    it = iter(values)
+    assert results_of(it) is it
+
+
 def test_dotted_path_indexes_numpy_arrays():
     np = pytest.importorskip("numpy")
     from fmugen.templates.fmugen_runtime import get_path

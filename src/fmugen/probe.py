@@ -542,7 +542,8 @@ def _call_with_probe_inputs(fn, data, constants_key):
     args, kwargs = _probe_args(data, ("inputs",), fn, constants_key)
     kwargs.update(_time_kwargs(data.get("time", {})))
     kwargs.update(_probe_constants(data, constants_key))
-    return fn(*args, **kwargs)
+    from fmugen.templates.fmugen_runtime import results_of
+    return results_of(fn(*args, **kwargs))
 
 
 def _probe_once(fn, data, comments, constants_key="constants"):
@@ -935,7 +936,7 @@ def _outputs_from_return(result, data, comments, default_name, is_class, arrays=
     elif isinstance(result, tuple) and hasattr(result, "_fields"):   # NamedTuple: use the field names
         items = [(field, getattr(result, field), f"return:{field}") for field in result._fields]
     elif isinstance(result, (tuple, list)):
-        items = [(f"{default_name}{i}", v, f"return:{i}") for i, v in enumerate(result)]
+        items = [leaf for i, v in enumerate(result) for leaf in _positions(f"{default_name}{i}", v, f"return:{i}", arrays)]
     elif _fmi_value(result) or (result is not None and _misfit(result)):
         items = [(default_name, result, "return")]
     elif result is not None and (hasattr(result, "__dict__") or _public_properties(result)):
@@ -995,6 +996,30 @@ def _nested(name, value, source, arrays, depth=0):
             sep = ":" if source == "return" else "."
             return [leaf for key, child in children
                     for leaf in _nested(f"{name}.{key}", child, f"{source}{sep}{key}", arrays, depth + 1)]
+    return [(name, value, source)]
+
+
+def _positions(name, value, source, arrays, depth=0):
+    """``(name, value, source)`` for each item of tuples nested in a tuple result, which would be skipped whole.
+
+    nashpy's ``support_enumeration`` gives ``((sigma_r, sigma_c), ...)``: ``y0`` becomes ``y0_0``
+    (``return:0.0``) and ``y0_1``. Only plain tuples are split, and only when they aren't an FMI
+    value themselves (a tuple of numbers stays one array).
+
+    :param name: the variable name of ``value``.
+    :type name: str
+    :param value: an item of the result.
+    :param source: its ``from`` binding.
+    :type source: str
+    :param arrays: whether arrays may be FMU variables (FMI 3).
+    :type arrays: bool
+    :param depth: the current nesting level.
+    :type depth: int
+    :rtype: list[tuple]
+    """
+    if depth < MAX_NESTING and type(value) is tuple and value and not _fmi_value(value, arrays):
+        return [leaf for i, v in enumerate(value)
+                for leaf in _positions(f"{name}_{i}", v, f"{source}.{i}", arrays, depth + 1)]
     return [(name, value, source)]
 
 

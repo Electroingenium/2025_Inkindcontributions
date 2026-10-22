@@ -501,6 +501,27 @@ def test_entry_keeps_the_name_it_was_given(tmp_path):
     assert load_config(output).model["entry"] == "carbonate.py:MolWt"
 
 
+def test_generator_results_are_read_and_nested_tuples_split(tmp_path):
+    # like nashpy's Game.support_enumeration: a generator of (row strategy, column strategy) pairs
+    (tmp_path / "gen.py").write_text(textwrap.dedent('''
+        class Game:
+            def __init__(self, a=2.0):
+                self.a = a
+
+            def equilibria(self, tol=1e-9):
+                yield (0.4, 0.6), (self.a, 1.0, 0.5)
+
+            def pairs(self):
+                return (1.0, 2.0), 3.0
+    '''))
+    data, _ = infer(f"{tmp_path / 'gen.py'}:Game", call="equilibria")
+    assert data["outputs"] == {"y0_0": {"from": "return:0.0", "dimensions": [2]},
+                               "y0_1": {"from": "return:0.1", "dimensions": [3]}}
+    # a tuple of numbers stays one array, as before
+    data, _ = infer(f"{tmp_path / 'gen.py'}:Game", call="pairs")
+    assert data["outputs"] == {"y0": {"from": "return:0", "dimensions": [2]}, "y1": {"from": "return:1"}}
+
+
 def test_results_that_refuse_float_are_read_through_their_properties(tmp_path):
     (tmp_path / "errors.py").write_text(textwrap.dedent('''
         class Affine:   # like uncertainties' AffineScalarFunc: __float__ raises
