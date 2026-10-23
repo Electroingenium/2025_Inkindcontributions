@@ -1,6 +1,6 @@
 # Tested models
 
-fmugen has been tried on 230 published, unmodified Python models (three needed a file renamed or a script wrapped in a class, and one synthetic input data; see their notes): the examples in this repository, models from about 150 libraries on PyPI, 50 neural networks and 13 models built on [GEKKO](https://github.com/BYU-PRISM/GEKKO). Each model is listed once, with its most recent result. 200 simulate with useful results; 29 fail because the library has no function or class that is the model, and 1 (pykan) on an fmugen problem.
+fmugen has been tried on 230 published, unmodified Python models (three needed a file renamed or a script wrapped in a class, and one synthetic input data; see their notes): the examples in this repository, models from about 150 libraries on PyPI, 50 neural networks and 13 models built on [GEKKO](https://github.com/BYU-PRISM/GEKKO). Each model is listed once, with its most recent result. 210 simulate with useful results; 20 fail because the library has no function or class that is the model.
 
 - [How the models were tested](#how-the-models-were-tested)
 - [Summary](#summary)
@@ -44,10 +44,10 @@ Columns: **`init` / `init --probe`**: ✓ if the config of either one builds, si
 |---|---|
 | `init` writes a config | 188 |
 | `init --probe` writes a config | 194 |
-| **Simulates with useful results** (a config from `init` or `init --probe`) | **182** |
-| …or with a hand-written config | **209** |
-| Fails | **21**: 20 need a wrapper; pykan's `init --probe` config fails at initialization |
-| **Compiled FMU simulates** | **208**; py-pde simulates uncompiled only |
+| **Simulates with useful results** (a config from `init` or `init --probe`) | **187** |
+| …or with a hand-written config | **210** |
+| Fails | **20**: all need a wrapper |
+| **Compiled FMU simulates** | **209**; py-pde simulates uncompiled only |
 
 A config only counts as a success if the FMU simulates **and** gives the model's results. An FMU that runs but only outputs its own parameters, settings or constants counts as a failure.
 
@@ -56,10 +56,10 @@ How far each step gets:
 | Config | Models | Success |
 |---|---|---|
 | `init` (code only) | 55 of 230 | 24 % |
-| `init --probe` (or `init`, when it already works) | 182 of 230 | 79 % |
-| `init --probe` + a hand-written config (for the examples, the repository's `fmugen.toml`) | 209 of 230 | 91 % |
+| `init --probe` (or `init`, when it already works) | 187 of 230 | 81 % |
+| `init --probe` + a hand-written config (for the examples, the repository's `fmugen.toml`) | 210 of 230 | 91 % |
 
-Without the 20 models that need a wrapper, `init --probe` + a hand config gets 209 of 210: all but pykan.
+Without the 20 models that need a wrapper, `init --probe` + a hand config gets all 210.
 
 The `init` config fails mostly on models that return arrays, tuples, strings or objects, which only `--probe` types correctly; the error message points to it. Of the 67 `init` configs of the first group that simulate, 23 only output parameters, settings or constants. GEKKO models keep their results in GEKKO variables, which only `--probe` finds. The hand configs add `PropsSI`, cantera, PyTCI and the kalman example ([Hand configs](#hand-configs)), pandapower, seirsplus, tellurium, the GEKKO model OpenHENS, sgp4, pymunk and pybamm ([configs](match-testing-rerun/configs/)).
 
@@ -82,7 +82,7 @@ CGE counts as a success after renaming its `model.py`, NHES with synthetic input
 
 The 99 models tested later: every matching config is identical to the model run directly (51,974 values compared, largest relative difference 0), and every compiled FMU to its uncompiled one.
 
-**fmugen problems found.** 19 models failed on one of these in the first run (some models that also need a wrapper hit one too). fmugen has since been fixed for each, with tests, and the 19 were run again with the fixes: 18 match the direct run and compile (their rows say what failed before). The 10 whose compiled FMU failed to instantiate also compile and simulate with the fixes. pykan still fails: its `init --probe` config fails at initialization (`missing input data x`).
+**fmugen problems found.** 19 models failed on one of these in the first run (some models that also need a wrapper hit one too). fmugen has since been fixed for each, with tests, and the 19 were run again with the fixes: 18 match the direct run and compile (their rows say what failed before). The 10 whose compiled FMU failed to instantiate also compile and simulate with the fixes. pykan still failed then: its `init --probe` config failed at initialization (`missing input data x`); it passes since `8390062`, which sets `init_call` when a property fails before the step.
 
 - **`build` refuses a config `init --probe` wrote** (10 models: nbeats, timesfm, skorch, tabnet, pyod, osqp, prophet, xgboost, lightgbm, catboost): a `setup` call with a call as argument (`fit(numpy.array(...))`) runs in the probe, but `build` accepts only literals and names.
 - **Lists of integers are typed Real** (5: deepxde, fno, tcn, neuromancer, kan): torch refuses float sizes (`layer_sizes=[1, 16, 16, 1]`). An int scalar default is typed Integer.
@@ -142,7 +142,7 @@ Errors such as `y is an array of shape […], not a single value` in the `init` 
 | `filterpy.common:Q_discrete_white_noise` | ✓ | — | ✓ (`init --probe` config, 114.8 MB) |  |
 | `filterpy.gh:GHFilter` | ✓ | — | ✓ (`init --probe` config, 114.8 MB) | `update(z, g=None, h=None)`'s `h` is a gain: this `init` config bound it to the step size. `init` no longer does: rerun, `h` is a parameter (start 0.2) and there's no `[time]`; both configs match the direct run and the compiled FMU its uncompiled one. |
 | `fipy_heat.py:Rod` (fipy) (FMI 3) | ✗ no model to point `init` at | — | ✗ (wrapper only) | **Fails: the library has no function or class that is the model**, so `init` has nothing to point at. Tried through a wrapper written for this test: Wrapper ([fipy_heat.py](pending-100/wrappers/fipy_heat.py)): a FiPy problem is a mesh, variables and an equation built in code. 1-D heat equation, 10 cells. |
-| `floris:FlorisModel` | ✗ no useful outputs | ✓ [config](pending-100/hand/floris_lib/fmugen.toml) | ✓ 157 MB | Conditions set in `setup`, `run` each step, powers from `get:get_farm_power` / `get:get_turbine_powers`; the getters raise before the first `run`, so the model is called once at initialization (first run: `init_call = true`; rerun without it, matches the direct run, which can't read the powers at t = 0). Needed a wrapper before `get:`. |
+| `floris:FlorisModel` | ✓ | ✓ [config](pending-100/hand/floris_lib/fmugen.toml) | ✓ 157 MB, identical | Since `8390062`: `init --probe` alone works: the step returns nothing, so it reads the getters, `get:get_farm_power`, `get:get_turbine_powers` and 10 more `get:` outputs; matches the direct run (120 values). Before: no useful outputs. The hand config sets the conditions in `setup`. |
 | `fluids.core:Reynolds` | ✓ | — | ✓ (`init --probe` config, 104.0 MB) |  |
 | `fluids.friction:friction_factor` | ✓ | — | ✓ (`init --probe` config, 104.0 MB) |  |
 | `fluids.units:head_from_P` | ✓ | ✓ ([config](#fluidsunits)) | ✓ (`init --probe` config, [identical to the direct run](probe-9/CONCLUSION.md)) | `init --probe` retries with pint quantities and takes each input's unit from the error that names it (`convert = "pint"`, `unit = "Pa"`, …): 10.197 m. Before: TypeError: 100000.0 has no quantity |
@@ -208,7 +208,7 @@ Errors such as `y is an array of shape […], not a single value` in the `init` 
 | `py_vollib.black_scholes:black_scholes` | ✓ | — | ✓ (`init --probe` config, 102.7 MB) |  |
 | `pybamm:Simulation` | ✗ no useful outputs | ✓ ([config](match-testing-rerun/configs/pybamm.toml)) | ✓ (hand config, 265.2 MB) | `init`: outputs are only solver flags. The hand config reads the voltage as `return:Voltage [V].entries.-1`: `solution["Voltage [V]"]` on the `Solution` that `step()` returns. Without `init_call`: it would run one extra `step()` before t = 0. |
 | `PyCO2SYS:sys` | ✓ | — | ✓ (`init --probe` config, 46.1 MB) |  |
-| `pydmd:DMD` (FMI 3) | ✗ simulate fails | ✓ ([config](pending-100/hand/pydmd/fmugen.toml)) | ✓ (hand config, 145.8 MB) | DMD with 2 modes of 8 snapshots. The `init --probe` config reads DMD's properties at initialization, before `fit()` has run; the hand config runs `fit()` then too (`init_call = true`): eigenvalues and amplitudes, complex, split. |
+| `pydmd:DMD` (FMI 3) | ✓ | ✓ ([config](pending-100/hand/pydmd/fmugen.toml)) | ✓ 154 MB, identical (`init --probe` config) | DMD with 2 modes of 8 snapshots. Since `8390062`: the probe sees DMD's properties fail before `fit()` and sets `init_call = true`; matches the direct run (832 values). Before, the `init --probe` config read them at initialization, before `fit()`, and failed; the hand config does the same with `init_call = true`. |
 | `pyet:pm_fao56` | ✓ | — | ✓ (`init --probe` config, 72.2 MB) | The inputs must be pandas Series with a date index (the day of the year comes from `rs.index`). With plain numbers the call fails (`'float' object has no attribute 'time'`), so `--probe` writes `convert = "series"` with an `epoch` for each number input. Checked over 5 days with varying `rs` and `tmean`. |
 | `pyfluids:Fluid` | ✓ | — | ✓ (`init --probe` config, 56.7 MB) |  |
 | `pygfunction.heat_transfer:finite_line_source` | ✓ | — | ✓ (`init --probe` config, 88.2 MB) |  |
@@ -226,7 +226,7 @@ Errors such as `y is an array of shape […], not a single value` in the `init` 
 | `pyromat:get` | ✓ | — | ✓ (`init --probe` config, 47.0 MB) |  |
 | `pysindy:SINDy` (FMI 3) | ✓ | — | ✓ (`init --probe` config, 99.9 MB) | SINDy fitted to two decaying exponentials: the coefficient matrix (2×10). |
 | `pysolar.solar:get_altitude` | ✓ | — | ✓ (`init --probe` config, 45.9 MB) |  |
-| `pyswmm:Simulation` | ✓ | — | ✓ (`init` config, 46.1 MB) | `Simulation(inputfile)`, `--call __next__`: steps pyswmm's `model_weir_setting.inp`. The `init --probe` config fails (it reads the current time before the simulation starts); plain `init` works. |
+| `pyswmm:Simulation` | ✓ | — | ✓ (`init` config, 46.1 MB) | `Simulation(inputfile)`, `--call __next__`: steps pyswmm's `model_weir_setting.inp`. Plain `init` works. The `init --probe` config failed (it reads the current time before the simulation starts); since `8390062` the probe sets `init_call = true` and it matches the direct run (47 values) and compiles identically (46 MB). |
 | `PyTCI.models.propofol:Marsh` | ✗ no useful outputs | ✓ ([config](#pytci)) | ✓ (hand config, 87.6 MB) | Outputs only echo the parameters (`weight`, `time_seconds`): the state is in a nested function. |
 | `pyteomics.mass:calculate_mass` | ✓ | — | ✓ (`init --probe` config, 51.6 MB) |  |
 | `pythermalcomfort.models.jos3:JOS3` | ✓ | ✓ ([config](#jos3)) | ✓ (`init --probe` config, 153.8 MB) |  |
@@ -247,7 +247,7 @@ Errors such as `y is an array of shape […], not a single value` in the `init` 
 | `ruckig_axis.py:Axis` (ruckig) (FMI 3) | ✗ no model to point `init` at | — | ✗ (wrapper only) | **Fails: the library has no function or class that is the model**, so `init` has nothing to point at. Tried through a wrapper written for this test: Wrapper ([ruckig_axis.py](pending-100/wrappers/ruckig_axis.py)): Ruckig's methods are C built-ins taking parameter objects. One axis, 10 ms control cycle run inside each step: position, velocity, acceleration. |
 | `scipy.signal:lfilter` | ✓ | — | ✓ (`init --probe` config, 98.3 MB) |  |
 | `sde_ou.py:ou` (sdeint) | ✗ no model to point `init` at | — | ✗ (wrapper only) | **Fails: the library has no function or class that is the model**, so `init` has nothing to point at. Tried through a wrapper written for this test: Wrapper ([sde_ou.py](pending-100/wrappers/sde_ou.py)): the drift and diffusion are Python functions. An Ornstein–Uhlenbeck process, seeded. |
-| `sectionproperties.analysis:Section` | ✗ no outputs | ✓ [config](pending-100/hand/section_lib/fmugen.toml) | ✓ 141 MB | Meshed geometry as a computed constant, results from `get:get_area` / `get_ic` / `get_c`; the getters raise until the analysis has run, so the model is called once at initialization (first run: `init_call = true`; rerun without it, matches the direct run, which can't read the results at t = 0). Needed a wrapper before `get:`. |
+| `sectionproperties.analysis:Section` | ✓ | ✓ [config](pending-100/hand/section_lib/fmugen.toml) | ✓ 141 MB, identical | Since `8390062`: `init --probe` alone works: `get:get_area`, `get_ic`, `get_c` and 10 more `get:` outputs; matches the direct run (81 values). Before: no outputs. The hand config passes the meshed geometry as a computed constant. |
 | `seirsplus.models:SEIRSModel` | ✗ not possible (FMI limitation) | ✓ ([config](match-testing-rerun/configs/seirsplus.toml)) | ✓ (hand config, 94.8 MB) | **Not possible with `init` (FMI limitation):** the counts (`numS`, `numI`, …) are arrays that grow by one element each step, and an FMI variable has a fixed size ([Limitations](#known-problems)). `init`: outputs only echo the parameters; the state arrays grow each step and are left out. The hand config reads the latest counts (`attr:numS.-1`, …) and sets `dt = 0.1`: with `dt` = the step size (1), `run_epoch` keeps only the start point and `t` never advances. |
 | `sgp4.api:Satrec` | ✗ no config | ✓ ([config](match-testing-rerun/configs/sgp4.toml)) | ✓ (hand config, 44.9 MB) | `init`: C built-ins with no signature: `--start fr, jd, line1, line2: cannot tell which arguments these are …`. The hand config builds the satellite with `create = "twoline2rv"` from the two TLE lines and binds `sgp4(jd, fr)` by position (`to = "pos:N"`); outputs the error code, position (km) and velocity (km/s). Checked against `Satrec.sgp4` called directly: identical; the compiled FMU (PyInstaller 6.22.3, WSL 2) is identical to the uncompiled one. |
 | `shapely:Point` | ✓ | — | ✓ (`init --probe` config, 50.3 MB) |  |
@@ -260,7 +260,7 @@ Errors such as `y is an array of shape […], not a single value` in the `init` 
 | `skrf.media:DefinedGammaZ0` | ✓ | — | ✓ (`init --probe` config, 107.0 MB) | A 90° line (`DefinedGammaZ0.line`) at 3 frequencies: S-parameters, complex, split. |
 | `slycot:sb02md` (FMI 3) | ✓ | — | ✓ (`init --probe` config, 69.7 MB) | `sb02md`, the continuous Riccati equation (SLICOT, Fortran): X, eigenvalues, condition. |
 | `sobol_ishigami.py:ishigami_sobol` (SALib) | ✗ no model to point `init` at | — | ✗ (wrapper only) | **Fails: the library has no function or class that is the model**, so `init` has nothing to point at. Tried through a wrapper written for this test: Wrapper ([sobol_ishigami.py](pending-100/wrappers/sobol_ishigami.py)): Sobol analysis needs a sample and the model's outputs on it. First-order and total indices of the Ishigami function. |
-| `ssqueezepy:ssq_cwt` (FMI 3) | ✗ simulate fails | ✓ ([config](pending-100/hand/ssq_cwt/fmugen.toml)) | ✓ (hand config, 156.0 MB) | Synchrosqueezed CWT of a 64-sample sine. `init` binds the argument `t` (the signal's time vector, default None) to the FMU time, so the model gets a float: the hand config leaves `[time]` out and outputs the 162 frequencies and scales. |
+| `ssqueezepy:ssq_cwt` (FMI 3) | ✓ | ✓ ([config](pending-100/hand/ssq_cwt/fmugen.toml)) | ✓ 158 MB, identical (`init --probe` config) | Synchrosqueezed CWT of a 64-sample sine. Since `8390062`: the probe fails with the FMU time as `t` (the signal's time vector, default None) and works with the default, so `t` isn't bound: outputs the two transforms (162×64, real and imaginary parts), the frequencies and the scales; matches the direct run (167,184 values). Before, `init` bound `t` to the FMU time and the model got a float. |
 | `statsforecast.models:AutoARIMA` | ✓ | — | ✓ (`init --probe` config, 225.3 MB) | AutoARIMA, `--call forecast`, h = 4. |
 | `statsmodels.stats.proportion:proportion_confint` | ✓ | — | ✓ (`init --probe` config, 121.1 MB) |  |
 | `sympy:lambdify` | ✗ simulate fails | ✓ ([config](pending-100/hand/sympy_lambdify/fmugen.toml)) | ✓ (hand config, 64.9 MB) | `lambdify` makes a function of x and y by position, which `init` can't see; the hand config binds them with `to = "pos:N"`. |
@@ -295,7 +295,7 @@ Each was installed as published (`pip install <package>`) into its own venv toge
 | `equinox.nn:MLP` | ✓ | — | ✓ (`init --probe` config, 273.1 MB) | A 2-8-8-1 MLP, seeded by its `PRNGKey(0)`. |
 | `facenet_pytorch:MTCNN` | ✓ | — | ✓ (`init --probe` config, 301 MB) | Failed before the fixes: `init --probe` finds no output: boxes and probabilities are numpy arrays of `dtype=object`. Face detection on ultralytics' `zidane.jpg`: 3 boxes and probabilities (numpy arrays of `dtype=object`). |
 | `gluon_deepar.py:DeepARForecast` (gluonts) | ✗ no model to point `init` at | — | ✗ (wrapper only) | **Fails: the library has no function or class that is the model**, so `init` has nothing to point at. Tried through a wrapper written for this test: Wrapper ([gluon_deepar.py](pending-100/wrappers/gluon_deepar.py)): the estimator trains into a predictor that takes GluonTS datasets. 1 epoch, seeded; mean forecast of 4 values. |
-| `kan:KAN` | ✗ simulate fails | — | — | **Fails**, also with the fixes: the `init --probe` config fails at initialization (`missing input data x`); plain `init` works. Before the fixes, `width=[2, 3, 1]` was typed Real (`'float' object is not subscriptable`). A 2-3-1 KAN (grid 3, k 3, seed 0). **Needs scikit-learn, pandas, matplotlib, pyyaml and tqdm installed by hand.** |
+| `kan:KAN` | ✓ | — | ✓ 365 MB, identical (`init --probe` config) | Since `8390062`: the `init --probe` config sets `init_call = true` and matches the direct run (56 values). Before, it failed at initialization (`missing input data x`); before the earlier fixes, `width=[2, 3, 1]` was typed Real (`'float' object is not subscriptable`). A 2-3-1 KAN (grid 3, k 3, seed 0). **Needs scikit-learn, pandas, matplotlib, pyyaml and tqdm installed by hand.** |
 | `keras.applications:MobileNetV2` | ✓ | — | ✓ (`init --probe` config, 283.0 MB) | MobileNetV2 (ImageNet), `--call predict`, **Keras on its JAX backend** (`KERAS_BACKEND=jax`): TensorFlow needs protobuf ≥ 5.28 and fmugen pins 5.27.3 (UniFMU 0.14's). |
 | `mace.calculators:mace_mp` | ✓ | — | ✓ (`init --probe` config) | Before the fixes, the compiled FMU failed to instantiate with no error message: TorchScript needs the `.py` sources of the functions it compiles at import. MACE-MP-0 small, `--call get_potential_energy` on ASE's fcc copper. |
 | `matgl.ext.ase:PESCalculator` | ✓ | — | ✓ (`init --probe` config) | Before the fixes, the compiled FMU failed to instantiate with no error message: TorchScript needs the `.py` sources of the functions it compiles at import. TensorNet-PES-MatPES-PBE-2025.2 through its ASE calculator (`matgl.ext.ase:PESCalculator`, `--call get_potential_energy`) on fcc aluminium: −3.7124 eV. `load_model` returns a `Potential` with no `predict_structure`. |
