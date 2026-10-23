@@ -59,6 +59,7 @@ Every key is always present in a single-model file.
 | `save_state` | `true`, `false` or string[] | `true`: the whole model object is pickled (cloudpickle as a fallback); a list: only those attribute paths; `false`: no FMU state | `[model] save_state` |
 | `discard_on` | string[] | `"module:Exception"` classes (or warnings) that make a step return `Discard` and roll back | `[model] discard_on` |
 | `integrate` | null or object | `{method, substeps}`: the model returns derivatives and the engine integrates the states. `method` is `euler`, `rk4` or `scipy:<RK45, RK23, DOP853, Radau, BDF, LSODA>` | `[model] integrate`, `substeps` |
+| `repeat` | int (only when set) | how many times the step runs per communication step, each with an equal part of it | `[model] substeps` without `integrate` |
 | `annotations` | string or null | XML of `<Tool name="...">` elements, copied into `<Annotations>` | `[model] annotations` |
 | `capture_output` | bool | Inside UniFMU, send the model's stdout/stderr to a file and forward it to the importer's log (UniFMU 0.14 crashes on more than ~4 KB of console output) | `--capture-output` |
 
@@ -141,7 +142,7 @@ A binding is `{"kind": ..., "name": ...}` and says where a value goes in, or com
 | `pos` | `"0"`, `"1"`, ... | a positional argument of the step call |
 | `init` | argument name | a keyword argument of the constructor (classes) |
 | `initpos` | `"0"`, `"1"`, ... | a positional argument of the constructor (classes) |
-| `attr` | attribute path | set as an attribute of the model object (classes) |
+| `attr` | attribute path | set as an attribute of the model object (classes); a part that isn't an attribute is a key or an index |
 | `call` | method name | passed to a setter method, `obj.method(value)` (classes) |
 
 A `name` may pick an item: `arg:pair[0]`, `arg:params[key]` or `arg:u.temp`. The argument then gets a list, dict or object that collects every variable bound to it.
@@ -153,6 +154,7 @@ A `name` may pick an item: `arg:pair[0]`, `arg:params[key]` or `arg:u.temp`. The
 | `return` | null | the whole return value |
 | `return` | key, index or path | part of the return value (`return:T`, `return:0`, `return:zone.T`) |
 | `attr` | attribute path | an attribute of the model object (classes) |
+| `get` | method path | what that method of the model object returns, called without arguments (classes) |
 
 Function models only allow `arg`, `pos` and `return`.
 

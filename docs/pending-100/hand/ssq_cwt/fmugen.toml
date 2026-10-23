@@ -1,0 +1,18 @@
+# ssqueezepy: `init` binds ssq_cwt's argument t (the signal's time vector, default None) to the FMU
+# time, so the model got a float ("object of type 'float' has no len()"). Without [time]: the
+# synchrosqueezed transform of a 64-sample sine; outputs are the 162 frequencies and scales (the
+# transforms themselves are 162 x 64 complex matrices).
+[model]
+entry = "ssqueezepy:ssq_cwt"
+fmi_version = 3
+
+[model.constants]
+x = { call = "numpy:sin(numpy.linspace(0, 20, 64))" }
+
+[inputs]
+wavelet = { start = "gmw" }
+scales = { start = "log-piecewise" }
+
+[outputs]
+ssq_freqs = { from = "return:2", dimensions = [162] }
+scales_used = { from = "return:3", dimensions = [162] }

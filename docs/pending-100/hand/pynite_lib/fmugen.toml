@@ -1,0 +1,17 @@
+# PyNite without a wrapper: the frame is built in setup (nodes, material, section, members,
+# supports, a 10 kip load at midspan), each step is analyze(), and the results are read from the
+# nodes' result dicts ("Combo 1", PyNite's default load combination). init --probe outputs only the
+# solution type.
+[model]
+entry = "Pynite:FEModel3D"
+setup = ["add_node('N1', 0.0, 0.0, 0.0)", "add_node('N2', 3.0, 0.0, 0.0)", "add_node('N3', 6.0, 0.0, 0.0)", "add_material('Steel', 29000.0, 11200.0, 0.3, 0.49)", "add_section('S', 20.0, 100.0, 150.0, 250.0)", "add_member('M1', 'N1', 'N2', 'Steel', 'S')", "add_member('M2', 'N2', 'N3', 'Steel', 'S')", "def_support('N1', True, True, True, True, False, False)", "def_support('N3', False, True, True, False, False, False)", "add_node_load('N2', 'FY', -10.0)"]
+call = "analyze"
+
+[model.call_constants]
+log = false
+check_statics = false
+
+[outputs]
+dy_mid = { from = "attr:nodes.N2.DY.Combo 1" }
+rz_left = { from = "attr:nodes.N1.RZ.Combo 1" }
+reaction_left = { from = "attr:nodes.N1.RxnFY.Combo 1" }

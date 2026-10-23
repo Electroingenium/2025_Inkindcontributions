@@ -30,6 +30,28 @@ def _time_source(name):
     """
     return TIME_NAMES.get(name.lower().replace("_", ""))
 
+
+def _horizon(p):
+    """Whether a parameter named ``h`` is a count (a forecast horizon), not a step size.
+
+    ``h`` is a step size in ODE code, but forecasters (neuralforecast's ``predict(h=None)``,
+    statsforecast's ``forecast(h)``) use it for the number of values to forecast. It's taken as one
+    when it's annotated as an integer (``int``, ``Optional[int]``) or defaults to an integer or None.
+
+    :param p: the parameter.
+    :type p: inspect.Parameter
+    :rtype: bool
+    """
+    if p.name != "h":
+        return False
+    annotation = p.annotation
+    if isinstance(annotation, str):
+        annotation_ints = re.fullmatch(r"(typing\.)?(Optional\[int\]|int( \| None)?|None \| int)", annotation)
+    else:
+        annotation_ints = annotation is int or set(typing.get_args(annotation)) in ({int}, {int, type(None)})
+    default = p.default
+    return bool(annotation_ints) or default is None or isinstance(default, int) and not isinstance(default, bool)
+
 #: Python types that are FMI scalar values.
 SCALARS = (bool, int, float, str)
 
@@ -342,8 +364,19 @@ def class_called(cls, name):
     if not isinstance(raw, types.FunctionType):
         return False
     params = list(inspect.signature(raw).parameters.values())
-    return not params or (params[0].name != "self"
-                          and params[0].kind in (params[0].POSITIONAL_ONLY, params[0].POSITIONAL_OR_KEYWORD))
+    if not params:
+        return True
+    first = params[0]
+    if first.name == "self" or first.kind not in (first.POSITIONAL_ONLY, first.POSITIONAL_OR_KEYWORD):
+        return False
+    # A method whose instance isn't called self: a function defined outside the class and attached to it
+    # (pypsa's Network.pf = pf, written as pf(n, ...)), or one whose first parameter is annotated with the class.
+    if "." not in raw.__qualname__.replace(".<locals>.", ""):
+        return False
+    annotation = first.annotation
+    if isinstance(annotation, str):
+        return annotation.strip("'\"").rpartition(".")[2] not in {k.__name__ for k in inspect.getmro(cls)}
+    return not (inspect.isclass(annotation) and issubclass(cls, annotation))
 
 
 def _keywordless(fn):
@@ -433,7 +466,7 @@ def _arguments(fn, section, data, comments, skip_self=False, allow_time=True, co
             continue
         if p.kind is p.POSITIONAL_ONLY and not positional:
             continue
-        if allow_time and _time_source(p.name) and p.name not in starts:
+        if allow_time and _time_source(p.name) and p.name not in starts and not _horizon(p):
             time_args[p.name] = _time_source(p.name)
             continue
         if allow_time and _time_source(p.name) and isinstance(starts.get(p.name), (int, float)):
@@ -499,7 +532,8 @@ def _arguments(fn, section, data, comments, skip_self=False, allow_time=True, co
         if (p.kind is p.POSITIONAL_ONLY or keywordless) and len(variables) > before:
             variables[p.name]["to"] = f"pos:{position}"
             position += 1
-    names = {p.name for p in params}
+    # not *args/**kwargs' own names: MOMENT's from_pretrained(..., **model_kwargs) takes a model_kwargs keyword
+    names = {p.name for p in params if p.kind not in (p.VAR_POSITIONAL, p.VAR_KEYWORD)}
     extra = [name for name in starts
              if name not in names and "." not in name   # ARG.FIELD: a field of an object argument, not a keyword
              and name not in time_args]
@@ -525,6 +559,9 @@ def _arguments(fn, section, data, comments, skip_self=False, allow_time=True, co
         elif any(p.kind is p.VAR_KEYWORD for p in params):  # **kwargs: --start values become keyword arguments
             if computed:
                 data["model"].setdefault(constants_key, {})[name] = dict(starts[name])
+            elif isinstance(starts[name], dict):   # a dict (MOMENT's model_kwargs={...}): a fixed keyword
+                data["model"].setdefault(constants_key, {})[name] = {"python": repr(starts[name])}
+                comments[("model", f"{constants_key}.{name}")] = "--start, passed through **kwargs"
             else:
                 variables[name] = _extra_info(name, starts[name], arrays)
                 comments[(section, name)] = "start from --start (passed through **kwargs)"
@@ -976,10 +1013,15 @@ def _array_info(value, with_start=False):
     :return: ``{dimensions, type?, numpy? / convert?, start?}``, else None (also for empty arrays).
     :rtype: dict or None
     """
-    if hasattr(value, "shape") and hasattr(value, "tolist") and getattr(value, "ndim", 0) > 0:
+    # not a class: numpy.float64 (a dtype default) has shape and ndim as descriptors
+    if (not isinstance(value, type) and hasattr(value, "shape") and hasattr(value, "tolist")
+            and getattr(value, "ndim", 0) > 0):
         from fmugen.templates.fmugen_runtime import flatten
         shape, flat = [int(n) for n in value.shape], flatten(value.tolist())
         fmi_type = NUMPY_TYPES.get(str(value.dtype).rpartition(".")[2])   # "float32", "torch.float32", ...
+        if str(value.dtype) == "object" and flat and all(
+                isinstance(x, (int, float)) and not isinstance(x, bool) for x in flat):
+            fmi_type = "Real"   # numbers in an object array (facenet-pytorch's MTCNN.detect boxes)
         if fmi_type is None:
             return None
         info = {"dimensions": shape}
@@ -996,6 +1038,9 @@ def _array_info(value, with_start=False):
         flat = flatten(value)
         if all(isinstance(x, bool) for x in flat):
             fmi_type = "Boolean"
+        elif all(isinstance(x, int) and not isinstance(x, bool) for x in flat):
+            # sizes such as layer_sizes=[1, 16, 16, 1]: as floats, torch refuses them (deepxde, pytorch-tcn)
+            fmi_type = "Integer"
         elif all(isinstance(x, (int, float)) and not isinstance(x, bool) for x in flat):
             fmi_type = "Real"
         else:

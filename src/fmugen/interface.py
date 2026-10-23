@@ -279,8 +279,10 @@ def _infer_config(target, call, config_dir, fmi_version, starts, setup, kind, cr
     _add_globals(data, comments, module, config_dir if path else None)
     _add_requirements(data, comments, module_name, config_dir, Path(path).resolve() if path else None)
     _rename_duplicates(data, comments)
+    # FMI 2 too: importers name the simulation time `time` in their results (FMPy), hiding the variable
+    _rename_reserved(data, comments, is_class="call" in data["model"] or inspect.isclass(entry))
     if fmi_version == 3:
-        _rename_reserved(data, comments, is_class="call" in data["model"] or inspect.isclass(entry))
+        _wide_integers(data, comments)
     else:
         _fmi2_types(data, comments)
     variables = {n for sec in ("parameters", "inputs", "states") for n in data.get(sec, {})}
@@ -347,10 +349,36 @@ def _fmi2_types(data, comments):
     data.pop("structural_parameters", None)
 
 
-def _rename_reserved(data, comments, is_class):
-    """FMI 3 reserves ``time``: a variable for the model's own ``time`` becomes ``model_time``.
+def _wide_integers(data, comments):
+    """FMI 3: an integer start beyond Int32 gets a 64-bit type, which ``build`` would otherwise refuse.
 
-    Bound to the model's name with ``to`` / ``from``.
+    E.g. numpy's ``default_rng(seed=12345678901234567890)``: UInt64.
+
+    :param data: the config being inferred; updated in place.
+    :type data: dict
+    :param comments: ``(section, key) -> text``; updated in place.
+    :type comments: dict
+    """
+    for section in ("parameters", "inputs", "states"):
+        for name, info in data.get(section, {}).items():
+            start = info.get("start")
+            if "type" in info or not isinstance(start, int) or isinstance(start, bool) or -2**31 <= start < 2**31:
+                continue
+            if -2**63 <= start < 2**63:
+                info["type"] = "Int64"
+            elif 0 <= start < 2**64:
+                info["type"] = "UInt64"
+            else:
+                continue
+            comments.setdefault((section, name), f"{info['type']}: the start doesn't fit in an Int32")
+
+
+def _rename_reserved(data, comments, is_class):
+    """A variable for the model's own ``time`` becomes ``model_time``.
+
+    FMI 3 reserves ``time``; in FMI 2, importers' results name the simulation time ``time`` (FMPy's
+    result array), which hides a variable of that name (nengo's ``Simulator.time``). Bound to the
+    model's name with ``to`` / ``from``.
 
     :param data: the config being inferred; updated in place.
     :type data: dict
@@ -371,7 +399,7 @@ def _rename_reserved(data, comments, is_class):
             info.setdefault("to", "init:time" if section == "parameters" and is_class else "arg:time")
         variables[new] = info
         comments.pop((section, "time"), None)
-        comments[(section, new)] = "the model's `time` (FMI 3 reserves that name)"
+        comments[(section, new)] = "the model's `time` (FMI 3 reserves that name, and importers use it for the simulation time)"
 
 
 def _rename_duplicates(data, comments):
@@ -561,7 +589,7 @@ def _add_requirements(data, comments, module_name, config_dir, entry_file):
     the local model files import (read with :func:`ast.parse`, not by importing), and modules
     named in setup, computed constants, convert and enum. :func:`importlib.util.find_spec`
     locates each module without importing it; ``packages_distributions`` maps it to its
-    distribution. A Docker image or ``--vendor`` installs these.
+    distribution. ``--vendor`` installs these.
 
     :param data: the config being inferred; updated in place.
     :type data: dict
@@ -625,7 +653,7 @@ def _add_requirements(data, comments, module_name, config_dir, entry_file):
         found[dist.metadata["Name"]] = f"{dist.metadata['Name']}=={dist.version}"
     if found:
         data["model"]["requirements"] = sorted(found.values(), key=str.lower)
-        comments[("model", "requirements")] = "the versions installed here; installed into Docker images and by --vendor"
+        comments[("model", "requirements")] = "the versions installed here; installed by --vendor"
     if unknown:
         comments[("model", "#requirements")] = (f"add the PyPI packages that provide {', '.join(unknown)} to "
                                                 "requirements (they could not be told from what is installed)")
@@ -790,11 +818,18 @@ def _infer_class(cls, call, data, comments, arrays=False, starts=None, create=No
                                                 f"{method_name}(...); remove this if it's a normal method")
 
     seen_returns, seen_attrs, obj = set(), set(), None
+    if factory is not None and not probe and cls is not None and not hasattr(cls, method_name):
+        cls = None   # annotated with a base class (tirex's PretrainedModel): the real class is known only by running it
     if probe:
         obj, seen_returns, seen_attrs = _probe_class(cls, method_name, data, comments, arrays, call_starts,
                                                      create, factory, converts)
+        if obj is not None and cls is not None and not hasattr(cls, method_name):
+            # a factory annotated with a base class (tirex's load_model -> PretrainedModel): read the
+            # class of the object it returned, which has the method
+            cls = type(obj)
     elif cls is None:
-        comments[("inputs", None)] = (f"the object {factory.__name__}() returns is known only by running it: add the "
+        # getattr: a callable object (a library's placeholder for a missing optional dependency) has no __name__
+        comments[("inputs", None)] = (f"the object {getattr(factory, '__name__', type(factory).__name__)}() returns is known only by running it: add the "
                                       f"inputs and outputs of {method_name}() by hand, or run init --probe")
     else:
         method = inspect.getattr_static(cls, method_name)

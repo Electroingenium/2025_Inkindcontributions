@@ -20,10 +20,10 @@ from fmugen.templates.fmugen_runtime._constants import (
     Status, StepRejected,
 )
 from fmugen.templates.fmugen_runtime._helpers import (
-    _capture_output, _clock_of, _is_number, _quiet_debug_logging,
+    _capture_output, _release_output, _clock_of, _is_number, _quiet_debug_logging,
     assemble_items, coerce, converter, describe, dump_state,
     flatten, get_path, is_literal_constant, keyword_constants,
-    load_entry, load_state, outside_bundle, pick, plain_number, reshape,
+    load_entry, load_state, object_call, outside_bundle, pick, plain_number, reshape,
     resolve_constant, resolve_reference, results_of, rng_states, set_path,
     set_rng_states, split_global,
 )
@@ -214,27 +214,33 @@ class Engine:
         cwd = self.interface.get("cwd")
         # kept outside a compiled backend's bundle, at the same place under resources/
         self.cwd = outside_bundle(self.resources_dir) / cwd if cwd is not None else None
-        with self._in_model_dir():   # the model may read files when it is imported
-            self.module, self.entry = load_entry(self.interface, self.resources_dir)
-            self.enums = {
-                name: resolve_reference(td["enum"])
-                for name, td in self.interface.get("type_definitions", {}).items() if td.get("enum")
-            }
-            # constants ({ call = ... } may download or compute) are resolved when the FMU initializes,
-            # where a failure is reported to the importer with its traceback (resolve_constants)
-            self.constants = self.call_constants = None
-            # "series" dates its value at the FMU time (the start of the step being made)
-            self.converters = {v["name"]: converter(v, lambda: self.time) for v in self.variables if v.get("convert")}
-            # [model] globals: module-level state, put back to its import-time value on reset
-            self.globals = [split_global(ref) for ref in self.interface.get("globals", [])]
-            self.global_starts = copy.deepcopy(self._read_globals())
-            # [model] discard_on: exceptions and warnings that make doStep return discard (the step is undone)
-            self.discard_on = tuple(resolve_reference(ref) for ref in self.interface.get("discard_on", []))
-        if self.interface.get("integrate") and self.interface.get("save_state", True) is not False:
-            self.discard_on += (StepRejected,)   # a failed solve rejects the step (undone from the saved state)
-        self._loop = None   # the event loop of an async model, kept for the whole run
-        self.is_class = self.interface["entry"]["kind"] == "class"
-        self.reset()
+        try:   # an import error here ends the backend: its traceback must reach the console
+            with self._in_model_dir():   # the model may read files when it is imported
+                self.module, self.entry = load_entry(self.interface, self.resources_dir)
+                self.enums = {
+                    name: resolve_reference(td["enum"])
+                    for name, td in self.interface.get("type_definitions", {}).items() if td.get("enum")
+                }
+                # constants ({ call = ... } may download or compute) are resolved when the FMU initializes,
+                # where a failure is reported to the importer with its traceback (resolve_constants)
+                self.constants = self.call_constants = None
+                # "series" dates its value at the FMU time (the start of the step being made)
+                self.converters = {v["name"]: converter(v, lambda: self.time) for v in self.variables if v.get("convert")}
+                # [model] globals: module-level state, put back to its import-time value on reset
+                self.globals = [split_global(ref) for ref in self.interface.get("globals", [])]
+                self.global_starts = copy.deepcopy(self._read_globals())
+                # [model] discard_on: exceptions and warnings that make doStep return discard (the step is undone)
+                self.discard_on = tuple(resolve_reference(ref) for ref in self.interface.get("discard_on", []))
+            if self.interface.get("integrate") and self.interface.get("save_state", True) is not False:
+                self.discard_on += (StepRejected,)   # a failed solve rejects the step (undone from the saved state)
+            self._loop = None   # the event loop of an async model, kept for the whole run
+            self.is_class = self.interface["entry"]["kind"] == "class"
+            self.reset()
+        except BaseException as e:
+            # the exception's own line first: UniFMU cuts the backend's output short, and the
+            # warnings printed while importing and a long traceback would push it out
+            _release_output(self._output, f"[fmugen] the model failed to load: {type(e).__name__}: {e}\n")
+            raise
         self._forward_output()   # e.g. warnings printed while the model was imported
 
     # ================= life cycle =================
@@ -361,11 +367,23 @@ class Engine:
                 self._apply_attributes(clock=None, initial=True)
                 for name in self.clocks:
                     self._apply_attributes(clock=name, initial=True)
-            if self.interface["entry"].get("init_call"):
+            init_call = self.interface["entry"].get("init_call")
+            if not init_call:
+                try:
+                    self._read_results(None, have_result=False, update_states=False, missing_ok=True)
+                except Exception as e:
+                    # a get: output whose method raises until the model has run (floris' get_farm_power()):
+                    # call the model once, as init_call = true does, then read again
+                    getters = [v["name"] for v in self.variables if v.get("from", {}).get("kind") == "get"]
+                    if not getters or not self.interface["entry"].get("step", True) or self.interface.get("integrate"):
+                        raise
+                    self.log(f"reading {', '.join(getters)} failed before the first step ({e!r}): the model is "
+                             "called once at initialization, as with [model] init_call = true",
+                             Status.ok, self.info_category)
+                    init_call = True
+            if init_call:
                 result = self._call(self.time, self.experiment.get("step_size", 0.0))
                 self._read_results(result, have_result=True, update_states=False, missing_ok=True)
-            else:
-                self._read_results(None, have_result=False, update_states=False, missing_ok=True)
             for name, clock in self.clocks.items():
                 if clock["causality"] == "input":
                     self._read_results(None, have_result=False, update_states=False, missing_ok=True, clock=name)
@@ -430,7 +448,11 @@ class Engine:
                 result, have_result = self._call(current_time + step_size, step_size), True
                 self._read_results(result, have_result=True, update_states=False, missing_ok=False)
             elif self.interface["entry"].get("step", True):
-                result, have_result = self._call(current_time, step_size), True
+                repeat = self.interface.get("repeat", 1)   # [model] substeps without integrate
+                h = step_size / repeat
+                for i in range(repeat):
+                    result = self._call(current_time + i * h, h)
+                have_result = True
                 self._read_results(result, have_result=True, update_states=True, missing_ok=False)
             else:  # [model] call = false: only clocks run code
                 result, have_result = None, False
@@ -1621,8 +1643,11 @@ class Engine:
         if clock is None:
             if not self.is_class:
                 return self.entry
+            call = self.interface["entry"]["call"]
+            if ":" in call:   # "module:function(self, ...)": a function taking the model object
+                return object_call(call, self.obj)
             owner = type(self.obj) if self.interface["entry"].get("call_on_class") else self.obj
-            return getattr(owner, self.interface["entry"]["call"])
+            return getattr(owner, call)
         call = self.clocks[clock]["call"]
         if ":" in call:
             return resolve_reference(call)
@@ -1651,6 +1676,8 @@ class Engine:
                 if not have_result:
                     return False, None
                 return True, pick(result, source.get("name"))
+            if source["kind"] == "get":   # a getter method of the object, called after the step
+                return True, get_path(self.obj, source["name"])()
             return True, get_path(self.obj, source["name"])
         except (AttributeError, KeyError, IndexError):
             if missing_ok:

@@ -37,7 +37,8 @@ def render_toml(data, comments=None):
     :return: the file's text.
     :rtype: str
     """
-    comments = comments or {}
+    # one line each: a comment quoting a multi-line exception message would break the TOML (do-mpc)
+    comments = {k: " ".join(v.splitlines()) if isinstance(v, str) else v for k, v in (comments or {}).items()}
     lines = [HEADER]
     lines.append("[model]")
     for key, value in data["model"].items():

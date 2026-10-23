@@ -54,6 +54,44 @@ def test_large_console_output_reaches_the_log_instead_of_crashing(tmp_path):
     assert int(longest) < 2 * 20000 + 100 and clean == "True"   # one call's output, not a growing file
 
 
+INSTANTIATE = textwrap.dedent("""
+    import sys
+    from fmpy import simulate_fmu
+    logs = []
+    try:
+        simulate_fmu(sys.argv[1], stop_time=1, logger=lambda *args: logs.append(args[-1]), debug_logging=True)
+    except Exception:
+        pass
+    messages = [m.decode() if isinstance(m, bytes) else m for m in logs]
+    # UniFMU cuts the backend's output short: the runtime writes the exception's line before the traceback
+    print("FOUND" if any("model import broke" in m and "Traceback" in m for m in messages) else "MISSING", flush=True)
+""")
+
+
+@pytest.mark.fmu
+def test_an_import_error_at_instantiation_is_not_captured_away(tmp_path):
+    # timm's compiled FMU: the model failed to import, the backend exited with status 1, and its
+    # traceback was in the capture file, so UniFMU reported "Backend emitted no output"
+    (tmp_path / "broken.py").write_text(textwrap.dedent("""
+        import os
+        if "UNIFMU_DISPATCHER_ENDPOINT" in os.environ:   # only inside the FMU, not when building
+            raise ImportError("model import broke")
+        def broken(u=1.0):
+            return {"y": u}
+    """))
+    fmu = build(tmp_path / "broken.py", tmp_path / "broken.fmu", capture_output=True)[0]
+    (tmp_path / "simulate.py").write_text(INSTANTIATE)
+    log = tmp_path / "simulate.log"
+    with log.open("w") as out:   # a file, not a pipe: a backend left running would keep a pipe open
+        try:
+            subprocess.run([sys.executable, str(tmp_path / "simulate.py"), str(fmu)],
+                           stdout=out, stderr=subprocess.STDOUT, timeout=120)
+        except subprocess.TimeoutExpired:
+            pass
+    text = log.read_text(errors="replace")
+    assert "FOUND" in text, text[-2000:]
+
+
 def test_output_goes_to_the_console_by_default(tmp_path):
     import json
     import zipfile

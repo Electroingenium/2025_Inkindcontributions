@@ -53,7 +53,7 @@ Still missing:
 ### 2.5 Tests and quality
 - **No test from an installed wheel.** That is how the first review found a wheel that couldn't build anything.
 - **FMPy is the only importer used.** Add [fmusim from the Reference FMUs](https://github.com/modelica/Reference-FMUs) and, optionally, OMSimulator: importers call functions in different orders.
-- **The published-model tests are manual.** An opt-in `pytest -m pypi` suite built from the 46 configs in `docker/models/r3/*/fmugen.toml` would keep the promise that fmugen works on real published models checked.
+- **The published-model tests are manual.** An opt-in `pytest -m pypi` suite built from the 46 configs in `models/r3/*/fmugen.toml` would keep the promise that fmugen works on real published models checked.
 - **Property-based tests** (Hypothesis) for `render_toml` → `load_config` round trips and for `coerce` / `reshape` / `flatten`.
 - **No linter, formatter or type checker.** Add `ruff` (lint and format) and `pre-commit`. `pyright` or `mypy` in basic mode, plus a `TypedDict` for the interface spec, would catch dict-shape mistakes and document the spec.
 
@@ -63,7 +63,6 @@ Still missing:
 - **`.gitignore`:** add `dist/`, `build/` and `*.egg-info`.
 - **`image.png`** at the root is used by `docs/packaging.md`; it would sit better in `docs/img/`.
 - **Docs site:** the docs are spread over many pages plus a long manual; MkDocs Material on GitHub Pages would add navigation and search.
-- **Docker demo:** `docker-compose.yml` mounts `/var/run/docker.sock` into the Streamlit container, which gives that container root-equivalent access to the host, and publishes port 8501. `docker/Readme.md` should say so and recommend not exposing the port publicly. The demo doesn't use `--distributed` yet.
 
 ---
 

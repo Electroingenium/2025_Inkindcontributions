@@ -458,6 +458,10 @@ def normalize(config, entry_obj, module_name, sys_path, model_name=None, author=
         call = None
         init_sig = _signature(constructor)
         call_sig = None
+    elif isinstance(call, str) and ":" in call:   # "module:function(self, ...)": a function taking the object
+        _object_call(call, is_class, bool(model.get("call_on_class")))
+        init_sig = _signature(constructor)
+        call_sig = None   # its leading arguments are given in the call text, so names can't be checked here
     elif factory:
         init_sig = _signature(constructor)
         call_sig = None   # the method belongs to the object the factory returns, known only at runtime
@@ -482,6 +486,7 @@ def normalize(config, entry_obj, module_name, sys_path, model_name=None, author=
         raise InterfaceError(f"{model['entry']} is a generator (it uses yield), which fmugen can't step yet; "
                              "a factory that returns an object with a step method works ([model] call)")
     integrate = _integrate(model, step_call)
+    repeat = _repeat(model, step_call, integrate)
     discard_on = _discard_on(model.get("discard_on", []))
     if discard_on and _save_state(model) is False:
         raise InterfaceError("[model] discard_on needs the FMU state (save_state not false): a rejected step is "
@@ -681,6 +686,7 @@ def normalize(config, entry_obj, module_name, sys_path, model_name=None, author=
         "save_state": _save_state(model),
         "discard_on": discard_on,
         "integrate": integrate,
+        **({"repeat": repeat} if repeat else {}),
         "annotations": annotations,
         "notes": notes,
     }
@@ -709,15 +715,12 @@ def _integrate(model, step_call):
     :type step_call: bool
     :return: ``{"method", "substeps"}``, or None without ``integrate``.
     :rtype: dict or None
-    :raises InterfaceError: an unknown method, ``substeps`` with scipy or without integrate, or
-        ``call = false``.
+    :raises InterfaceError: an unknown method, ``substeps`` with scipy, or ``call = false``.
     """
     method = model.get("integrate")
     substeps = model.get("substeps", 1)
     if method is None:
-        if "substeps" in model:
-            raise InterfaceError("[model] substeps only applies with [model] integrate")
-        return None
+        return None   # substeps without integrate: see _repeat
     if not step_call:
         raise InterfaceError("[model] integrate and call = false exclude each other")
     if not isinstance(method, str) or not (method in INTEGRATORS or method.startswith("scipy:")):
@@ -732,6 +735,61 @@ def _integrate(model, step_call):
     if isinstance(substeps, bool) or not isinstance(substeps, int) or substeps < 1:
         raise InterfaceError("[model] substeps must be a positive integer")
     return {"method": method, "substeps": substeps}
+
+
+def _repeat(model, step_call, integrate):
+    """``[model] substeps`` without ``integrate``: how many times the step runs per communication step.
+
+    Each run gets an equal part of the step (its time and step size), for models stepped in a
+    loop of fixed small steps (an IMU filter at its sample rate, a physics engine's timestep).
+
+    :param model: the ``[model]`` table.
+    :type model: dict
+    :param step_call: whether the model is called on each step (``call`` isn't false).
+    :type step_call: bool
+    :param integrate: the validated ``integrate``, or None.
+    :type integrate: dict or None
+    :return: the number of runs, or None (one run, the default).
+    :rtype: int or None
+    :raises InterfaceError: not a positive integer, or with ``call = false``.
+    """
+    if "substeps" not in model or integrate is not None:
+        return None
+    substeps = model["substeps"]
+    if isinstance(substeps, bool) or not isinstance(substeps, int) or substeps < 1:
+        raise InterfaceError("[model] substeps must be a positive integer")
+    if not step_call:
+        raise InterfaceError("[model] substeps and call = false exclude each other: nothing runs on a step")
+    return substeps
+
+
+def _object_call(call, is_class, call_on_class):
+    """Validate ``[model] call = "module:function(self, ...)"``: a function taking the model object.
+
+    :param call: the call text.
+    :type call: str
+    :param is_class: whether the entry is a class (or a factory).
+    :type is_class: bool
+    :param call_on_class: ``[model] call_on_class``.
+    :type call_on_class: bool
+    :raises InterfaceError: not a class, with ``call_on_class``, invalid arguments, or a target that
+        can't be imported or isn't callable.
+    """
+    from fmugen.templates.fmugen_runtime import parse_call_text, resolve_reference
+    if not is_class:
+        raise InterfaceError(f"[model] call {call!r}: a function call on the model object only applies to classes")
+    if call_on_class:
+        raise InterfaceError(f"[model] call {call!r} and call_on_class exclude each other")
+    try:
+        target, _, _ = parse_call_text(call)
+    except (ValueError, SyntaxError) as e:
+        raise InterfaceError(f"[model] call: {e}") from e
+    try:
+        fn = resolve_reference(target)
+    except Exception as e:
+        raise InterfaceError(f"[model] call: cannot import {target!r}: {e!r}") from e
+    if not callable(fn):
+        raise InterfaceError(f"[model] call: {target!r} is not callable")
 
 
 def _discard_on(refs):
@@ -807,15 +865,16 @@ def parse_call(text):
     Accepts ``"module:function(arg, ..., key=arg, ...)"`` or ``"method(...)"``. The argument list
     is parsed with :func:`ast.parse` (as the call ``_(...)``) and never executed. Arguments are
     Python literals (simple ones kept as values, others as ``{ python = ... }``) or dotted
-    references to importable objects (e.g. ``psychrolib.SI``, kept as ``{ ref = ... }``);
-    references are resolved when the FMU initializes.
+    references to importable objects (e.g. ``psychrolib.SI``, kept as ``{ ref = ... }``) or
+    calls of those (e.g. ``numpy.array([1.0, 2.0])``, kept as ``{ call = ... }``, the same as a call
+    constant); references are resolved and calls made when the FMU initializes.
 
     :param text: the setup call text.
     :type text: str
     :return: ``{"call": target, "args": [...], "kwargs": {...}}``.
     :rtype: dict
     :raises InterfaceError: a syntax error, a missing ``)``, ``**kwargs``, or an argument that is
-        neither a literal nor a name.
+        neither a literal, a name nor a call of a name.
     """
     import ast
 
@@ -831,8 +890,11 @@ def parse_call(text):
             value = ast.literal_eval(node)
             return value if isinstance(value, (bool, int, float, str)) else {"python": ast.unparse(node)}
         except ValueError:
+            if isinstance(node, ast.Call) and isinstance(node.func, (ast.Attribute, ast.Name)):
+                # a call of an importable object, e.g. numpy.array([...]): a call constant
+                return {"call": ast.unparse(node)}
             if not isinstance(node, (ast.Attribute, ast.Name)):
-                raise InterfaceError(f"[model] setup {text!r}: arguments must be literals or names")
+                raise InterfaceError(f"[model] setup {text!r}: arguments must be literals, names or calls of names")
             return {"ref": ast.unparse(node)}
 
     call, paren, rest = text.partition("(")
@@ -844,6 +906,8 @@ def parse_call(text):
             parsed = ast.parse(f"_({rest}", mode="eval").body
         except SyntaxError as e:
             raise InterfaceError(f"[model] setup {text!r}: {e.msg}") from e
+        if not (isinstance(parsed, ast.Call) and isinstance(parsed.func, ast.Name) and parsed.func.id == "_"):
+            raise InterfaceError(f"[model] setup {text!r}: only one call is supported, nothing after its ')'")
         args = [argument(node) for node in parsed.args]
         for keyword in parsed.keywords:
             if keyword.arg is None:
@@ -1182,7 +1246,7 @@ def _variable(section, causality, name, info, is_class, type_definitions, versio
             var["to"]["kind"] = "initpos"
         if "clocks" in var and var["to"]["kind"] == "init":
             raise InterfaceError(f"{where}: a clocked input is passed to its clock's call, not the constructor")
-        kinds = ("return", "attr") if is_class else ("return",)
+        kinds = ("return", "attr", "get") if is_class else ("return",)
         if section == "states" and integrate:   # the model returns the derivative; the FMU integrates it
             if "next" in info:
                 raise InterfaceError(f"{where}: with [model] integrate, states have der = \"...\" (the "
@@ -1196,7 +1260,8 @@ def _variable(section, causality, name, info, is_class, type_definitions, versio
             var["next"] = parse_binding(info["next"], kinds, where)
     else:
         default = f"attr:{name}" if is_class else f"return:{name}"
-        var["from"] = parse_binding(info.get("from", default), ("return", "attr") if is_class else ("return",), where)
+        var["from"] = parse_binding(info.get("from", default), ("return", "attr", "get") if is_class else ("return",),
+                                    where)
         if section == "calculated_parameters" and var["from"]["kind"] != "attr":
             raise InterfaceError(f"{where}: calculated parameters are read from an attribute (from = \"attr:...\")")
 

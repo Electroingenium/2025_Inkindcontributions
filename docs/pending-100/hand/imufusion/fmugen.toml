@@ -1,0 +1,16 @@
+# imufusion without a wrapper: Ahrs() is a C built-in; the sample period is set in setup, each step
+# feeds one second of constant samples (substeps = 100 at 0.01 s) and the quaternion comes from
+# get_quaternion(), as in the wrapper.
+[model]
+entry = "imufusion:Ahrs"
+call = "update_no_magnetometer"
+setup = ["set_sample_period(0.01)"]
+substeps = 100
+fmi_version = 3
+
+[inputs]
+gyroscope = { dimensions = [3], start = [0.0, 0.0, 10.0], to = "pos:0", numpy = true }
+accelerometer = { dimensions = [3], start = [0.0, 0.0, 1.0], to = "pos:1", numpy = true }
+
+[outputs]
+quaternion = { dimensions = [4], from = "get:get_quaternion" }

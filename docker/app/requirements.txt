@@ -1,8 +1,0 @@
-# The stack: FMU runner, OPC UA server, Streamlit UI (docker or kubernetes run backend)
-fmpy>=0.3.32
-pandas
-opcua
-cryptography
-streamlit
-docker
-kubernetes

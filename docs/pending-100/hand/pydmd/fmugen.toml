@@ -1,0 +1,21 @@
+# pydmd: the probe's config reads DMD's properties at initialization, before fit() has run, and they
+# raise until then ("did you call fit()?"). Here fit() also runs at initialization (init_call), and
+# the outputs are the two DMD eigenvalues and mode amplitudes, complex, as real and imaginary parts.
+# The 8 snapshots of 20 points are a constant; svd_rank (the number of modes) a parameter.
+[model]
+entry = "pydmd:DMD"
+fmi_version = 3
+call = "fit"
+init_call = true
+
+[model.call_constants]
+X = { call = "numpy:sin(numpy.add.outer(numpy.linspace(0, 2.1, 8), numpy.linspace(0, 6, 20)))" }
+
+[parameters]
+svd_rank = { start = 2 }
+
+[outputs]
+eigs_real = { from = "attr:eigs.real", dimensions = [2] }
+eigs_imag = { from = "attr:eigs.imag", dimensions = [2] }
+amplitudes_real = { from = "attr:amplitudes.real", dimensions = [2] }
+amplitudes_imag = { from = "attr:amplitudes.imag", dimensions = [2] }

@@ -1,0 +1,17 @@
+# vqf without a wrapper: VQF(gyrTs) is a C built-in; each step feeds one second of constant samples
+# (substeps = 100 at gyrTs = 0.01, as the wrapper does) and the orientation comes from getQuat6D().
+[model]
+entry = "vqf:VQF"
+call = "update"
+substeps = 100
+fmi_version = 3
+
+[parameters]
+gyrTs = { start = 0.01, to = "pos:0" }
+
+[inputs]
+gyr = { dimensions = [3], start = [0.0, 0.0, 0.1], to = "pos:0", numpy = true }
+acc = { dimensions = [3], start = [0.0, 0.0, 9.81], to = "pos:1", numpy = true }
+
+[outputs]
+quat = { dimensions = [4], from = "get:getQuat6D" }

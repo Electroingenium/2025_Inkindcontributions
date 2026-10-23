@@ -1,0 +1,16 @@
+# PyPSA without a wrapper: the network is built in setup (add() calls), each step is pf(), and the
+# load is an input written into the network's table (attr: through a key). init --probe takes pf()
+# for a function without self (its first parameter is n) and passes it a float. The results are read
+# at the single snapshot, "now": a number (".0") doesn't pick a pandas Series' element.
+[model]
+entry = "pypsa:Network"
+setup = ["add('Bus', 'a', v_nom=110.0)", "add('Bus', 'b', v_nom=110.0)", "add('Line', 'ab', bus0='a', bus1='b', x=10.0, r=1.0)", "add('Generator', 'g', bus='a', control='Slack')", "add('Load', 'l', bus='b', p_set=100.0, q_set=20.0)"]
+call = "pf"
+
+[inputs]
+p_load = { start = 100.0, to = "attr:loads.p_set.l", unit = "MW" }
+
+[outputs]
+v_ang_b = { from = "attr:buses_t.v_ang.b.now", unit = "rad" }
+v_mag_b = { from = "attr:buses_t.v_mag_pu.b.now" }
+p_line = { from = "attr:lines_t.p0.ab.now", unit = "MW" }

@@ -63,7 +63,8 @@ def test_rendered_config_round_trips(tmp_path):
     output, data = init(tmp_path / "tank.py")
     text = output.read_text()
     assert tomllib.loads(text)["model"] == {"entry": "tank.py:Tank", "call": "step"}
-    assert tomllib.loads(text)["parameters"]["limits"] == {"dimensions": [2], "start": [0.0, 5.0]}
+    # integers stay Integer, as an int scalar default does (layer sizes: torch refuses floats)
+    assert tomllib.loads(text)["parameters"]["limits"] == {"dimensions": [2], "type": "Integer", "start": [0, 5]}
     assert data["outputs"] == {"y": {"from": "return"}, "overflow": {"type": "Boolean"}}
     assert data["locals"] == {"level": {}}
     assert load_config(output).entry_name == "Tank"
@@ -107,6 +108,14 @@ def test_unknown_config_keys_are_rejected(tmp_path):
         Config({"model": {"entry": "m.py:f"}, "inputs": {"x": {"strat": 1.0}}}, tmp_path)
     with pytest.raises(InterfaceError, match="entry"):
         Config({"model": {}}, tmp_path)
+
+
+def test_render_toml_multiline_comment_stays_a_comment():
+    # do-mpc: save_state's comment quotes casadi's multi-line pickling error
+    import tomllib
+    text = render_toml({"model": {"entry": "m.py:f", "save_state": False}},
+                       {("model", "save_state"): "can't be pickled (Exception: Use something like:\nwith ctx(): \n  pi)"})
+    assert tomllib.loads(text)["model"]["save_state"] is False
 
 
 def test_render_toml_values():
@@ -324,10 +333,12 @@ def test_fmi3_time_attribute_is_renamed(tmp_path):
             def step(self, dt: float = 1.0):
                 self.time += dt
     """))
-    data, _ = infer(tmp_path / "clock.py", fmi_version=3)
-    # the step's only result, so an output rather than a local
-    assert "time" not in data.get("outputs", {})
-    assert data["outputs"]["model_time"] == {"from": "attr:time"}
+    # FMI 2 too: FMPy's results call the simulation time `time`, hiding an output of that name (nengo)
+    for fmi in (2, 3):
+        data, _ = infer(tmp_path / "clock.py", fmi_version=fmi)
+        # the step's only result, so an output rather than a local
+        assert "time" not in data.get("outputs", {})
+        assert data["outputs"]["model_time"] == {"from": "attr:time"}
 
 
 @pytest.mark.parametrize("kind", ["series", "frame", "xarray"])
@@ -412,6 +423,28 @@ def test_setup_call_keeps_keyword_arguments():
         "call": "psychrolib:SetUnitSystem", "args": [{"ref": "psychrolib.SI"}], "kwargs": {"strict": True}}
     with pytest.raises(InterfaceError, match=r"\*\*kwargs"):
         parse_call("reset(**opts)")
+
+
+def test_setup_call_takes_calls_as_arguments():
+    # fit(numpy.array(...), ...): init --probe ran it, so build must accept it too (xgboost, skorch)
+    assert parse_call("fit(numpy.array([[0.1], [0.2]]), numpy.array([1.0, 2.0]), epochs=2)") == {
+        "call": "fit", "args": [{"call": "numpy.array([[0.1], [0.2]])"}, {"call": "numpy.array([1.0, 2.0])"}],
+        "kwargs": {"epochs": 2}}
+    from fmugen.templates.fmugen_runtime import resolve_constant
+    assert resolve_constant({"call": "numpy.array([1.0, 2.0])"}).tolist() == [1.0, 2.0]
+    with pytest.raises(InterfaceError, match="calls of names"):
+        parse_call("fit(x + 1)")
+    with pytest.raises(InterfaceError, match="only one call"):
+        parse_call("fit(1).predict(2)")
+
+
+def test_call_constant_refuses_text_after_the_call():
+    # was Path() (the current folder): everything after the first ')' was dropped (rembg, easyocr)
+    from fmugen.templates.fmugen_runtime import resolve_constant
+    with pytest.raises(ValueError, match="only one call"):
+        resolve_constant({"call": "pathlib:Path('x.png').read_bytes()"})
+    with pytest.raises(ValueError, match="only one call"):
+        resolve_constant({"call": "numpy:zeros(3) + numpy.ones(3)"})
 
 
 def test_isolated_imports_forgets_namespace_subpackages(tmp_path):
@@ -500,6 +533,63 @@ def test_entry_keeps_the_name_it_was_given(tmp_path):
     with isolated_imports():
         init(f"{tmp_path / 'carbonate.py'}:MolWt", output=output, starts={"mol": 1.0}, probe=True)
     assert load_config(output).model["entry"] == "carbonate.py:MolWt"
+
+
+def test_factory_annotated_with_a_base_class(tmp_path):
+    # tirex's load_model() -> PretrainedModel returns a subclass; only the subclass has forecast()
+    (tmp_path / "fac.py").write_text(textwrap.dedent('''
+        class Base:
+            pass
+
+        class Forecaster(Base):
+            def forecast(self, x=1.0):
+                return 2.0 * x
+
+        def load(path="w") -> Base:
+            return Forecaster()
+    '''))
+    data, _ = infer(f"{tmp_path / 'fac.py'}:load", call="forecast")
+    assert "x" in data["inputs"] and "y" in data["outputs"]
+    data, comments = infer(f"{tmp_path / 'fac.py'}:load", call="forecast", probe=False)   # was AttributeError
+    assert "known only by running it" in comments[("inputs", None)]
+
+
+def test_bytes_dated_series_and_object_arrays_are_outputs(tmp_path):
+    # rembg returns PNG bytes, pastas a Series indexed by dates, facenet-pytorch object arrays of
+    # numbers: each was left out ("no outputs found")
+    pd = pytest.importorskip("pandas")
+    (tmp_path / "res.py").write_text(textwrap.dedent('''
+        import numpy as np, pandas as pd
+        def png(n=3):
+            return bytes(range(n))
+        def series(a=1.0):
+            return pd.Series([a, 2 * a, 3 * a], index=pd.date_range("2020-01-01", periods=3))
+        def boxes(a=1.0):
+            return np.array([[a, 2.0], [3.0, 4.0]], dtype=object), np.array([0.9], dtype=object)
+    '''))
+    data, _ = infer(f"{tmp_path / 'res.py'}:png", fmi_version=3)
+    assert data["outputs"] == {"y": {"from": "return", "type": "Binary"}}
+    data, _ = infer(f"{tmp_path / 'res.py'}:series")
+    assert data["outputs"] == {"y": {"from": "return", "dimensions": [3]}}
+    data, _ = infer(f"{tmp_path / 'res.py'}:boxes")
+    assert data["outputs"]["y0"]["dimensions"] == [2, 2] and data["outputs"]["y1"]["dimensions"] == [1]
+
+
+def test_a_keyword_named_like_the_kwargs_parameter(tmp_path):
+    # MOMENTPipeline.from_pretrained(name, **model_kwargs) is called with model_kwargs={...}
+    (tmp_path / "kw.py").write_text(textwrap.dedent('''
+        def load(path="x", **model_kwargs):
+            return {"y": float(len(model_kwargs.get("model_kwargs", {})))}
+    '''))
+    data, _ = infer(f"{tmp_path / 'kw.py'}:load", starts={"model_kwargs": {"task_name": "r"}})
+    assert data["model"]["constants"] == {"model_kwargs": {"python": "{'task_name': 'r'}"}}
+
+
+def test_fmi3_integer_starts_beyond_int32_get_64_bit_types(tmp_path):
+    # numpy's default_rng(seed=12345678901234567890): typed Integer (Int32), which build refused
+    (tmp_path / "rng.py").write_text("def draw(seed=0, n=1):\n    return {'y': float(seed % 7)}\n")
+    data, _ = infer(f"{tmp_path / 'rng.py'}:draw", fmi_version=3, starts={"seed": 12345678901234567890, "n": -2**40})
+    assert data["inputs"]["seed"]["type"] == "UInt64" and data["inputs"]["n"]["type"] == "Int64"
 
 
 def test_generator_results_are_read_and_nested_tuples_split(tmp_path):
@@ -790,3 +880,145 @@ def test_normal_method_is_not_called_on_the_class(tmp_path):
     """))
     data, _ = infer(f"{tmp_path / 'heat.py'}:Model", call="building")
     assert "call_on_class" not in data["model"]
+
+
+@pytest.mark.parametrize("probe", [False, True])
+def test_function_attached_to_a_class_is_a_method(tmp_path, probe):
+    # like pypsa's Network.pf = pf, written as pf(n, ...): called on the object, not on the class
+    (tmp_path / "net.py").write_text(textwrap.dedent("""
+        def pf(n, scale=1.0):
+            n.flow = n.load * scale
+            return n.flow
+
+        class Network:
+            def __init__(self, load=2.0):
+                self.load = load
+            pf = pf
+    """))
+    data, _ = infer(f"{tmp_path / 'net.py'}:Network", call="pf", probe=probe)
+    assert "call_on_class" not in data["model"]
+    assert set(data["inputs"]) == {"scale"}
+
+
+def test_method_annotated_with_its_class_is_a_method(tmp_path):
+    (tmp_path / "net.py").write_text(textwrap.dedent("""
+        class Network:
+            def __init__(self, load=2.0):
+                self.load = load
+
+            def pf(n: "Network", scale=1.0):
+                return n.load * scale
+    """))
+    data, _ = infer(f"{tmp_path / 'net.py'}:Network", call="pf")
+    assert "call_on_class" not in data["model"]
+
+
+@pytest.mark.parametrize("signature, bound", [
+    ("h: int = 4", False), ("h=None", False), ("h=4", False), ("h: 'int | None' = None", False),
+    ("h=0.1", True), ("h: float = 0.1", True),
+])
+def test_h_is_a_step_size_unless_it_is_a_count(tmp_path, signature, bound):
+    # neuralforecast's predict(h=None) is the forecast horizon; an ODE solver's h is the step size
+    (tmp_path / "m.py").write_text(f"def f(x=1.0, {signature}):\n    return x\n")
+    data, _ = infer(f"{tmp_path / 'm.py'}:f", probe=False)
+    assert (data.get("time", {}).get("h") == "step_size") is bound
+
+
+def test_probe_reads_getters_when_the_step_returns_nothing(tmp_path):
+    # like floris' run() then get_farm_power(), vqf's getQuat6D()
+    (tmp_path / "farm.py").write_text(textwrap.dedent("""
+        class Farm:
+            def __init__(self, speed=8.0):
+                self.speed, self._power = speed, None
+
+            def run(self):
+                self._power = 100.0 * self.speed
+
+            def get_power(self):
+                if self._power is None:
+                    raise RuntimeError("run() first")
+                return self._power
+
+            def getQuat(self):
+                return [1.0, 0.0, 0.0, 0.0]
+
+            def get_scaled(self, factor):   # needs an argument: not a getter to probe
+                return self._power * factor
+
+            def get_label(self):
+                return {"name": "farm"}     # not an FMI value
+    """))
+    data, comments = infer(f"{tmp_path / 'farm.py'}:Farm", call="run", fmi_version=3)
+    outputs = data["outputs"]
+    assert outputs["power"] == {"from": "get:get_power"}
+    assert outputs["quat"]["from"] == "get:getQuat" and outputs["quat"]["dimensions"] == [4]
+    assert "scaled" not in outputs and "label" not in outputs and "get_label" not in outputs
+    assert "init_call" not in data["model"]   # the FMU calls the model itself when a getter raises at initialization
+
+
+def test_probe_skips_getters_when_the_step_returns_a_result(tmp_path):
+    (tmp_path / "m.py").write_text(textwrap.dedent("""
+        class M:
+            def step(self, x=1.0):
+                return x * 2
+
+            def get_debug(self):
+                return 3.0
+    """))
+    data, _ = infer(f"{tmp_path / 'm.py'}:M", call="step")
+    assert all(not str(v.get("from", "")).startswith("get:") for v in data["outputs"].values())
+
+
+def test_probe_calls_the_model_at_initialization_when_properties_fail_before_it(tmp_path):
+    # like pydmd's eigs before fit()
+    (tmp_path / "dmd.py").write_text(textwrap.dedent("""
+        class DMD:
+            def __init__(self, rank=2):
+                self.rank, self._eigs = rank, None
+
+            def fit(self, x=1.0):
+                self._eigs = [x, x / 2]
+                return self
+
+            @property
+            def eigs(self):
+                if self._eigs is None:
+                    raise ValueError("fit() first")
+                return self._eigs[0]
+    """))
+    data, comments = infer(f"{tmp_path / 'dmd.py'}:DMD", call="fit")
+    assert "eigs" in data["outputs"]
+    assert data["model"]["init_call"] is True and "eigs" in comments[("model", "init_call")]
+
+
+def test_probe_leaves_init_call_for_properties_that_are_only_missing(tmp_path):
+    (tmp_path / "m.py").write_text(textwrap.dedent("""
+        class M:
+            def step(self, x=1.0):
+                self._y = x
+
+            @property
+            def y(self):
+                return self._y   # AttributeError before the step: the FMU skips it at initialization
+    """))
+    data, _ = infer(f"{tmp_path / 'm.py'}:M", call="step")
+    assert "y" in data["outputs"] and "init_call" not in data["model"]
+
+
+def test_probe_drops_a_time_argument_that_defaults_to_none(tmp_path):
+    # like ssqueezepy's ssq_cwt(x, ..., t=None): t is the signal's time vector, not the clock
+    (tmp_path / "cwt.py").write_text(textwrap.dedent("""
+        def cwt(x=1.0, t=None):
+            if t is not None:
+                len(t)   # a vector: a float fails
+            return x * 2
+    """))
+    data, comments = infer(f"{tmp_path / 'cwt.py'}:cwt")
+    assert "time" not in data and data["outputs"]
+    assert comments[("model", "constants.t")] == {"python": "None"}
+
+
+def test_probe_keeps_a_none_default_time_argument_that_works(tmp_path):
+    (tmp_path / "m.py").write_text("def f(x=1.0, t=None):\n    return x + (t or 0.0)\n")
+    data, _ = infer(f"{tmp_path / 'm.py'}:f")
+    assert data["time"] == {"t": "time"}
