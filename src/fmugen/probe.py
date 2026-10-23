@@ -6,6 +6,7 @@ import importlib
 import inspect
 import math
 import pickle
+import re
 import sys
 import types
 import typing
@@ -114,6 +115,9 @@ def _probe_class(cls, method_name, data, comments, arrays, call_starts, create, 
                arrays=arrays, starts=call_starts)
     _apply_converts(data, converts)
     before, state_before = _numeric_attributes(obj, arrays), _state_bytes(obj)
+    # what reading the properties and C attributes raises before the first step (pydmd before fit(),
+    # ephem before compute()): those outputs need the model called at initialization
+    unread_before = _unreadable(obj)
     try:
         result = _probe_call(_step_method(obj, method_name, data), data, comments, constants_key="call_constants")
     except ConstantError:
@@ -139,6 +143,20 @@ def _probe_class(cls, method_name, data, comments, arrays, call_starts, create, 
         if attr not in taken:
             data.setdefault("outputs", {})[attr] = _typed({}, value, arrays)
             comments[("outputs", attr)] = "a property of the object"
+    if result is None:   # the step returns nothing: its results are on the object
+        taken |= set(data.get("outputs", {}))
+        for attr, value in _descriptor_values(obj, arrays).items():   # C attributes set by the step (ephem's ra)
+            if attr in unread_before and attr not in taken:
+                data.setdefault("outputs", {})[attr] = _typed({}, value, arrays)
+                comments[("outputs", attr)] = f"set by {method_name}(): reading it failed before"
+                taken.add(attr)
+        _getter_outputs(obj, data, comments, arrays, taken)
+        taken |= set(data.get("outputs", {}))
+    needs_call = sorted(set(unread_before) & set(data.get("outputs", {})))
+    if needs_call and not data["model"].get("init_call"):
+        data["model"]["init_call"] = True
+        comments[("model", "init_call")] = (f"reading {', '.join(needs_call)} failed before {method_name}() had run "
+                                            f"({unread_before[needs_call[0]]!r}), so it also runs at initialization")
     unfit = _unfit_properties(obj, data, comments, arrays, taken)
     taken |= set(data.get("outputs", {})) | unfit
     taken |= _gekko_outputs(obj, data, comments, taken)
@@ -283,6 +301,8 @@ def _check_sizes(obj, method_name, data, comments):
         kind, _, path = source.partition(":")
         try:
             value = pick(result, path or None) if kind == "return" else get_path(obj, path)
+            if kind == "get":
+                value = value()
         except Exception as e:
             size = f"unreadable ({e!r})"
         else:
@@ -483,6 +503,52 @@ class ConstantError(InterfaceError):
 
 
 def _probe_call(fn, data, comments, constants_key="constants"):
+    """Call ``fn`` with the probe inputs (:func:`_probe_dated`), dropping time arguments that aren't the clock.
+
+    When the call fails and ``[time]`` binds an argument whose default is None (ssqueezepy's
+    ``ssq_cwt(x, ..., t=None)``, the signal's time vector), the call is made again without those
+    arguments; if that works, they keep their default instead.
+
+    :param fn: the function or bound step method.
+    :param data: the config being inferred; updated in place.
+    :type data: dict
+    :param comments: ``(section, key) -> text`` for :func:`render_toml`; updated in place.
+    :type comments: dict
+    :param constants_key: the constants table passed with the call.
+    :type constants_key: str
+    :return: what ``fn`` returned.
+    :raises Exception: what the call raised.
+    """
+    try:
+        return _probe_dated(fn, data, comments, constants_key)
+    except Exception as error:
+        try:
+            params = inspect.signature(fn).parameters
+        except (TypeError, ValueError):
+            raise error from None
+        dropped = {arg: source for arg, source in data.get("time", {}).items()
+                   if isinstance(source, str) and arg in params and params[arg].default is None}
+        if not dropped:
+            raise
+        for arg in dropped:
+            del data["time"][arg]
+        try:
+            result = _probe_dated(fn, data, comments, constants_key)
+        except Exception:
+            data.setdefault("time", {}).update(dropped)
+            raise error from None
+        if not data["time"]:
+            del data["time"]
+        for arg, source in dropped.items():
+            comments.pop(("time", arg), None)
+            comments[("model", f"{constants_key}.{arg}")] = {"python": "None"}
+        comments.setdefault(("model", "entry"), (
+            f"not bound to the simulation time ([time]): {', '.join(dropped)} (default None); the probe failed "
+            f"when it got the {'/'.join(sorted(set(dropped.values())))} and worked with the default"))
+        return result
+
+
+def _probe_dated(fn, data, comments, constants_key="constants"):
     """Call ``fn`` with the probe inputs (see :func:`_probe_once`), checking date-time guesses.
 
     Arguments taken as date-times only by their name are checked: the call is also made with the
@@ -1360,6 +1426,124 @@ def _property_values(obj, arrays=False, everything=False):
         if everything or _fmi_value(value, arrays):
             values[name] = _snapshot(value)
     return values
+
+
+def _own_descriptors(obj):
+    """Names of the public C attributes (getset and member descriptors) of obj's class from the model's package.
+
+    Extension types such as ephem's bodies keep their results in these, not in ``__dict__``.
+
+    :param obj: the model object.
+    :rtype: list[str]
+    """
+    package = type(obj).__module__.split(".")[0]
+    names = []
+    for name in dir(type(obj)):
+        if name.startswith("_"):
+            continue
+        member = inspect.getattr_static(type(obj), name, None)
+        if (inspect.isgetsetdescriptor(member) or inspect.ismemberdescriptor(member)) \
+                and getattr(member, "__objclass__", type(obj)).__module__.split(".")[0] == package:
+            names.append(name)
+    return names
+
+
+def _descriptor_values(obj, arrays=False):
+    """``{name: value}`` of the object's own C attributes (:func:`_own_descriptors`) that hold FMI values.
+
+    :param obj: the model object.
+    :param arrays: whether arrays may be FMU variables (FMI 3).
+    :type arrays: bool
+    :rtype: dict
+    """
+    values = {}
+    for name in _own_descriptors(obj):
+        try:
+            value = getattr(obj, name)
+        except Exception:
+            continue
+        if _fmi_value(value, arrays):
+            values[name] = _snapshot(value)
+    return values
+
+
+def _unreadable(obj):
+    """Properties and C attributes of the object whose reading raises an error an FMU would fail on.
+
+    Missing attributes, keys and indexes (AttributeError, KeyError, IndexError) don't count: the FMU
+    skips those outputs at initialization.
+
+    :param obj: the model object.
+    :return: ``{name: the exception}``.
+    :rtype: dict
+    """
+    errors = {}
+    values = _property_values(obj, everything=True)
+    for name in _own_descriptors(obj):
+        try:
+            getattr(obj, name)
+        except Exception as e:
+            values[name] = e
+    for name, value in values.items():
+        if isinstance(value, Exception) and not isinstance(value, (AttributeError, KeyError, IndexError)):
+            errors[name] = value
+    return errors
+
+
+#: Getter method names: ``get_quaternion``, ``getQuat6D`` (not ``getattr``-like lower-case words).
+GETTER = re.compile(r"get(_[a-z0-9]\w*|[A-Z0-9]\w*)")
+
+
+def _getter_outputs(obj, data, comments, arrays, taken):
+    """Outputs read through getter methods called without arguments (``get:``), for a step that returns nothing.
+
+    Methods named like ``get_farm_power`` or ``getQuat6D``, from the model's own package, that take
+    no required argument (or whose signature can't be read, as for C built-ins) are called once;
+    those returning an FMI value become outputs named without the ``get`` prefix.
+
+    :param obj: the model object, after the probe's step.
+    :param data: the config being inferred; updated in place.
+    :type data: dict
+    :param comments: ``(section, key) -> text`` for :func:`render_toml`; updated in place.
+    :type comments: dict
+    :param arrays: whether arrays may be FMU variables (FMI 3).
+    :type arrays: bool
+    :param taken: names already used; updated in place.
+    :type taken: set[str]
+    """
+    package = type(obj).__module__.split(".")[0]
+    for name in dir(type(obj)):
+        if not GETTER.fullmatch(name):
+            continue
+        member = inspect.getattr_static(type(obj), name, None)
+        owner = getattr(member, "__objclass__", None) or next(
+            (k for k in type(obj).__mro__ if name in vars(k)), type(obj))
+        if owner.__module__.split(".")[0] != package:
+            continue
+        method = getattr(obj, name, None)
+        if not callable(method):
+            continue
+        try:
+            required = [p for p in inspect.signature(method).parameters.values()
+                        if p.default is p.empty and p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD, p.KEYWORD_ONLY)]
+        except (TypeError, ValueError):   # a C built-in: try calling it
+            required = []
+        if required:
+            continue
+        try:
+            value = method()
+        except Exception:
+            continue
+        if not _fmi_value(value, arrays):
+            continue
+        output = name[4:] if name.startswith("get_") else name[3].lower() + name[4:]
+        if output in taken or not output.isidentifier():
+            output = name
+        if output in taken:
+            continue
+        data.setdefault("outputs", {})[output] = _typed({"from": f"get:{name}"}, value, arrays)
+        comments[("outputs", output)] = f"returned by {name}() after the step"
+        taken.add(output)
 
 
 def _writable_attribute(obj, name):

@@ -922,3 +922,103 @@ def test_h_is_a_step_size_unless_it_is_a_count(tmp_path, signature, bound):
     (tmp_path / "m.py").write_text(f"def f(x=1.0, {signature}):\n    return x\n")
     data, _ = infer(f"{tmp_path / 'm.py'}:f", probe=False)
     assert (data.get("time", {}).get("h") == "step_size") is bound
+
+
+def test_probe_reads_getters_when_the_step_returns_nothing(tmp_path):
+    # like floris' run() then get_farm_power(), vqf's getQuat6D()
+    (tmp_path / "farm.py").write_text(textwrap.dedent("""
+        class Farm:
+            def __init__(self, speed=8.0):
+                self.speed, self._power = speed, None
+
+            def run(self):
+                self._power = 100.0 * self.speed
+
+            def get_power(self):
+                if self._power is None:
+                    raise RuntimeError("run() first")
+                return self._power
+
+            def getQuat(self):
+                return [1.0, 0.0, 0.0, 0.0]
+
+            def get_scaled(self, factor):   # needs an argument: not a getter to probe
+                return self._power * factor
+
+            def get_label(self):
+                return {"name": "farm"}     # not an FMI value
+    """))
+    data, comments = infer(f"{tmp_path / 'farm.py'}:Farm", call="run", fmi_version=3)
+    outputs = data["outputs"]
+    assert outputs["power"] == {"from": "get:get_power"}
+    assert outputs["quat"]["from"] == "get:getQuat" and outputs["quat"]["dimensions"] == [4]
+    assert "scaled" not in outputs and "label" not in outputs and "get_label" not in outputs
+    assert "init_call" not in data["model"]   # the FMU calls the model itself when a getter raises at initialization
+
+
+def test_probe_skips_getters_when_the_step_returns_a_result(tmp_path):
+    (tmp_path / "m.py").write_text(textwrap.dedent("""
+        class M:
+            def step(self, x=1.0):
+                return x * 2
+
+            def get_debug(self):
+                return 3.0
+    """))
+    data, _ = infer(f"{tmp_path / 'm.py'}:M", call="step")
+    assert all(not str(v.get("from", "")).startswith("get:") for v in data["outputs"].values())
+
+
+def test_probe_calls_the_model_at_initialization_when_properties_fail_before_it(tmp_path):
+    # like pydmd's eigs before fit()
+    (tmp_path / "dmd.py").write_text(textwrap.dedent("""
+        class DMD:
+            def __init__(self, rank=2):
+                self.rank, self._eigs = rank, None
+
+            def fit(self, x=1.0):
+                self._eigs = [x, x / 2]
+                return self
+
+            @property
+            def eigs(self):
+                if self._eigs is None:
+                    raise ValueError("fit() first")
+                return self._eigs[0]
+    """))
+    data, comments = infer(f"{tmp_path / 'dmd.py'}:DMD", call="fit")
+    assert "eigs" in data["outputs"]
+    assert data["model"]["init_call"] is True and "eigs" in comments[("model", "init_call")]
+
+
+def test_probe_leaves_init_call_for_properties_that_are_only_missing(tmp_path):
+    (tmp_path / "m.py").write_text(textwrap.dedent("""
+        class M:
+            def step(self, x=1.0):
+                self._y = x
+
+            @property
+            def y(self):
+                return self._y   # AttributeError before the step: the FMU skips it at initialization
+    """))
+    data, _ = infer(f"{tmp_path / 'm.py'}:M", call="step")
+    assert "y" in data["outputs"] and "init_call" not in data["model"]
+
+
+def test_probe_drops_a_time_argument_that_defaults_to_none(tmp_path):
+    # like ssqueezepy's ssq_cwt(x, ..., t=None): t is the signal's time vector, not the clock
+    (tmp_path / "cwt.py").write_text(textwrap.dedent("""
+        def cwt(x=1.0, t=None):
+            if t is not None:
+                len(t)   # a vector: a float fails
+            return x * 2
+    """))
+    data, comments = infer(f"{tmp_path / 'cwt.py'}:cwt")
+    assert "time" not in data and data["outputs"]
+    assert comments[("model", "constants.t")] == {"python": "None"}
+
+
+def test_probe_keeps_a_none_default_time_argument_that_works(tmp_path):
+    (tmp_path / "m.py").write_text("def f(x=1.0, t=None):\n    return x + (t or 0.0)\n")
+    data, _ = infer(f"{tmp_path / 'm.py'}:f")
+    assert data["time"] == {"t": "time"}
