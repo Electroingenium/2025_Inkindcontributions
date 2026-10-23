@@ -1,0 +1,20 @@
+# neuralforecast without a wrapper: NeuralForecast with an NHITS model as a computed constant, fit() in
+# setup on a 48-day DataFrame, and each step predict(df) on it; the forecast is the NHITS column (4 values).
+# init binds predict()'s h (the forecast horizon) to the step size: [time] is left out here.
+
+[model]
+entry = "neuralforecast:NeuralForecast"
+setup = ["fit(df=pandas.DataFrame(builtins.dict(unique_id='s', ds=pandas.date_range('2020-01-01', periods=48, freq='D'), y=[20.0, 21.2941, 22.5, 23.5355, 24.3301, 24.8296, 25.0, 24.8296, 24.3301, 23.5355, 22.5, 21.2941, 20.0, 18.7059, 17.5, 16.4645, 15.6699, 15.1704, 15.0, 15.1704, 15.6699, 16.4645, 17.5, 18.7059, 20.0, 21.2941, 22.5, 23.5355, 24.3301, 24.8296, 25.0, 24.8296, 24.3301, 23.5355, 22.5, 21.2941, 20.0, 18.7059, 17.5, 16.4645, 15.6699, 15.1704, 15.0, 15.1704, 15.6699, 16.4645, 17.5, 18.7059])))"]
+call = "predict"
+
+[model.constants]
+models = { call = "builtins:list([neuralforecast.models.NHITS(h=4, input_size=8, max_steps=5, random_seed=0, enable_progress_bar=False, logger=False, enable_model_summary=False)])" }
+
+[model.call_constants]
+df = { call = "pandas:DataFrame(builtins.dict(unique_id='s', ds=pandas.date_range('2020-01-01', periods=48, freq='D'), y=[20.0, 21.2941, 22.5, 23.5355, 24.3301, 24.8296, 25.0, 24.8296, 24.3301, 23.5355, 22.5, 21.2941, 20.0, 18.7059, 17.5, 16.4645, 15.6699, 15.1704, 15.0, 15.1704, 15.6699, 16.4645, 17.5, 18.7059, 20.0, 21.2941, 22.5, 23.5355, 24.3301, 24.8296, 25.0, 24.8296, 24.3301, 23.5355, 22.5, 21.2941, 20.0, 18.7059, 17.5, 16.4645, 15.6699, 15.1704, 15.0, 15.1704, 15.6699, 16.4645, 17.5, 18.7059]))" }
+
+[parameters]
+freq = { start = "D" }
+
+[outputs]
+forecast = { from = "return:NHITS", dimensions = [4] }

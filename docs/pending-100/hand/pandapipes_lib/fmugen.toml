@@ -1,0 +1,10 @@
+# pandapipes without a wrapper: gas_meshed_delta() makes the network (a factory), each step is
+# pipeflow(net), a function taking it, and the results are read from the network's result tables.
+# init writes no outputs: pipeflow() returns None.
+[model]
+entry = "pandapipes.networks:gas_meshed_delta"
+call = "pandapipes:pipeflow(self)"
+
+[outputs]
+p_bar = { from = "attr:res_junction.p_bar", dimensions = [3], unit = "bar" }
+v_mean = { from = "attr:res_pipe.v_mean_m_per_s", dimensions = [3], unit = "m/s" }

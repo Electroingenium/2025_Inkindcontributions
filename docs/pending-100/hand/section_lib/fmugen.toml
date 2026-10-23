@@ -1,0 +1,15 @@
+# sectionproperties without a wrapper: the meshed geometry is a computed constant (Geometry.create_mesh
+# called on the rectangle), each step is calculate_geometric_properties(), and the results come from
+# getters (get:). init --probe finds no outputs: the method returns None.
+[model]
+entry = "sectionproperties.analysis:Section"
+call = "calculate_geometric_properties"
+init_call = true   # the getters raise until the analysis has run
+
+[model.constants]
+geometry = { call = "sectionproperties.pre.geometry:Geometry.create_mesh(sectionproperties.pre.library.rectangular_section(d=100.0, b=50.0), mesh_sizes=[50.0])" }
+
+[outputs]
+area = { from = "get:get_area" }
+ic = { from = "get:get_ic", dimensions = [3] }
+centroid = { from = "get:get_c", dimensions = [2] }

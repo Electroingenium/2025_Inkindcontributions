@@ -1,0 +1,16 @@
+# FLORIS without a wrapper: the farm and its conditions are set in setup (set() with keywords), each
+# step is run(), and the powers come from methods (get:). init --probe outputs only the farm's
+# settings (layout, wind speeds), not the powers.
+[model]
+entry = "floris:FlorisModel"
+setup = ["set(layout_x=[0.0, 630.0, 1260.0], layout_y=[0.0, 0.0, 0.0], wind_speeds=[8.0], wind_directions=[270.0], turbulence_intensities=[0.06])"]
+call = "run"
+init_call = true   # get_farm_power() raises until run() has run
+globals = ["floris.logging_manager:CONSOLE_LEVEL", "floris.logging_manager:FILE_LEVEL", "floris.logging_manager:LOG_TO_CONSOLE", "floris.logging_manager:LOG_TO_FILE"]
+
+[parameters]
+configuration = { start = "defaults" }
+
+[outputs]
+farm_power = { from = "get:get_farm_power", dimensions = [1], unit = "W" }
+turbine_powers = { from = "get:get_turbine_powers", dimensions = [1, 3], unit = "W" }
