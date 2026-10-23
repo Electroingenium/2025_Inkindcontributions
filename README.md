@@ -133,7 +133,6 @@ See [docs/fmi.md](docs/fmi.md) for what each FMI call does, function by function
 | [docs/interface.md](docs/interface.md) | `resources/interface.json`, fmugen's description of the model inside each FMU: every key, with a JSON Schema |
 | [docs/unifmu-limitations.md](docs/unifmu-limitations.md) | Bugs and limitations of UniFMU 0.14 that affect fmugen FMUs, and their workarounds |
 | [docs/fmpy-limitations.md](docs/fmpy-limitations.md) | Bugs and limitations of FMPy 0.3.32, the importer fmugen is tested with, and their workarounds |
-| [docker/Readme.md](docker/Readme.md) | Demo stack: the FMU in Docker or Kubernetes (runs offloaded with Liqo), exchanging data over OPC UA, with a Streamlit dashboard |
 
 ---
 
