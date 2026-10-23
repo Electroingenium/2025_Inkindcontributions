@@ -807,15 +807,16 @@ def parse_call(text):
     Accepts ``"module:function(arg, ..., key=arg, ...)"`` or ``"method(...)"``. The argument list
     is parsed with :func:`ast.parse` (as the call ``_(...)``) and never executed. Arguments are
     Python literals (simple ones kept as values, others as ``{ python = ... }``) or dotted
-    references to importable objects (e.g. ``psychrolib.SI``, kept as ``{ ref = ... }``);
-    references are resolved when the FMU initializes.
+    references to importable objects (e.g. ``psychrolib.SI``, kept as ``{ ref = ... }``) or
+    calls of those (e.g. ``numpy.array([1.0, 2.0])``, kept as ``{ call = ... }``, the same as a call
+    constant); references are resolved and calls made when the FMU initializes.
 
     :param text: the setup call text.
     :type text: str
     :return: ``{"call": target, "args": [...], "kwargs": {...}}``.
     :rtype: dict
     :raises InterfaceError: a syntax error, a missing ``)``, ``**kwargs``, or an argument that is
-        neither a literal nor a name.
+        neither a literal, a name nor a call of a name.
     """
     import ast
 
@@ -831,8 +832,11 @@ def parse_call(text):
             value = ast.literal_eval(node)
             return value if isinstance(value, (bool, int, float, str)) else {"python": ast.unparse(node)}
         except ValueError:
+            if isinstance(node, ast.Call) and isinstance(node.func, (ast.Attribute, ast.Name)):
+                # a call of an importable object, e.g. numpy.array([...]): a call constant
+                return {"call": ast.unparse(node)}
             if not isinstance(node, (ast.Attribute, ast.Name)):
-                raise InterfaceError(f"[model] setup {text!r}: arguments must be literals or names")
+                raise InterfaceError(f"[model] setup {text!r}: arguments must be literals, names or calls of names")
             return {"ref": ast.unparse(node)}
 
     call, paren, rest = text.partition("(")
@@ -844,6 +848,8 @@ def parse_call(text):
             parsed = ast.parse(f"_({rest}", mode="eval").body
         except SyntaxError as e:
             raise InterfaceError(f"[model] setup {text!r}: {e.msg}") from e
+        if not (isinstance(parsed, ast.Call) and isinstance(parsed.func, ast.Name) and parsed.func.id == "_"):
+            raise InterfaceError(f"[model] setup {text!r}: only one call is supported, nothing after its ')'")
         args = [argument(node) for node in parsed.args]
         for keyword in parsed.keywords:
             if keyword.arg is None:

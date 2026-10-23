@@ -1057,15 +1057,18 @@ def _outputs_from_return(result, data, comments, default_name, is_class, arrays=
         items = [(str(k), v, f"return:{k}") for k, v in result.items()]
     elif _table_children(result) == [] and getattr(result, "size", None) == 1:
         items = [(default_name, result.item(), "return")]   # one value labelled by a date (pyet): read as a number
-    elif _table_children(result) is not None:   # pandas Series / one-row DataFrame, xarray Dataset
+    elif _table_children(result):   # pandas Series / one-row DataFrame, xarray Dataset, labelled by names
         items = [(k, v, f"return:{k}") for k, v in _table_children(result)]
+    elif _table_children(result) is not None and not (arrays and _array_info(result)):
+        items = []   # a table labelled by dates or numbers (pastas' simulate) is read below as an array
     elif arrays and _array_info(result):
         items = [(default_name, result, "return")]
     elif isinstance(result, tuple) and hasattr(result, "_fields"):   # NamedTuple: use the field names
         items = [(field, getattr(result, field), f"return:{field}") for field in result._fields]
     elif isinstance(result, (tuple, list)):
         items = [leaf for i, v in enumerate(result) for leaf in _positions(f"{default_name}{i}", v, f"return:{i}", arrays)]
-    elif _fmi_value(result) or (result is not None and _misfit(result)):
+    elif _fmi_value(result, arrays and isinstance(result, bytes)) or (result is not None and _misfit(result)):
+        # bytes (an image, rembg's remove()) are a Binary output in FMI 3
         items = [(default_name, result, "return")]
     elif result is not None and (hasattr(result, "__dict__") or _public_properties(result, arrays=True)):
         # an object: its public attributes and properties, e.g. uncertainties' nominal_value, std_dev

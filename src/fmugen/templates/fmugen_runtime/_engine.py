@@ -20,7 +20,7 @@ from fmugen.templates.fmugen_runtime._constants import (
     Status, StepRejected,
 )
 from fmugen.templates.fmugen_runtime._helpers import (
-    _capture_output, _clock_of, _is_number, _quiet_debug_logging,
+    _capture_output, _release_output, _clock_of, _is_number, _quiet_debug_logging,
     assemble_items, coerce, converter, describe, dump_state,
     flatten, get_path, is_literal_constant, keyword_constants,
     load_entry, load_state, outside_bundle, pick, plain_number, reshape,
@@ -214,27 +214,33 @@ class Engine:
         cwd = self.interface.get("cwd")
         # kept outside a compiled backend's bundle, at the same place under resources/
         self.cwd = outside_bundle(self.resources_dir) / cwd if cwd is not None else None
-        with self._in_model_dir():   # the model may read files when it is imported
-            self.module, self.entry = load_entry(self.interface, self.resources_dir)
-            self.enums = {
-                name: resolve_reference(td["enum"])
-                for name, td in self.interface.get("type_definitions", {}).items() if td.get("enum")
-            }
-            # constants ({ call = ... } may download or compute) are resolved when the FMU initializes,
-            # where a failure is reported to the importer with its traceback (resolve_constants)
-            self.constants = self.call_constants = None
-            # "series" dates its value at the FMU time (the start of the step being made)
-            self.converters = {v["name"]: converter(v, lambda: self.time) for v in self.variables if v.get("convert")}
-            # [model] globals: module-level state, put back to its import-time value on reset
-            self.globals = [split_global(ref) for ref in self.interface.get("globals", [])]
-            self.global_starts = copy.deepcopy(self._read_globals())
-            # [model] discard_on: exceptions and warnings that make doStep return discard (the step is undone)
-            self.discard_on = tuple(resolve_reference(ref) for ref in self.interface.get("discard_on", []))
-        if self.interface.get("integrate") and self.interface.get("save_state", True) is not False:
-            self.discard_on += (StepRejected,)   # a failed solve rejects the step (undone from the saved state)
-        self._loop = None   # the event loop of an async model, kept for the whole run
-        self.is_class = self.interface["entry"]["kind"] == "class"
-        self.reset()
+        try:   # an import error here ends the backend: its traceback must reach the console
+            with self._in_model_dir():   # the model may read files when it is imported
+                self.module, self.entry = load_entry(self.interface, self.resources_dir)
+                self.enums = {
+                    name: resolve_reference(td["enum"])
+                    for name, td in self.interface.get("type_definitions", {}).items() if td.get("enum")
+                }
+                # constants ({ call = ... } may download or compute) are resolved when the FMU initializes,
+                # where a failure is reported to the importer with its traceback (resolve_constants)
+                self.constants = self.call_constants = None
+                # "series" dates its value at the FMU time (the start of the step being made)
+                self.converters = {v["name"]: converter(v, lambda: self.time) for v in self.variables if v.get("convert")}
+                # [model] globals: module-level state, put back to its import-time value on reset
+                self.globals = [split_global(ref) for ref in self.interface.get("globals", [])]
+                self.global_starts = copy.deepcopy(self._read_globals())
+                # [model] discard_on: exceptions and warnings that make doStep return discard (the step is undone)
+                self.discard_on = tuple(resolve_reference(ref) for ref in self.interface.get("discard_on", []))
+            if self.interface.get("integrate") and self.interface.get("save_state", True) is not False:
+                self.discard_on += (StepRejected,)   # a failed solve rejects the step (undone from the saved state)
+            self._loop = None   # the event loop of an async model, kept for the whole run
+            self.is_class = self.interface["entry"]["kind"] == "class"
+            self.reset()
+        except BaseException as e:
+            # the exception's own line first: UniFMU cuts the backend's output short, and the
+            # warnings printed while importing and a long traceback would push it out
+            _release_output(self._output, f"[fmugen] the model failed to load: {type(e).__name__}: {e}\n")
+            raise
         self._forward_output()   # e.g. warnings printed while the model was imported
 
     # ================= life cycle =================

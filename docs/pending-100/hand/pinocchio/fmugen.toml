@@ -1,0 +1,18 @@
+# pinocchio: rnea(model, data, q, v, a) is a Boost.Python function with no signature. The sample
+# manipulator and its Data are positional constants (Data built from a second copy of the same
+# deterministic model); q, v, a are the joint position, velocity and acceleration (6 joints); the
+# result is the joint torque of inverse dynamics.
+[model]
+entry = "pinocchio:rnea"
+
+[model.constants]
+0 = { call = "pinocchio:buildSampleModelManipulator()" }
+1 = { call = "pinocchio:Data(pinocchio.buildSampleModelManipulator())" }
+
+[inputs]
+q = { start = [0.0, 0.5, 0.0, 0.0, 0.0, 0.0], dimensions = [6], numpy = true, to = "pos:2" }
+v = { start = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], dimensions = [6], numpy = true, to = "pos:3" }
+a = { start = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], dimensions = [6], numpy = true, to = "pos:4" }
+
+[outputs]
+tau = { from = "return", dimensions = [6] }

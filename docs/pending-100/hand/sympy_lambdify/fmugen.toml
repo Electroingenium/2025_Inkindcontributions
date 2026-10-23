@@ -1,0 +1,16 @@
+# sympy: lambdify(args, expr) is a factory; the function it makes takes x and y by position, so
+# `init` can't see them (it reads lambdify's own signature).
+[model]
+entry = "sympy:lambdify"
+call = "__call__"
+
+[model.constants]
+args = { call = "sympy:symbols('x y')" }
+expr = { call = "sympy:sympify('x**2 + sin(y)')" }
+
+[inputs]
+x = { start = 1.5, to = "pos:0" }
+y = { start = 0.5, to = "pos:1" }
+
+[outputs]
+f = { from = "return" }

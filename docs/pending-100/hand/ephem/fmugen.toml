@@ -1,0 +1,15 @@
+# ephem: Sun().compute(date) sets the position as C attributes (ra, dec, ...), which the probe of the
+# step's return value (None) doesn't see. Read them as outputs (radians, AU, magnitude).
+[model]
+entry = "ephem:Sun"
+call = "compute"
+init_call = true   # the attributes exist only after the first compute()
+
+[inputs]
+date_or_observer = { start = "2026/10/22 12:00", to = "pos:0" }
+
+[outputs]
+ra = { from = "attr:ra" }
+dec = { from = "attr:dec" }
+earth_distance = { from = "attr:earth_distance" }
+mag = { from = "attr:mag" }

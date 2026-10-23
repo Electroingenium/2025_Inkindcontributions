@@ -63,7 +63,8 @@ def test_rendered_config_round_trips(tmp_path):
     output, data = init(tmp_path / "tank.py")
     text = output.read_text()
     assert tomllib.loads(text)["model"] == {"entry": "tank.py:Tank", "call": "step"}
-    assert tomllib.loads(text)["parameters"]["limits"] == {"dimensions": [2], "start": [0.0, 5.0]}
+    # integers stay Integer, as an int scalar default does (layer sizes: torch refuses floats)
+    assert tomllib.loads(text)["parameters"]["limits"] == {"dimensions": [2], "type": "Integer", "start": [0, 5]}
     assert data["outputs"] == {"y": {"from": "return"}, "overflow": {"type": "Boolean"}}
     assert data["locals"] == {"level": {}}
     assert load_config(output).entry_name == "Tank"
@@ -107,6 +108,14 @@ def test_unknown_config_keys_are_rejected(tmp_path):
         Config({"model": {"entry": "m.py:f"}, "inputs": {"x": {"strat": 1.0}}}, tmp_path)
     with pytest.raises(InterfaceError, match="entry"):
         Config({"model": {}}, tmp_path)
+
+
+def test_render_toml_multiline_comment_stays_a_comment():
+    # do-mpc: save_state's comment quotes casadi's multi-line pickling error
+    import tomllib
+    text = render_toml({"model": {"entry": "m.py:f", "save_state": False}},
+                       {("model", "save_state"): "can't be pickled (Exception: Use something like:\nwith ctx(): \n  pi)"})
+    assert tomllib.loads(text)["model"]["save_state"] is False
 
 
 def test_render_toml_values():
@@ -324,10 +333,12 @@ def test_fmi3_time_attribute_is_renamed(tmp_path):
             def step(self, dt: float = 1.0):
                 self.time += dt
     """))
-    data, _ = infer(tmp_path / "clock.py", fmi_version=3)
-    # the step's only result, so an output rather than a local
-    assert "time" not in data.get("outputs", {})
-    assert data["outputs"]["model_time"] == {"from": "attr:time"}
+    # FMI 2 too: FMPy's results call the simulation time `time`, hiding an output of that name (nengo)
+    for fmi in (2, 3):
+        data, _ = infer(tmp_path / "clock.py", fmi_version=fmi)
+        # the step's only result, so an output rather than a local
+        assert "time" not in data.get("outputs", {})
+        assert data["outputs"]["model_time"] == {"from": "attr:time"}
 
 
 @pytest.mark.parametrize("kind", ["series", "frame", "xarray"])
@@ -412,6 +423,28 @@ def test_setup_call_keeps_keyword_arguments():
         "call": "psychrolib:SetUnitSystem", "args": [{"ref": "psychrolib.SI"}], "kwargs": {"strict": True}}
     with pytest.raises(InterfaceError, match=r"\*\*kwargs"):
         parse_call("reset(**opts)")
+
+
+def test_setup_call_takes_calls_as_arguments():
+    # fit(numpy.array(...), ...): init --probe ran it, so build must accept it too (xgboost, skorch)
+    assert parse_call("fit(numpy.array([[0.1], [0.2]]), numpy.array([1.0, 2.0]), epochs=2)") == {
+        "call": "fit", "args": [{"call": "numpy.array([[0.1], [0.2]])"}, {"call": "numpy.array([1.0, 2.0])"}],
+        "kwargs": {"epochs": 2}}
+    from fmugen.templates.fmugen_runtime import resolve_constant
+    assert resolve_constant({"call": "numpy.array([1.0, 2.0])"}).tolist() == [1.0, 2.0]
+    with pytest.raises(InterfaceError, match="calls of names"):
+        parse_call("fit(x + 1)")
+    with pytest.raises(InterfaceError, match="only one call"):
+        parse_call("fit(1).predict(2)")
+
+
+def test_call_constant_refuses_text_after_the_call():
+    # was Path() (the current folder): everything after the first ')' was dropped (rembg, easyocr)
+    from fmugen.templates.fmugen_runtime import resolve_constant
+    with pytest.raises(ValueError, match="only one call"):
+        resolve_constant({"call": "pathlib:Path('x.png').read_bytes()"})
+    with pytest.raises(ValueError, match="only one call"):
+        resolve_constant({"call": "numpy:zeros(3) + numpy.ones(3)"})
 
 
 def test_isolated_imports_forgets_namespace_subpackages(tmp_path):
@@ -500,6 +533,63 @@ def test_entry_keeps_the_name_it_was_given(tmp_path):
     with isolated_imports():
         init(f"{tmp_path / 'carbonate.py'}:MolWt", output=output, starts={"mol": 1.0}, probe=True)
     assert load_config(output).model["entry"] == "carbonate.py:MolWt"
+
+
+def test_factory_annotated_with_a_base_class(tmp_path):
+    # tirex's load_model() -> PretrainedModel returns a subclass; only the subclass has forecast()
+    (tmp_path / "fac.py").write_text(textwrap.dedent('''
+        class Base:
+            pass
+
+        class Forecaster(Base):
+            def forecast(self, x=1.0):
+                return 2.0 * x
+
+        def load(path="w") -> Base:
+            return Forecaster()
+    '''))
+    data, _ = infer(f"{tmp_path / 'fac.py'}:load", call="forecast")
+    assert "x" in data["inputs"] and "y" in data["outputs"]
+    data, comments = infer(f"{tmp_path / 'fac.py'}:load", call="forecast", probe=False)   # was AttributeError
+    assert "known only by running it" in comments[("inputs", None)]
+
+
+def test_bytes_dated_series_and_object_arrays_are_outputs(tmp_path):
+    # rembg returns PNG bytes, pastas a Series indexed by dates, facenet-pytorch object arrays of
+    # numbers: each was left out ("no outputs found")
+    pd = pytest.importorskip("pandas")
+    (tmp_path / "res.py").write_text(textwrap.dedent('''
+        import numpy as np, pandas as pd
+        def png(n=3):
+            return bytes(range(n))
+        def series(a=1.0):
+            return pd.Series([a, 2 * a, 3 * a], index=pd.date_range("2020-01-01", periods=3))
+        def boxes(a=1.0):
+            return np.array([[a, 2.0], [3.0, 4.0]], dtype=object), np.array([0.9], dtype=object)
+    '''))
+    data, _ = infer(f"{tmp_path / 'res.py'}:png", fmi_version=3)
+    assert data["outputs"] == {"y": {"from": "return", "type": "Binary"}}
+    data, _ = infer(f"{tmp_path / 'res.py'}:series")
+    assert data["outputs"] == {"y": {"from": "return", "dimensions": [3]}}
+    data, _ = infer(f"{tmp_path / 'res.py'}:boxes")
+    assert data["outputs"]["y0"]["dimensions"] == [2, 2] and data["outputs"]["y1"]["dimensions"] == [1]
+
+
+def test_a_keyword_named_like_the_kwargs_parameter(tmp_path):
+    # MOMENTPipeline.from_pretrained(name, **model_kwargs) is called with model_kwargs={...}
+    (tmp_path / "kw.py").write_text(textwrap.dedent('''
+        def load(path="x", **model_kwargs):
+            return {"y": float(len(model_kwargs.get("model_kwargs", {})))}
+    '''))
+    data, _ = infer(f"{tmp_path / 'kw.py'}:load", starts={"model_kwargs": {"task_name": "r"}})
+    assert data["model"]["constants"] == {"model_kwargs": {"python": "{'task_name': 'r'}"}}
+
+
+def test_fmi3_integer_starts_beyond_int32_get_64_bit_types(tmp_path):
+    # numpy's default_rng(seed=12345678901234567890): typed Integer (Int32), which build refused
+    (tmp_path / "rng.py").write_text("def draw(seed=0, n=1):\n    return {'y': float(seed % 7)}\n")
+    data, _ = infer(f"{tmp_path / 'rng.py'}:draw", fmi_version=3, starts={"seed": 12345678901234567890, "n": -2**40})
+    assert data["inputs"]["seed"]["type"] == "UInt64" and data["inputs"]["n"]["type"] == "Int64"
 
 
 def test_generator_results_are_read_and_nested_tuples_split(tmp_path):

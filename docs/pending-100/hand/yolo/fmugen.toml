@@ -1,0 +1,21 @@
+# ultralytics: predict() returns a list of Results objects whose detections are torch tensors
+# (results[0].boxes.xyxy, .cls, .conf), which `init --probe` doesn't reach. YOLO11n on ultralytics'
+# bus.jpg finds 5 objects (a bus and 4 people): their boxes (pixels), classes and confidences.
+[model]
+entry = "ultralytics:YOLO"
+fmi_version = 3
+call = "predict"
+
+[model.call_constants]
+verbose = false
+
+[parameters]
+model = { start = "yolo11n.pt" }
+
+[inputs]
+source = { start = "/home/pc-simulacion2/cmp/w100/data/bus.jpg" }
+
+[outputs]
+boxes = { from = "return:0.boxes.xyxy", dimensions = [5, 4] }
+classes = { from = "return:0.boxes.cls", dimensions = [5] }
+confidence = { from = "return:0.boxes.conf", dimensions = [5] }

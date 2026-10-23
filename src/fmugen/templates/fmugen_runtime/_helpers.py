@@ -427,6 +427,10 @@ def parse_call_text(text):
     if not rest.rstrip().endswith(")"):
         raise ValueError(f"{text!r}: missing ')'")
     node = ast.parse(f"_({rest}", mode="eval").body
+    if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "_"):
+        # "pathlib:Path('x').read_bytes()" would otherwise call Path() and drop the rest
+        raise ValueError(f"{text!r}: only one call is supported, nothing after its ')' (no .method(), "
+                         "[index] or operators)")
     if any(k.arg is None for k in node.keywords) or any(isinstance(a, ast.Starred) for a in node.args):
         raise ValueError(f"{text!r}: * and ** arguments are not supported")
     return target.strip(), list(node.args), {k.arg: k.value for k in node.keywords}
@@ -813,8 +817,40 @@ def _capture_output(enabled):
     sink = tempfile.TemporaryFile()
     for fd in (1, 2):
         with contextlib.suppress(OSError):
+            _CONSOLE.setdefault(fd, os.dup(fd))
             os.dup2(sink.fileno(), fd)
     return sink
+
+
+#: The backend's own stdout and stderr while :func:`_capture_output` redirects them.
+_CONSOLE = {}
+
+
+def _release_output(sink, first=""):
+    """Undo :func:`_capture_output` and write what it captured to the console.
+
+    For an error that ends the backend (the model fails to import at instantiation): UniFMU shows
+    the backend's console output, which would otherwise be in a file nobody reads.
+
+    :param sink: what :func:`_capture_output` returned (None: nothing captured).
+    :type sink: typing.BinaryIO or None
+    :param first: a line written before the captured output: UniFMU cuts the output short, and
+        warnings printed while importing (torch_geometric's) would push it out.
+    :type first: str
+    """
+    for stream in (sys.stdout, sys.stderr):
+        with contextlib.suppress(Exception):
+            stream.flush()
+    for fd, console in _CONSOLE.items():
+        with contextlib.suppress(OSError):
+            os.dup2(console, fd)
+    with contextlib.suppress(OSError):
+        os.write(2, first.encode(errors="replace"))
+    if sink is None:
+        return
+    with contextlib.suppress(OSError, ValueError):
+        sink.seek(0)
+        os.write(2, sink.read()[-20000:])
 
 
 #: Largest FMI 3 uint64: the limit of a ``*Fraction`` resolution.

@@ -499,7 +499,8 @@ def _arguments(fn, section, data, comments, skip_self=False, allow_time=True, co
         if (p.kind is p.POSITIONAL_ONLY or keywordless) and len(variables) > before:
             variables[p.name]["to"] = f"pos:{position}"
             position += 1
-    names = {p.name for p in params}
+    # not *args/**kwargs' own names: MOMENT's from_pretrained(..., **model_kwargs) takes a model_kwargs keyword
+    names = {p.name for p in params if p.kind not in (p.VAR_POSITIONAL, p.VAR_KEYWORD)}
     extra = [name for name in starts
              if name not in names and "." not in name   # ARG.FIELD: a field of an object argument, not a keyword
              and name not in time_args]
@@ -525,6 +526,9 @@ def _arguments(fn, section, data, comments, skip_self=False, allow_time=True, co
         elif any(p.kind is p.VAR_KEYWORD for p in params):  # **kwargs: --start values become keyword arguments
             if computed:
                 data["model"].setdefault(constants_key, {})[name] = dict(starts[name])
+            elif isinstance(starts[name], dict):   # a dict (MOMENT's model_kwargs={...}): a fixed keyword
+                data["model"].setdefault(constants_key, {})[name] = {"python": repr(starts[name])}
+                comments[("model", f"{constants_key}.{name}")] = "--start, passed through **kwargs"
             else:
                 variables[name] = _extra_info(name, starts[name], arrays)
                 comments[(section, name)] = "start from --start (passed through **kwargs)"
@@ -976,10 +980,15 @@ def _array_info(value, with_start=False):
     :return: ``{dimensions, type?, numpy? / convert?, start?}``, else None (also for empty arrays).
     :rtype: dict or None
     """
-    if hasattr(value, "shape") and hasattr(value, "tolist") and getattr(value, "ndim", 0) > 0:
+    # not a class: numpy.float64 (a dtype default) has shape and ndim as descriptors
+    if (not isinstance(value, type) and hasattr(value, "shape") and hasattr(value, "tolist")
+            and getattr(value, "ndim", 0) > 0):
         from fmugen.templates.fmugen_runtime import flatten
         shape, flat = [int(n) for n in value.shape], flatten(value.tolist())
         fmi_type = NUMPY_TYPES.get(str(value.dtype).rpartition(".")[2])   # "float32", "torch.float32", ...
+        if str(value.dtype) == "object" and flat and all(
+                isinstance(x, (int, float)) and not isinstance(x, bool) for x in flat):
+            fmi_type = "Real"   # numbers in an object array (facenet-pytorch's MTCNN.detect boxes)
         if fmi_type is None:
             return None
         info = {"dimensions": shape}
@@ -996,6 +1005,9 @@ def _array_info(value, with_start=False):
         flat = flatten(value)
         if all(isinstance(x, bool) for x in flat):
             fmi_type = "Boolean"
+        elif all(isinstance(x, int) and not isinstance(x, bool) for x in flat):
+            # sizes such as layer_sizes=[1, 16, 16, 1]: as floats, torch refuses them (deepxde, pytorch-tcn)
+            fmi_type = "Integer"
         elif all(isinstance(x, (int, float)) and not isinstance(x, bool) for x in flat):
             fmi_type = "Real"
         else:

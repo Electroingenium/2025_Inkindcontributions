@@ -167,6 +167,44 @@ def test_packages_that_import_their_own_submodules_are_collected_whole(monkeypat
     assert "numpy" in direct and "numpy" not in imports   # a dependency of fmpy, collected with its submodules
 
 
+def test_libraries_loaded_by_path_and_package_folders_are_kept(tmp_path, monkeypatch):
+    # torchvision loads _C_stable.so with torch.ops.load_library (not an import, not lib*.so);
+    # chgnet opens chgnet/model/../pretrained/x.pth.tar, so the code-only folder model/ must exist
+    from fmugen.distribute import _add_package_folders, _loaded_libraries
+    pkg = tmp_path / "site" / "visionlike"
+    (pkg / "model").mkdir(parents=True)
+    (pkg / "pretrained").mkdir()
+    for f in ("__init__.py", "model/__init__.py", "_C_stable.so", "libtorch_like.so", "pretrained/w.pth.tar"):
+        (pkg / f).write_text("")
+    monkeypatch.syspath_prepend(str(tmp_path / "site"))
+    assert _loaded_libraries(["visionlike"]) == [(pkg / "_C_stable.so", "visionlike")]
+    internal = tmp_path / "_internal"
+    _add_package_folders(["visionlike"], internal)
+    # a file in it: the FMU is a zip, which keeps no empty folders
+    assert [p.name for p in (internal / "visionlike" / "model").iterdir()] == [".keep"]
+    # a module imported without a spec makes find_spec raise ValueError (humanfriendly, floris)
+    import sys
+    import types
+    monkeypatch.setitem(sys.modules, "nospec_like", types.ModuleType("nospec_like"))
+    sys.modules["nospec_like"].__spec__ = None
+    assert _loaded_libraries(["nospec_like", "visionlike"]) == [(pkg / "_C_stable.so", "visionlike")]
+
+
+def test_libraries_built_on_torch_ship_their_sources(tmp_path, monkeypatch):
+    # TorchScript compiles functions when mace or norse is imported, and reads their source to do it
+    from fmugen import distribute
+    monkeypatch.setattr(distribute, "packages_distributions", lambda: {"torchlib": ["torchlib"]})
+    monkeypatch.setattr(distribute, "_hook_dirs", lambda: [])
+
+    class Dist:
+        requires = ["torch>=2", "numpy"]
+
+    import importlib.metadata as md
+    monkeypatch.setattr(md, "distribution", lambda name: Dist())
+    hooks = distribute._source_hooks(["torchlib"], tmp_path / "hooks")
+    assert (hooks / "hook-torchlib.py").read_text() == "module_collection_mode = 'pyz+py'\n"
+
+
 def test_editable_installs_are_put_on_the_freezer_path(tmp_path, monkeypatch):
     # pip install -e: an import hook finds the project, which isn't on sys.path (the debutanizer project)
     import importlib.machinery

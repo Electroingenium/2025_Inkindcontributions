@@ -1,6 +1,6 @@
 # Tested models
 
-fmugen has been tried on 131 published, unmodified Python models (three needed a file renamed or a script wrapped in a class, and one synthetic input data; see their notes): the examples in this repository, models from more than 100 libraries on PyPI, 6 neural networks and 13 models built on [GEKKO](https://github.com/BYU-PRISM/GEKKO). Each model is listed once, with its most recent result.
+fmugen has been tried on 131 published, unmodified Python models (three needed a file renamed or a script wrapped in a class, and one synthetic input data; see their notes): the examples in this repository, models from more than 100 libraries on PyPI, 6 neural networks and 13 models built on [GEKKO](https://github.com/BYU-PRISM/GEKKO). Each model is listed once, with its most recent result. A [second batch](#second-batch) of 99 models from other libraries (44 neural networks) was tested later the same way: 51 simulate with useful results, 40 compiled; 29 fail because the library has no model to point `init` at, 19 on fmugen problems found there.
 
 - [How the models were tested](#how-the-models-were-tested)
 - [Summary](#summary)
@@ -9,7 +9,7 @@ fmugen has been tried on 131 published, unmodified Python models (three needed a
 - [Neural networks](#neural-networks)
 - [GEKKO models](#gekko-models)
 - [Hand configs](#hand-configs)
-- [Pending](#pending)
+- [Second batch](#second-batch)
 - [Known problems](#known-problems)
 - [Versions](#versions)
 - [Reproducing a run](#reproducing-a-run)
@@ -321,119 +321,142 @@ y = { from = "return", unit = "degC" }
 
 ---
 
-## Pending
+## Second batch
 
-100 more models, not tried yet: 45 neural networks and 55 other models, from libraries not in the tables above. 25 need FMI 3: Binary variables (images), 2-D arrays, clocks, structural parameters or UInt64. Every package is on PyPI; the entry and what to try are a starting point, not checked.
+99 more models from libraries not in the tables above, tested the same way: 44 neural networks and 55 other models, 25 of them FMI 3 (Binary images, 2-D arrays, UInt64, and models listed for clocks and structural parameters). TabPFN was left out: it downloads its weights only after a license is accepted interactively, so it can't run unattended. The scripts, wrappers, hand configs and results are in [pending-100/](pending-100/): `run100.py` runs every step, `results.json` has every model's verdicts and versions.
 
-### Neural networks (pending)
+Each model went through `fmugen init`, `fmugen init --probe`, `build --capture-output` and FMPy for 3 s with 1 s outputs on each config, a direct run of the model from the same config (twice, to find models random by design; those were compared seeded), and `build --compile pyinstaller` on the best matching config, compared with its uncompiled FMU. Setup: fmugen at `0a7c525` (unmodified), WSL 2 (Ubuntu 26.04), Python 3.13, one `uv` venv per model, torch 2.14.1 CPU build, FMPy 0.3.32, UniFMU 0.14, PyInstaller 6.22.3. Inputs: ultralytics' `bus.jpg` and `zidane.jpg`, the ONNX model zoo's MNIST, 5 s of whisper's `jfk.flac`, EPANET's `Net1.inp`, pyswmm's `model_weir_setting.inp`.
 
-| Model | Package | FMI 3 feature | What to try | Status |
+**Models that need a wrapper count as failures.** 29 libraries have no single function or class that is a model: the model is assembled in code (a do-mpc controller, a CasADi NLP, a FiPy mesh and equation, an OpenSees script, a GluonTS predictor, a right-hand side for `odeint`), or the results are read through methods. `init` has nothing to point at. Each was also tried through a short file written for this test, in [pending-100/wrappers](pending-100/wrappers/), calling the library as its documentation does; the notes say what the wrapper did and whether fmugen handled it.
+
+| | Models (99) |
+|---|---|
+| **Simulates with useful results** (a config from `init` or `init --probe`) | **44** |
+| …or with a hand-written config | **51** |
+| Fails | **48**: 29 need a wrapper; 19 on fmugen problems, below |
+| **Compiled FMU simulates, identical to the uncompiled one** | **40**; 11 more simulate uncompiled only |
+
+Every matching config is identical to the model run directly: 51 974 values compared, largest relative difference 0.
+
+**fmugen problems found.** Each failure below comes from one of these (some models that also need a wrapper hit one too). fmugen has since been fixed for each, with tests; with the fixes, every model failing on one of these passes, except py-pde's compiled FMU ([Known problems](#known-problems)) and skorch, which is random by design.
+
+- **`build` refuses a config `init --probe` wrote** (10 models: nbeats, timesfm, skorch, tabnet, pyod, osqp, prophet, xgboost, lightgbm, catboost): a `setup` call with a call as argument (`fit(numpy.array(...))`) runs in the probe, but `build` accepts only literals and names.
+- **Lists of integers are typed Real** (5: deepxde, fno, tcn, neuromancer, kan): torch refuses float sizes (`layer_sizes=[1, 16, 16, 1]`). An int scalar default is typed Integer.
+- **`init --probe` finds no outputs** (3) for `bytes` (rembg; FMI 3 has Binary), a pandas Series indexed by dates (pastas), numpy arrays of `dtype=object` holding numbers (mtcnn).
+- **`init --probe` writes invalid TOML** when a comment quotes a multi-line error (why the object can't be pickled): wav2vec2 fails, do-mpc works through its plain `init` config.
+- **An output named `time` is hidden in FMI 2** (nengo): FMPy's results name the simulation time `time`, so the simulator's clock shows 1.0 instead of 0.01. FMI 3 configs rename it `model_time`.
+- **Compiled FMUs fail to instantiate without an error message** (12): the backend exits and `--capture-output` keeps its traceback in the capture file, so UniFMU reports "no output". Underneath: torchvision's `_C_stable.so`, loaded by path, isn't collected (timm, ultralytics, easyocr); code-only package folders don't exist in the frozen app, so paths through them fail (chgnet's `model/../pretrained`, speechbrain); TorchScript needs the `.py` sources of the functions it compiles (mace, norse, matgl); ray imports its `_private` modules by name (neuralforecast).
+
+Others found with earlier start values, which the configs above avoid: a `call:` value with text after its `)` (`pathlib:Path('x.png').read_bytes()`) silently calls `Path()` (rembg and easyocr got a `PosixPath`); `init` crashed on a class as an argument default (`TypeError: '>' not supported between 'getset_descriptor' and 'int'`: numpy's `default_rng` with a `size` start, reservoirpy with a 2-D input); a factory annotated with a base class crashes plain `init` (tirex: `AttributeError: forecast`); a `--start` named like the `**kwargs` parameter is refused (MOMENT's `model_kwargs`). These are fixed too.
+
+### Neural networks (second batch)
+
+| Model | `init` / `init --probe` | Hand config | Compiled (PyInstaller) | Notes |
 |---|---|---|---|---|
-| `ultralytics:YOLO` | [ultralytics](https://pypi.org/project/ultralytics/) | Binary | YOLO11n object detection; the image as a Binary input, boxes as arrays | pending |
-| `transformers:pipeline` | [transformers](https://pypi.org/project/transformers/) | — | `"sentiment-analysis"` pipeline (DistilBERT): text in, label and score out | pending |
-| `sentence_transformers:SentenceTransformer` | [sentence-transformers](https://pypi.org/project/sentence-transformers/) | — | `all-MiniLM-L6-v2`, `--call encode`: a 384-value embedding | pending |
-| `timm:create_model` | [timm](https://pypi.org/project/timm/) | — | `resnet18`, pretrained: image classification logits | pending |
-| `torchvision.models:resnet18` | [torchvision](https://pypi.org/project/torchvision/) | — | ImageNet weights, a 224×224 image | pending |
-| `neuralforecast.models:NHITS` | [neuralforecast](https://pypi.org/project/neuralforecast/) | — | N-HiTS forecaster, fitted on a short series, `predict` | pending |
-| `darts.models:NBEATSModel` | [darts](https://pypi.org/project/darts/) | — | N-BEATS forecaster | pending |
-| `pytorch_forecasting:TemporalFusionTransformer` | [pytorch-forecasting](https://pypi.org/project/pytorch-forecasting/) | — | Temporal Fusion Transformer | pending |
-| `gluonts.torch:DeepAREstimator` | [gluonts](https://pypi.org/project/gluonts/) | — | DeepAR probabilistic forecaster (`gluonts[torch]`) | pending |
-| `timesfm:TimesFM_2p5_200M_torch` | [timesfm](https://pypi.org/project/timesfm/) | — | Google TimesFM 2.5 foundation forecaster (Hugging Face weights) | pending |
-| `uni2ts.model.moirai:MoiraiForecast` | [uni2ts](https://pypi.org/project/uni2ts/) | — | Salesforce Moirai foundation forecaster | pending |
-| `momentfm:MOMENTPipeline` | [momentfm](https://pypi.org/project/momentfm/) | — | MOMENT time-series foundation model | pending |
-| `tirex:load_model` | [tirex-ts](https://pypi.org/project/tirex-ts/) | — | NX-AI TiRex (xLSTM) forecaster | pending |
-| `mace.calculators:mace_mp` | [mace-torch](https://pypi.org/project/mace-torch/) | — | MACE-MP-0 interatomic potential (ASE calculator): energy and forces | pending |
-| `chgnet.model:CHGNet` | [chgnet](https://pypi.org/project/chgnet/) | — | CHGNet crystal potential, `predict_structure` | pending |
-| `matgl:load_model` | [matgl](https://pypi.org/project/matgl/) | — | M3GNet universal potential | pending |
-| `deepxde.nn:FNN` | [deepxde](https://pypi.org/project/deepxde/) | — | Physics-informed network (PINN) | pending |
-| `neuralop.models:FNO` | [neuraloperator](https://pypi.org/project/neuraloperator/) | — | Fourier neural operator | pending |
-| `torchdiffeq:odeint` | [torchdiffeq](https://pypi.org/project/torchdiffeq/) | — | Neural ODE (an MLP right-hand side) | pending |
-| `torchdyn.core:NeuralODE` | [torchdyn](https://pypi.org/project/torchdyn/) | — | Neural ODE module | pending |
-| `sbi.inference:NPE` | [sbi](https://pypi.org/project/sbi/) | — | Neural posterior estimation (normalizing flow) | pending |
-| `onnxruntime:InferenceSession` | [onnxruntime](https://pypi.org/project/onnxruntime/) | — | An ONNX model zoo network (MNIST), `--call run` | pending |
-| `keras.applications:MobileNetV2` | [keras](https://pypi.org/project/keras/) | — | Keras/TensorFlow image classifier (needs tensorflow) | pending |
-| `equinox.nn:MLP` | [equinox](https://pypi.org/project/equinox/) | — | JAX network | pending |
-| `skorch:NeuralNetRegressor` | [skorch](https://pypi.org/project/skorch/) | — | A torch network behind a scikit-learn API, `predict` | pending |
-| `pytorch_tabnet.tab_model:TabNetRegressor` | [pytorch-tabnet](https://pypi.org/project/pytorch-tabnet/) | — | TabNet on tabular data | pending |
-| `tabpfn:TabPFNRegressor` | [tabpfn](https://pypi.org/project/tabpfn/) | — | TabPFN tabular foundation model | pending |
-| `facenet_pytorch:MTCNN` | [facenet-pytorch](https://pypi.org/project/facenet-pytorch/) | — | Face detection | pending |
-| `whisper:load_model` | [openai-whisper](https://pypi.org/project/openai-whisper/) | — | Speech to text (`tiny`), `--call transcribe`: a string output | pending |
-| `speechbrain.inference.speaker:EncoderClassifier` | [speechbrain](https://pypi.org/project/speechbrain/) | — | Speaker embedding (ECAPA) | pending |
-| `torchaudio.pipelines:WAV2VEC2_ASR_BASE_960H` | [torchaudio](https://pypi.org/project/torchaudio/) | — | wav2vec 2.0 speech recognition | pending |
-| `stable_baselines3:SAC` | [stable-baselines3](https://pypi.org/project/stable-baselines3/) | — | SAC policy on Pendulum (`predict`) | pending |
-| `sb3_contrib:RecurrentPPO` | [sb3-contrib](https://pypi.org/project/sb3-contrib/) | — | LSTM policy: its hidden state carried between steps | pending |
-| `d3rlpy.algos:CQLConfig` | [d3rlpy](https://pypi.org/project/d3rlpy/) | — | Offline RL (CQL) policy | pending |
-| `snntorch:Leaky` | [snntorch](https://pypi.org/project/snntorch/) | — | Spiking neuron layer: membrane state between steps | pending |
-| `norse.torch:LIFCell` | [norse](https://pypi.org/project/norse/) | — | Spiking LIF cell, state between steps | pending |
-| `nengo:Simulator` | [nengo](https://pypi.org/project/nengo/) | — | Spiking network simulator, `--call run_steps` | pending |
-| `reservoirpy.nodes:Reservoir` | [reservoirpy](https://pypi.org/project/reservoirpy/) | — | Echo state network | pending |
-| `pytorch_tcn:TCN` | [pytorch-tcn](https://pypi.org/project/pytorch-tcn/) | — | Temporal convolutional network, streaming mode | pending |
-| `kan:KAN` | [pykan](https://pypi.org/project/pykan/) | — | Kolmogorov–Arnold network | pending |
-| `ncps.torch:CfC` | [ncps](https://pypi.org/project/ncps/) | — | Liquid / closed-form continuous-time network | pending |
-| `neuromancer.modules.blocks:MLP` | [neuromancer](https://pypi.org/project/neuromancer/) | — | Differentiable-programming control block | pending |
-| `pyod.models.auto_encoder:AutoEncoder` | [pyod](https://pypi.org/project/pyod/) | — | Autoencoder anomaly detector, `decision_function` | pending |
-| `rembg:remove` | [rembg](https://pypi.org/project/rembg/) | Binary | Background removal (U²-Net): image bytes in and out | pending |
-| `easyocr:Reader` | [easyocr](https://pypi.org/project/easyocr/) | Binary | OCR: image bytes in, text out | pending |
+| `ultralytics:YOLO` (FMI 3) | ✗ no useful outputs | ✓ ([config](pending-100/hand/yolo/fmugen.toml)) | ✗ instantiate fails | **Compiled FMU fails to instantiate, with no error message** (`--capture-output` hides it: "backend exited unexpectedly … no output"). With the fixes: torchvision's `_C_stable.so`, loaded by path, isn't collected. YOLO11n on ultralytics' `bus.jpg`. `predict` returns `Results` objects whose detections are tensors (`results[0].boxes.xyxy`): the hand config reads the 5 boxes, classes and confidences. |
+| `transformers:pipeline` | ✓ | — | ✗ instantiate fails | **Compiled FMU fails to instantiate, with no error message** (`--capture-output` hides it: "backend exited unexpectedly … no output"). Passes with the fixes. `"sentiment-analysis"` (DistilBERT SST-2), `--call __call__`: label and score. Plain `init` stops: the object the factory returns is only known by running it. |
+| `sentence_transformers:SentenceTransformer` | ✓ | — | ✓ (`init --probe` config, 2.9 GB) | `all-MiniLM-L6-v2`, `--call encode`: the 384-value embedding. |
+| `timm:create_model` | ✓ | — | ✗ instantiate fails | **Compiled FMU fails to instantiate, with no error message** (`--capture-output` hides it: "backend exited unexpectedly … no output"). With the fixes: torchvision's `_C_stable.so`, loaded by path, isn't collected. `resnet18`, pretrained, on a 224×224 image tensor: 1000 logits. |
+| `torchvision.models:resnet18` | ✓ | — | ✓ (`init --probe` config, 298.1 MB) | ImageNet weights on a 224×224 image tensor: 1000 logits. |
+| `nf_nhits.py:NHitsForecast` (neuralforecast) | ✗ no model to point `init` at | — | ✗ (wrapper only) | **Fails: the library has no function or class that is the model**, so `init` has nothing to point at. Tried through a wrapper written for this test: **Compiled FMU fails to instantiate, with no error message** (`--capture-output` hides it: "backend exited unexpectedly … no output"). With the fixes: ray imports `ray._private` modules by name. Wrapper ([nf_nhits.py](pending-100/wrappers/nf_nhits.py)): neuralforecast fits on a DataFrame and a `NeuralForecast` object, which `init` can't build. N-HiTS trained 5 steps, seeded; forecasts 4 values. |
+| `darts.models:NBEATSModel` | ✗ build fails | — | — | **Fails: `build` refuses the config `init --probe` wrote**: its `setup` has a call as an argument (`fit(numpy.array(...))`), which the probe ran (`[model] setup …: arguments must be literals or names`). Passes with the fixes. `--setup "fit(darts.TimeSeries.from_values(numpy.array([...])))"`, `--call predict`: 2 epochs, seeded. **Needs `darts[torch]`**: plain `darts` gives placeholders for its torch models. |
+| `pf_tft.py:TFTForecast` (pytorch-forecasting) | ✗ no model to point `init` at | — | ✗ (wrapper only) | **Fails: the library has no function or class that is the model**, so `init` has nothing to point at. Tried through a wrapper written for this test: Wrapper ([pf_tft.py](pending-100/wrappers/pf_tft.py)): the Temporal Fusion Transformer is built from a `TimeSeriesDataSet` and trained with a Lightning `Trainer`. Hidden size 8, 1 epoch, seeded. |
+| `gluon_deepar.py:DeepARForecast` (gluonts) | ✗ no model to point `init` at | — | ✗ (wrapper only) | **Fails: the library has no function or class that is the model**, so `init` has nothing to point at. Tried through a wrapper written for this test: Wrapper ([gluon_deepar.py](pending-100/wrappers/gluon_deepar.py)): the estimator trains into a predictor that takes GluonTS datasets. 1 epoch, seeded; mean forecast of 4 values. |
+| `timesfm:TimesFM_2p5_200M_torch` | ✗ build fails | — | — | **Fails: `build` refuses the config `init --probe` wrote**: its `setup` has a call as an argument (`fit(numpy.array(...))`), which the probe ran (`[model] setup …: arguments must be literals or names`). Passes with the fixes. TimesFM 2.5 (200M), `--create from_pretrained --call forecast` with `--setup "compile(timesfm.ForecastConfig(max_context=64, max_horizon=8))"` (a setup call with a call as argument). Point and quantile forecasts of 4 values. |
+| `moirai_fc.py:MoiraiForecaster` (uni2ts) | ✗ no model to point `init` at | — | ✗ (wrapper only) | **Fails: the library has no function or class that is the model**, so `init` has nothing to point at. Tried through a wrapper written for this test: Wrapper ([moirai_fc.py](pending-100/wrappers/moirai_fc.py)): Moirai's `forward` takes GluonTS-prepared tensors; its documented use is `create_predictor`. Moirai 1.0 R small, zero-shot, median of 20 seeded samples. **uni2ts pins numpy 1.26**, which has no Python 3.13 wheels: installed with `--no-deps`. |
+| `momentfm:MOMENTPipeline` | ✓ | — | ✓ (`init --probe` config, 1.2 GB) | MOMENT-1-small, `--create from_pretrained --call forward`, `model_kwargs={'task_name': 'reconstruction'}`, `--setup init`: the reconstruction of a 512-point input. **momentfm pins numpy 1.25**: installed with `--no-deps`. |
+| `tirex:load_model` | ✓ | — | ✓ (`init --probe` config, 1.1 GB) | `load_model("NX-AI/TiRex")`, `--call forecast` on a 24-point series: quantiles and mean of 4 values. |
+| `mace.calculators:mace_mp` | ✓ | — | ✗ instantiate fails | **Compiled FMU fails to instantiate, with no error message** (`--capture-output` hides it: "backend exited unexpectedly … no output"). With the fixes: TorchScript needs the `.py` sources of the functions it compiles at import. MACE-MP-0 small, `--call get_potential_energy` on ASE's fcc copper. |
+| `chgnet.model:CHGNet` | ✓ | — | ✗ instantiate fails | **Compiled FMU fails to instantiate, with no error message** (`--capture-output` hides it: "backend exited unexpectedly … no output"). With the fixes: chgnet opens `chgnet/model/../pretrained/…`, and `model/` doesn't exist in the frozen app (code-only folder). `--create load --call predict_structure` on fcc aluminium (pymatgen): energy, forces, stress, magnetic moments. |
+| `matgl.ext.ase:PESCalculator` | ✓ | — | ✗ instantiate fails | **Compiled FMU fails to instantiate, with no error message** (`--capture-output` hides it: "backend exited unexpectedly … no output"). With the fixes: TorchScript needs the `.py` sources of the functions it compiles at import. TensorNet-PES-MatPES-PBE-2025.2 through its ASE calculator (`matgl.ext.ase:PESCalculator`, `--call get_potential_energy`) on fcc aluminium: −3.7124 eV. `load_model` returns a `Potential` with no `predict_structure`. |
+| `deepxde.nn:FNN` | ✗ simulate fails | — | — | **Fails: the integer list start is typed Real**, so the model gets float sizes (`empty(): argument 'size' must be tuple of ints`). Passes with the fixes (integer lists typed Integer). A 1-16-16-1 tanh network (PyTorch backend, `DDE_BACKEND=pytorch`). Random weights: compared seeded (`torch:manual_seed(0)` in `setup`). |
+| `neuralop.models:FNO` | ✗ simulate fails | — | — | **Fails: the integer list start is typed Real**, so the model gets float sizes (`empty(): argument 'size' must be tuple of ints`). Passes with the fixes (integer lists typed Integer). Fourier neural operator, 8 modes, on a 16-point input. Random weights: compared seeded. |
+| `neural_ode.py:NeuralODE` (torchdiffeq) | ✗ no model to point `init` at | — | ✗ (wrapper only) | **Fails: the library has no function or class that is the model**, so `init` has nothing to point at. Tried through a wrapper written for this test: Wrapper ([neural_ode.py](pending-100/wrappers/neural_ode.py)): `odeint` needs a right-hand side `f(t, y)` written as code. A seeded 2-16-2 MLP, integrated over each step with dopri5. |
+| `torchdyn.core:NeuralODE` | ✓ | — | ✗ instantiate fails | **Compiled FMU fails to instantiate, with no error message** (`--capture-output` hides it: "backend exited unexpectedly … no output"). Passes with the fixes. `NeuralODE` around a `torch.nn.Linear(2, 2)` vector field. Random weights: compared seeded. |
+| `sbi_gauss.py:Posterior` (sbi) | ✗ no model to point `init` at | — | ✗ (wrapper only) | **Fails: the library has no function or class that is the model**, so `init` has nothing to point at. Tried through a wrapper written for this test: Wrapper ([sbi_gauss.py](pending-100/wrappers/sbi_gauss.py)): NPE needs simulations and a training run before it gives a posterior. Trained on 500 seeded simulations; the posterior mean for an observation. |
+| `onnxruntime:InferenceSession` | ✓ | — | ✓ (`init --probe` config, 76.5 MB) | The ONNX model zoo's MNIST network, `--call run` with `input_feed=call:builtins:dict(Input3=numpy.zeros(...))`: 10 logits. |
+| `keras.applications:MobileNetV2` | ✓ | — | ✓ (`init --probe` config, 283.0 MB) | MobileNetV2 (ImageNet), `--call predict`, **Keras on its JAX backend** (`KERAS_BACKEND=jax`): TensorFlow needs protobuf ≥ 5.28 and fmugen pins 5.27.3 (UniFMU 0.14's). |
+| `equinox.nn:MLP` | ✓ | — | ✓ (`init --probe` config, 273.1 MB) | A 2-8-8-1 MLP, seeded by its `PRNGKey(0)`. |
+| `skorch:NeuralNetRegressor` | ✗ build fails | — | — | **Fails: `build` refuses the config `init --probe` wrote**: its `setup` has a call as an argument (`fit(numpy.array(...))`), which the probe ran (`[model] setup …: arguments must be literals or names`). Passes with the fixes. A `torch.nn.Linear(4, 1)` behind `NeuralNetRegressor`, `fit` in `setup`, `--call predict`. |
+| `pytorch_tabnet.tab_model:TabNetRegressor` | ✗ build fails | — | — | **Fails: `build` refuses the config `init --probe` wrote**: its `setup` has a call as an argument (`fit(numpy.array(...))`), which the probe ran (`[model] setup …: arguments must be literals or names`). Passes with the fixes. `fit` in `setup` (3 epochs, seeded), `--call predict`. **Needs pandas installed by hand.** |
+| `facenet_pytorch:MTCNN` | ✗ no useful outputs | — | ✗ instantiate fails | **Fails: `init --probe` finds no output**: boxes and probabilities are numpy arrays of `dtype=object`. Passes with the fixes. **Compiled FMU fails to instantiate, with no error message** (`--capture-output` hides it: "backend exited unexpectedly … no output").  Face detection on ultralytics' `zidane.jpg`: 3 boxes and probabilities (numpy arrays of `dtype=object`). |
+| `whisper:load_model` | ✓ | — | ✓ (`init --probe` config, 735.9 MB) | `tiny`, `--call transcribe` on 5 s of whisper's `jfk.flac` (16 kHz numpy array): the text. A file path needs ffmpeg. |
+| `speechbrain.inference.speaker:EncoderClassifier` | ✓ | — | ✗ instantiate fails | **Compiled FMU fails to instantiate, with no error message** (`--capture-output` hides it: "backend exited unexpectedly … no output"). With the fixes: speechbrain lists its `utils/` folder, which doesn't exist in the frozen app. ECAPA speaker embedding, `--create from_hparams --call encode_batch`: 192 values. |
+| `w2v_asr.py:Wav2Vec2ASR` (torchaudio) | ✗ no model to point `init` at | — | ✗ (wrapper only) | **Fails: the library has no function or class that is the model**, so `init` has nothing to point at. Tried through a wrapper written for this test: **Fails: `init --probe` writes invalid TOML**: a comment quotes a multi-line error (why the object can't be pickled). Plain `init` types the transcript as Real. Passes with the fixes. Wrapper ([w2v_asr.py](pending-100/wrappers/w2v_asr.py)): the pretrained model is a bundle constant's `get_model()`, and CTC decoding is code. The transcript of the speech clip. |
+| `stable_baselines3:SAC` | ✓ | — | ✓ (`init --probe` config, 295.5 MB) | SAC on Pendulum from the Hugging Face hub (`sb3/sac-Pendulum-v1`), `--create load --call predict`. **Needs gym and shimmy**: the saved model unpickles with them. |
+| `sb3_contrib:RecurrentPPO` | ✓ | — | ✓ (`init --probe` config, 291.9 MB) | LSTM PPO on CartPole (`sb3/ppo_lstm-CartPoleNoVel-v1`), `--create load --call predict`: action and LSTM states, carried between steps. **Needs gym and shimmy.** |
+| `d3rlpy.algos:CQLConfig` | ✓ | — | ✓ (`init --probe` config, 346.4 MB) | `CQLConfig(...).create()`: the CQL algorithm object's settings. |
+| `snntorch:Leaky` | ✓ | — | ✓ (`init --probe` config, 280.4 MB) | A leaky integrate-and-fire neuron with its hidden state: spikes and membrane potential between steps. |
+| `norse.torch:LIFCell` | ✓ | — | ✗ instantiate fails | **Compiled FMU fails to instantiate, with no error message** (`--capture-output` hides it: "backend exited unexpectedly … no output"). With the fixes: TorchScript needs the `.py` sources of the functions it compiles at import. LIF cell, `--call forward` with `input_tensor`: spikes, voltage and current. |
+| `nengo:Simulator` | ✗ wrong values | — | ✗ wrong values, as uncompiled | **Fails: the output `time` (the simulator's clock) shows the simulation time** in FMPy's results, which name the simulation time `time`: 1.0 instead of 0.01. Passes with the fixes (renamed `model_time`). `nengo.Simulator` of an empty network, `--call run_steps`. |
+| `reservoirpy.nodes:Reservoir` | ✓ | — | ✓ (`init --probe` config, 91.1 MB) | A 10-unit reservoir, `--call step` on a 1-D input. |
+| `pytorch_tcn:TCN` | ✗ simulate fails | — | — | **Fails: the integer list start is typed Real**, so the model gets float sizes (`empty(): argument 'size' must be tuple of ints`). Passes with the fixes (integer lists typed Integer). Causal TCN with channels `[4, 4]` on a 16-point input. Random weights: compared seeded. |
+| `kan:KAN` | ✗ simulate fails | — | — | **Fails: `width=[2, 3, 1]` is typed Real** (`'float' object is not subscriptable`). Passes with the fixes. A 2-3-1 KAN (grid 3, k 3, seed 0). **Needs scikit-learn, pandas, matplotlib, pyyaml and tqdm installed by hand.** |
+| `ncps.torch:CfC` | ✓ (seeded) | — | ✓ (seeded config, 283.0 MB) | Closed-form continuous-time network, 8 units, on a 4-step sequence. Random weights: compared seeded. |
+| `neuromancer.modules.blocks:MLP` | ✗ simulate fails | — | — | **Fails: the integer list start is typed Real**, so the model gets float sizes (`empty(): argument 'size' must be tuple of ints`). Passes with the fixes (integer lists typed Integer). A 2-8-1 MLP block. Random weights: compared seeded. **Needs wandb installed by hand.** |
+| `pyod.models.auto_encoder:AutoEncoder` | ✗ build fails | — | — | **Fails: `build` refuses the config `init --probe` wrote**: its `setup` has a call as an argument (`fit(numpy.array(...))`), which the probe ran (`[model] setup …: arguments must be literals or names`). Passes with the fixes. Autoencoder detector, `fit` in `setup` on 40 rows, `--call decision_function`. With 8 rows its training loop fails (`loss` unbound). |
+| `rembg:remove` (FMI 3) | ✗ no useful outputs | — | ✓ simulates (no outputs) | **Fails: `init --probe` finds no output**: the result is `bytes`, which could be an FMI 3 Binary output. Passes with the fixes. U²-Net background removal: PNG bytes in, PNG bytes out. |
+| `easyocr:Reader` (FMI 3) | ✓ | — | ✗ instantiate fails | **Compiled FMU fails to instantiate, with no error message** (`--capture-output` hides it: "backend exited unexpectedly … no output"). With the fixes: torchvision's `_C_stable.so`, loaded by path, isn't collected. OCR of a rendered `FMUGEN 2026` image (bytes): the text. |
 
-### Other models (pending)
+### Other models (second batch)
 
-| Model | Package | FMI 3 feature | What to try | Status |
+| Model | `init` / `init --probe` | Hand config | Compiled (PyInstaller) | Notes |
 |---|---|---|---|---|
-| `qrcode:make` | [qrcode](https://pypi.org/project/qrcode/) | Binary | QR code as PNG bytes out | pending |
-| `pyzbar.pyzbar:decode` | [pyzbar](https://pypi.org/project/pyzbar/) | Binary | Barcode decoding from image bytes | pending |
-| `PIL.ImageOps:grayscale` | [pillow](https://pypi.org/project/pillow/) | Binary | Image bytes in, grayscale image bytes out | pending |
-| `python_speech_features:mfcc` | [python_speech_features](https://pypi.org/project/python_speech_features/) | 2-D array | MFCC matrix of an audio frame | pending |
-| `ssqueezepy:ssq_cwt` | [ssqueezepy](https://pypi.org/project/ssqueezepy/) | 2-D array | Synchrosqueezed wavelet transform (complex, split) | pending |
-| `harold:lqr` | [harold](https://pypi.org/project/harold/) | 2-D array | LQR gain matrix K | pending |
-| `slycot:sb02md` | [slycot](https://pypi.org/project/slycot/) | 2-D array | Riccati solution matrix (SLICOT, Fortran) | pending |
-| `do_mpc.controller:MPC` | [do-mpc](https://pypi.org/project/do-mpc/) | Clock | MPC sampled on a clock (`t_step`) | pending |
-| `casadi:nlpsol` | [casadi](https://pypi.org/project/casadi/) | Structural parameter | Optimal control, horizon length N as a structural parameter | pending |
-| `osqp:OSQP` | [osqp](https://pypi.org/project/osqp/) | Clock | QP-based MPC solved at each clock tick | pending |
-| `ruckig:Ruckig` | [ruckig](https://pypi.org/project/ruckig/) | Clock | Jerk-limited trajectory generator at a fixed control cycle | pending |
-| `vqf:VQF` | [vqf](https://pypi.org/project/vqf/) | Clock | IMU orientation filter, updated at the sensor's sample clock | pending |
-| `simdkalman:KalmanFilter` | [simdkalman](https://pypi.org/project/simdkalman/) | Structural parameter | Vectorized Kalman filter, the state size as a structural parameter | pending |
-| `imufusion:Ahrs` | [imufusion](https://pypi.org/project/imufusion/) | Clock | x-io Fusion AHRS, updated at a fixed sample clock | pending |
-| `pde:DiffusionPDE` | [py-pde](https://pypi.org/project/py-pde/) | Structural parameter | Diffusion on a grid, the grid size as a structural parameter | pending |
-| `fipy:Grid1D` | [fipy](https://pypi.org/project/fipy/) | Structural parameter | Finite-volume 1-D heat equation, `nx` cells | pending |
-| `skfem:MeshTri` | [scikit-fem](https://pypi.org/project/scikit-fem/) | Structural parameter | FEM Poisson problem, mesh refinement sets the array sizes | pending |
-| `pydmd:DMD` | [pydmd](https://pypi.org/project/pydmd/) | Structural parameter, 2-D array | Dynamic mode decomposition, number of modes | pending |
-| `numpy.random:default_rng` | [numpy](https://pypi.org/project/numpy/) | UInt64 | A UInt64 seed | pending |
-| `pysindy:SINDy` | [pysindy](https://pypi.org/project/pysindy/) | 2-D array | Sparse identification: the coefficient matrix | pending |
-| `mujoco:MjData` | [mujoco](https://pypi.org/project/mujoco/) | Structural parameter | Physics model: arrays sized by `nq`, `nv` | pending |
-| `wntr.sim:EpanetSimulator` | [wntr](https://pypi.org/project/wntr/) | Structural parameter | Water network: pressures sized by the number of junctions | pending |
-| `pymoo.optimize:minimize` | [pymoo](https://pypi.org/project/pymoo/) | — | Multi-objective optimization (NSGA-II) | pending |
-| `diffrax:diffeqsolve` | [diffrax](https://pypi.org/project/diffrax/) | — | JAX ODE solver | pending |
-| `sdeint:itoint` | [sdeint](https://pypi.org/project/sdeint/) | — | Stochastic differential equation (seeded) | pending |
-| `jitcode:jitcode` | [jitcode](https://pypi.org/project/jitcode/) | — | ODE compiled to C from SymPy expressions | pending |
-| `pinocchio:buildSampleModelManipulator` | [pin](https://pypi.org/project/pin/) | — | Rigid-body dynamics (RNEA, ABA) | pending |
-| `pybullet:connect` | [pybullet](https://pypi.org/project/pybullet/) | — | Physics engine in `DIRECT` mode | pending |
-| `skrf:Network` | [scikit-rf](https://pypi.org/project/scikit-rf/) | — | RF network S-parameters (complex, split) | pending |
-| `prophet:Prophet` | [prophet](https://pypi.org/project/prophet/) | — | Bayesian forecaster (Stan) | pending |
-| `statsforecast.models:AutoARIMA` | [statsforecast](https://pypi.org/project/statsforecast/) | — | Fast ARIMA | pending |
-| `pmdarima:auto_arima` | [pmdarima](https://pypi.org/project/pmdarima/) | — | ARIMA with model search | pending |
-| `lifelines:KaplanMeierFitter` | [lifelines](https://pypi.org/project/lifelines/) | — | Survival analysis | pending |
-| `emcee:EnsembleSampler` | [emcee](https://pypi.org/project/emcee/) | — | MCMC sampler (seeded) | pending |
-| `chaospy:Normal` | [chaospy](https://pypi.org/project/chaospy/) | — | Polynomial chaos / uncertainty quantification | pending |
-| `SALib.analyze.sobol:analyze` | [SALib](https://pypi.org/project/SALib/) | — | Sobol sensitivity indices | pending |
-| `PySAM.Pvwattsv8:default` | [nrel-pysam](https://pypi.org/project/nrel-pysam/) | — | NREL SAM PV model (C library) | pending |
-| `floris:FlorisModel` | [floris](https://pypi.org/project/floris/) | — | Wind farm wakes | pending |
-| `pypsa:Network` | [pypsa](https://pypi.org/project/pypsa/) | — | Power flow (`pf`) | pending |
-| `pandapipes:create_empty_network` | [pandapipes](https://pypi.org/project/pandapipes/) | — | Pipe network flow | pending |
-| `pyswmm:Simulation` | [pyswmm](https://pypi.org/project/pyswmm/) | — | Stormwater (SWMM engine), stepped | pending |
-| `pastas:Model` | [pastas](https://pypi.org/project/pastas/) | — | Groundwater time-series model | pending |
-| `landlab.components:FlowAccumulator` | [landlab](https://pypi.org/project/landlab/) | — | Landscape flow routing on a grid | pending |
-| `tespy.networks:Network` | [tespy](https://pypi.org/project/tespy/) | — | Thermal plant network (a heat pump cycle) | pending |
-| `xgboost:XGBRegressor` | [xgboost](https://pypi.org/project/xgboost/) | — | Gradient boosting | pending |
-| `lightgbm:LGBMRegressor` | [lightgbm](https://pypi.org/project/lightgbm/) | — | Gradient boosting | pending |
-| `catboost:CatBoostRegressor` | [catboost](https://pypi.org/project/catboost/) | — | Gradient boosting | pending |
-| `GPy.models:GPRegression` | [GPy](https://pypi.org/project/GPy/) | — | Gaussian process: mean and variance | pending |
-| `hapsira.twobody:Orbit` | [hapsira](https://pypi.org/project/hapsira/) | — | Orbit propagation (astropy units) | pending |
-| `openseespy.opensees:node` | [openseespy](https://pypi.org/project/openseespy/) | — | Structural FE (OpenSees), module-level state | pending |
-| `Pynite:FEModel3D` | [PyNiteFEA](https://pypi.org/project/PyNiteFEA/) | — | 3-D frame FE analysis | pending |
-| `sectionproperties.analysis:Section` | [sectionproperties](https://pypi.org/project/sectionproperties/) | — | Cross-section properties (FE) | pending |
-| `arch:arch_model` | [arch](https://pypi.org/project/arch/) | — | GARCH volatility model, `fit` then `forecast` | pending |
-| `ephem:Observer` | [ephem](https://pypi.org/project/ephem/) | — | Sun and planet positions from an observer (C library) | pending |
-| `sympy:lambdify` | [sympy](https://pypi.org/project/sympy/) | — | A symbolic expression made into a function | pending |
+| `qrcode:make` (FMI 3) | ✓ | — | ✓ (`init --probe` config, 62.6 MB) | `make("fmugen")`: the QR image's properties (size, box size, …). |
+| `pyzbar.pyzbar:decode` (FMI 3) | ✓ | — | ✓ (`init --probe` config, 59.6 MB) | Decodes the QR image: `fmugen`. **Needs the zbar library** (`libzbar0t64`, here extracted without root and found through `LD_LIBRARY_PATH`). |
+| `PIL.ImageOps:grayscale` (FMI 3) | ✓ | — | ✓ (`init --probe` config, 57.6 MB) | A 64×64 image to grayscale: the image's properties. |
+| `python_speech_features:mfcc` (FMI 3) | ✓ | — | ✓ (`init --probe` config, 87.0 MB) | MFCC matrix of 5 s of speech: 499 × 13 (FMI 3 2-D array). |
+| `ssqueezepy:ssq_cwt` (FMI 3) | ✗ simulate fails | ✓ ([config](pending-100/hand/ssq_cwt/fmugen.toml)) | ✓ (hand config, 156.0 MB) | Synchrosqueezed CWT of a 64-sample sine. `init` binds the argument `t` (the signal's time vector, default None) to the FMU time, so the model gets a float: the hand config leaves `[time]` out and outputs the 162 frequencies and scales. |
+| `harold:lqr` (FMI 3) | ✓ | — | ✓ (`init --probe` config, 116.5 MB) | LQR of a 2-state system: gain K (1×2), Riccati solution X (2×2), closed-loop eigenvalues (complex, split). **Needs numpy < 2.3** (harold imports `numpy.linalg.linalg`, removed in 2.3; FMPy needs ≥ 2.1.3). |
+| `slycot:sb02md` (FMI 3) | ✓ | — | ✓ (`init --probe` config, 69.7 MB) | `sb02md`, the continuous Riccati equation (SLICOT, Fortran): X, eigenvalues, condition. |
+| `mpc_do.py:DoubleIntegratorMPC` (do-mpc) (FMI 3) | ✗ no model to point `init` at | — | ✗ (wrapper only) | **Fails: the library has no function or class that is the model**, so `init` has nothing to point at. Tried through a wrapper written for this test: Wrapper ([mpc_do.py](pending-100/wrappers/mpc_do.py)): a do-mpc model and controller are built by method calls. Double-integrator MPC, horizon 10; `make_step` gives the control. Not on a clock: run at the communication step. Through the plain `init` config: `init --probe` writes invalid TOML (a comment quoting casadi's multi-line pickling error), fixed in the fixes. |
+| `casadi_ocp.py:DoubleIntegratorOCP` (casadi) (FMI 3) | ✗ no model to point `init` at | — | ✗ (wrapper only) | **Fails: the library has no function or class that is the model**, so `init` has nothing to point at. Tried through a wrapper written for this test: Wrapper ([casadi_ocp.py](pending-100/wrappers/casadi_ocp.py)): the NLP is built from CasADi expressions. Horizon N = 10 (a parameter, not structural); IPOPT; first control and cost. |
+| `osqp:OSQP` (FMI 3) | ✗ build fails | — | — | **Fails: `build` refuses the config `init --probe` wrote**: its `setup` has a call as an argument (`fit(numpy.array(...))`), which the probe ran (`[model] setup …: arguments must be literals or names`). Passes with the fixes. `--setup "setup(scipy.sparse.csc_matrix(...), ...)"`, `--call solve`: the QP's solution and info. Not on a clock. |
+| `ruckig_axis.py:Axis` (ruckig) (FMI 3) | ✗ no model to point `init` at | — | ✗ (wrapper only) | **Fails: the library has no function or class that is the model**, so `init` has nothing to point at. Tried through a wrapper written for this test: Wrapper ([ruckig_axis.py](pending-100/wrappers/ruckig_axis.py)): Ruckig's methods are C built-ins taking parameter objects. One axis, 10 ms control cycle run inside each step: position, velocity, acceleration. |
+| `vqf_imu.py:Orientation` (vqf) (FMI 3) | ✗ no model to point `init` at | — | ✗ (wrapper only) | **Fails: the library has no function or class that is the model**, so `init` has nothing to point at. Tried through a wrapper written for this test: Wrapper ([vqf_imu.py](pending-100/wrappers/vqf_imu.py)): `VQF` is a C built-in, and the orientation comes from a method (`getQuat6D()`). 100 Hz samples inside each step. |
+| `simdkalman:KalmanFilter` (FMI 3) | ✗ no useful outputs | ✓ ([config](pending-100/hand/simdkalman/fmugen.toml)) | ✓ (hand config, 48.9 MB) | Kalman smoother of a 24-point series. `smooth` returns a `Result` whose estimates are two levels down (`result.observations.mean`): the hand config reads them (24 levels, 24×2 states). |
+| `fusion_ahrs.py:Orientation` (imufusion) (FMI 3) | ✗ no model to point `init` at | — | ✗ (wrapper only) | **Fails: the library has no function or class that is the model**, so `init` has nothing to point at. Tried through a wrapper written for this test: Wrapper ([fusion_ahrs.py](pending-100/wrappers/fusion_ahrs.py)): `Ahrs` is a C built-in, and the orientation comes from a method (`get_quaternion()`). 100 Hz samples inside each step. |
+| `pde:DiffusionPDE` (FMI 3) | ✓ | — | ✗ FMU fails | `DiffusionPDE`, `--call evolution_rate` on a 16-cell scalar field. **Compiled FMU fails**: py-pde loads `pde/backends/*/config.py` by path, and a compiled FMU ships no `.py` files. |
+| `fipy_heat.py:Rod` (fipy) (FMI 3) | ✗ no model to point `init` at | — | ✗ (wrapper only) | **Fails: the library has no function or class that is the model**, so `init` has nothing to point at. Tried through a wrapper written for this test: Wrapper ([fipy_heat.py](pending-100/wrappers/fipy_heat.py)): a FiPy problem is a mesh, variables and an equation built in code. 1-D heat equation, 10 cells. |
+| `skfem:MeshTri` (FMI 3) | ✓ | — | ✓ (`init --probe` config, 90.5 MB) | `MeshTri().refined(2)`: the refined mesh's nodes and elements (2-D arrays). |
+| `pydmd:DMD` (FMI 3) | ✗ simulate fails | ✓ ([config](pending-100/hand/pydmd/fmugen.toml)) | ✓ (hand config, 145.8 MB) | DMD with 2 modes of 8 snapshots. The `init --probe` config reads DMD's properties at initialization, before `fit()` has run; the hand config runs `fit()` then too (`init_call = true`): eigenvalues and amplitudes, complex, split. |
+| `numpy.random:default_rng` (FMI 3) | ✓ | — | ✓ (`init --probe` config, 48.8 MB) | `default_rng(seed=12345678901234567890)`, `--call random`: the seed is a UInt64 parameter (FMI 3). |
+| `pysindy:SINDy` (FMI 3) | ✓ | — | ✓ (`init --probe` config, 99.9 MB) | SINDy fitted to two decaying exponentials: the coefficient matrix (2×10). |
+| `mujoco_pendulum.py:Pendulum` (mujoco) (FMI 3) | ✗ no model to point `init` at | — | ✗ (wrapper only) | **Fails: the library has no function or class that is the model**, so `init` has nothing to point at. Tried through a wrapper written for this test: Wrapper ([mujoco_pendulum.py](pending-100/wrappers/mujoco_pendulum.py)): MuJoCo steps a model and its data with `mj_step(model, data)`, C built-ins. A motor-driven pendulum: angle and velocity. |
+| `wntr.sim:EpanetSimulator` (FMI 3) | ✓ | — | ✓ (`init --probe` config, 146.0 MB) | EPANET simulation of `Net1.inp`: pressures at the network's junctions (2-D, time × node). |
+| `pymoo.optimize:minimize` | ✓ | — | ✓ (`init --probe` config, 134.0 MB) | NSGA-II on ZDT1, 5 generations, seed 1: the Pareto set and front. |
+| `diffrax_decay.py:decay` (diffrax) | ✗ no model to point `init` at | — | ✗ (wrapper only) | **Fails: the library has no function or class that is the model**, so `init` has nothing to point at. Tried through a wrapper written for this test: Wrapper ([diffrax_decay.py](pending-100/wrappers/diffrax_decay.py)): an ODE term is a Python function. dy/dt = −ky with Tsit5. |
+| `sde_ou.py:ou` (sdeint) | ✗ no model to point `init` at | — | ✗ (wrapper only) | **Fails: the library has no function or class that is the model**, so `init` has nothing to point at. Tried through a wrapper written for this test: Wrapper ([sde_ou.py](pending-100/wrappers/sde_ou.py)): the drift and diffusion are Python functions. An Ornstein–Uhlenbeck process, seeded. |
+| `jit_osc.py:Oscillator` (jitcode) | ✗ no model to point `init` at | — | ✗ (wrapper only) | **Fails: the library has no function or class that is the model**, so `init` has nothing to point at. Tried through a wrapper written for this test: Wrapper ([jit_osc.py](pending-100/wrappers/jit_osc.py)): the ODE is SymPy expressions compiled to C. A damped oscillator. |
+| `pinocchio:rnea` | ✗ no config | ✓ ([config](pending-100/hand/pinocchio/fmugen.toml)) | ✓ (hand config, 90.0 MB) | Inverse dynamics (`rnea`) of the sample manipulator: Boost.Python functions with no signature, so `init` stops. The hand config passes model and data as positional constants and q, v, a by position. |
+| `bullet_drop.py:BoxDrop` (pybullet) | ✗ no model to point `init` at | — | ✗ (wrapper only) | **Fails: the library has no function or class that is the model**, so `init` has nothing to point at. Tried through a wrapper written for this test: Wrapper ([bullet_drop.py](pending-100/wrappers/bullet_drop.py)): `stepSimulation` returns nothing; the state is read with functions. A box dropped on a plane in `DIRECT` mode. **No wheel for Python 3.13**: built from source (here with zig's C++ compiler, `-fno-sanitize=undefined`). |
+| `skrf.media:DefinedGammaZ0` | ✓ | — | ✓ (`init --probe` config, 107.0 MB) | A 90° line (`DefinedGammaZ0.line`) at 3 frequencies: S-parameters, complex, split. |
+| `prophet:Prophet` | ✗ build fails | — | — | **Fails: `build` refuses the config `init --probe` wrote**: its `setup` has a call as an argument (`fit(numpy.array(...))`), which the probe ran (`[model] setup …: arguments must be literals or names`). Passes with the fixes. `fit` on 24 days in `setup` (a DataFrame built by a setup call), `--call predict` for 2 days. |
+| `statsforecast.models:AutoARIMA` | ✓ | — | ✓ (`init --probe` config, 225.3 MB) | AutoARIMA, `--call forecast`, h = 4. |
+| `pmdarima:auto_arima` | ✓ | — | ✓ (`init --probe` config, 135.8 MB) | `auto_arima`, `--call predict`. |
+| `lifelines:KaplanMeierFitter` | ✓ | — | ✓ (`init --probe` config, 142.5 MB) | Kaplan–Meier, `--call fit`: the survival function. |
+| `mcmc_gauss.py:GaussMCMC` (emcee) | ✗ no model to point `init` at | — | ✗ (wrapper only) | **Fails: the library has no function or class that is the model**, so `init` has nothing to point at. Tried through a wrapper written for this test: Wrapper ([mcmc_gauss.py](pending-100/wrappers/mcmc_gauss.py)): the log-probability is a Python function. 8 walkers, seeded; the running posterior mean. |
+| `chaospy:Normal` | ✓ | — | ✓ (`init --probe` config, 92.0 MB) | `Normal(0, 1)`, `--call pdf`. |
+| `sobol_ishigami.py:ishigami_sobol` (SALib) | ✗ no model to point `init` at | — | ✗ (wrapper only) | **Fails: the library has no function or class that is the model**, so `init` has nothing to point at. Tried through a wrapper written for this test: Wrapper ([sobol_ishigami.py](pending-100/wrappers/sobol_ishigami.py)): Sobol analysis needs a sample and the model's outputs on it. First-order and total indices of the Ishigami function. |
+| `pvwatts.py:pvwatts` (nrel-pysam) | ✗ no model to point `init` at | — | ✗ (wrapper only) | **Fails: the library has no function or class that is the model**, so `init` has nothing to point at. Tried through a wrapper written for this test: Wrapper ([pvwatts.py](pending-100/wrappers/pvwatts.py)): `Pvwattsv8.default("PVWattsNone")` is a C built-in, and the model needs weather data set as an attribute. A 4 kW system, a synthetic year. |
+| `floris_farm.py:Farm` (floris) | ✗ no model to point `init` at | — | ✗ (wrapper only) | **Fails: the library has no function or class that is the model**, so `init` has nothing to point at. Tried through a wrapper written for this test: Wrapper ([floris_farm.py](pending-100/wrappers/floris_farm.py)): the farm's conditions are set with `set()` before `run()`. 3 turbines: powers and farm power. |
+| `pypsa_pf.py:power_flow` (pypsa) | ✗ no model to point `init` at | — | ✗ (wrapper only) | **Fails: the library has no function or class that is the model**, so `init` has nothing to point at. Tried through a wrapper written for this test: Wrapper ([pypsa_pf.py](pending-100/wrappers/pypsa_pf.py)): a network is built with `add()` calls. AC power flow of 2 buses. |
+| `pipes_flow.py:gas_flow` (pandapipes) | ✗ no model to point `init` at | — | ✗ (wrapper only) | **Fails: the library has no function or class that is the model**, so `init` has nothing to point at. Tried through a wrapper written for this test: Wrapper ([pipes_flow.py](pending-100/wrappers/pipes_flow.py)): `pipeflow(net)` returns nothing and writes its results onto `net`, as pandapower's `runpp`. Gas flow in the meshed delta network. |
+| `pyswmm:Simulation` | ✓ | — | ✓ (`init` config, 46.1 MB) | `Simulation(inputfile)`, `--call __next__`: steps pyswmm's `model_weir_setting.inp`. The `init --probe` config fails (it reads the current time before the simulation starts); plain `init` works. |
+| `pastas:Model` | ✗ no useful outputs | — | ✓ simulates (no outputs) | **Fails: `init --probe` finds no output**: the result is a pandas Series indexed by dates. Passes with the fixes (read as an array). `Model(oseries)`, `--call simulate`. |
+| `landlab_flow.py:Hillslope` (landlab) | ✗ no model to point `init` at | — | ✗ (wrapper only) | **Fails: the library has no function or class that is the model**, so `init` has nothing to point at. Tried through a wrapper written for this test: Wrapper ([landlab_flow.py](pending-100/wrappers/landlab_flow.py)): a grid and its fields are built in code. Flow accumulation on a 5×5 grid. |
+| `tespy_hx.py:heater` (tespy) | ✗ no model to point `init` at | — | ✗ (wrapper only) | **Fails: the library has no function or class that is the model**, so `init` has nothing to point at. Tried through a wrapper written for this test: Wrapper ([tespy_hx.py](pending-100/wrappers/tespy_hx.py)): a TESPy network is components and connections built in code. A water heater's outlet temperature. |
+| `xgboost:XGBRegressor` | ✗ build fails | — | — | **Fails: `build` refuses the config `init --probe` wrote**: its `setup` has a call as an argument (`fit(numpy.array(...))`), which the probe ran (`[model] setup …: arguments must be literals or names`). Passes with the fixes. `fit` in `setup`, `--call predict`. **Compiled: needs hypothesis installed**: PyInstaller imports every xgboost submodule, and `xgboost.testing` calls `pytest.importorskip("hypothesis")`, whose exception stops PyInstaller. |
+| `lightgbm:LGBMRegressor` | ✗ build fails | — | — | **Fails: `build` refuses the config `init --probe` wrote**: its `setup` has a call as an argument (`fit(numpy.array(...))`), which the probe ran (`[model] setup …: arguments must be literals or names`). Passes with the fixes. `fit` in `setup`, `--call predict`. **Needs scikit-learn installed by hand.** |
+| `catboost:CatBoostRegressor` | ✗ build fails | — | — | **Fails: `build` refuses the config `init --probe` wrote**: its `setup` has a call as an argument (`fit(numpy.array(...))`), which the probe ran (`[model] setup …: arguments must be literals or names`). Passes with the fixes. `fit` in `setup`, `--call predict`. |
+| `GPy.models:GPRegression` | ✓ | — | ✓ (`init --probe` config, 119.4 MB) | GP regression, `--call predict`: mean and variance. **Needs matplotlib installed by hand.** |
+| `hapsira.twobody:Orbit` | ✓ | — | ✓ (`init --probe` config, 237.2 MB) | `Orbit.from_classical` (astropy units), `--call propagate` 600 s. **Needs numpy < 2.4** (`numpy.in1d`) **and astropy < 7** (`matrix_product`). |
+| `opensees_cantilever.py:cantilever` (openseespy) | ✗ no model to point `init` at | — | ✗ (wrapper only) | **Fails: the library has no function or class that is the model**, so `init` has nothing to point at. Tried through a wrapper written for this test: Wrapper ([opensees_cantilever.py](pending-100/wrappers/opensees_cantilever.py)): an OpenSees model is a script of module-level commands. A cantilever's tip deflection and base moment. |
+| `pynite_beam.py:beam` (PyNiteFEA) | ✗ no model to point `init` at | — | ✗ (wrapper only) | **Fails: the library has no function or class that is the model**, so `init` has nothing to point at. Tried through a wrapper written for this test: Wrapper ([pynite_beam.py](pending-100/wrappers/pynite_beam.py)): the model is built with method calls. A simply supported beam. |
+| `section_rect.py:rectangle` (sectionproperties) | ✗ no model to point `init` at | — | ✗ (wrapper only) | **Fails: the library has no function or class that is the model**, so `init` has nothing to point at. Tried through a wrapper written for this test: Wrapper ([section_rect.py](pending-100/wrappers/section_rect.py)): the geometry must be meshed (`create_mesh`) before the `Section` is made. A 100×50 rectangle. |
+| `arch:arch_model` | ✓ | — | ✓ (`init --probe` config, 122.9 MB) | `arch_model(y)`, `--call fit`: the GARCH fit's parameters. |
+| `ephem:Sun` | ✗ no useful outputs | ✓ ([config](pending-100/hand/ephem/fmugen.toml)) | ✓ (hand config, 46.6 MB) | `Sun`, `--call compute`: the position is in C attributes that exist only after `compute()`; the hand config reads them, with `init_call = true`. |
+| `sympy:lambdify` | ✗ simulate fails | ✓ ([config](pending-100/hand/sympy_lambdify/fmugen.toml)) | ✓ (hand config, 64.9 MB) | `lambdify` makes a function of x and y by position, which `init` can't see; the hand config binds them with `to = "pos:N"`. |
 
 ---
 
@@ -446,6 +469,10 @@ y = { from = "return", unit = "degC" }
 - **`--convert` is refused for a step method's argument given by its prefixed name** (`--convert calculate_optimal_actuation_x0=…`): `--convert names that are not arguments of the model`. A `call:` start (`--start calculate_optimal_actuation_x0=call:numpy:array(…)`) works instead.
 - **A local package imported by name isn't put in the FMU.** An entry like `debutanizer.model:solve_steady_state` or `openhens:OpenHENS`, from a cloned repository that isn't installed, is found by `init` only because it runs in that folder. The FMU's backend runs elsewhere and fails to import it. Installing the repository (`pip install -e .`) works; `init` gives no warning. Packages installed from PyPI aren't affected.
 - **Files the model reads from a folder it computes aren't put in the FMU.** `init` copies the files the code or the starts name by a path. OpenHENS also reads saved solutions from its `output_folder`, so its FMU gives a different TAC than running it in the repository (154853.86 against 159038.72).
+
+- **A compiled FMU has no `.py` files**, so a library that reads its own source files by path fails compiled: py-pde loads `pde/backends/*/config.py` (it works uncompiled).
+- **PyInstaller stops on xgboost** unless hypothesis is installed: it imports every xgboost submodule, and `xgboost.testing` calls `pytest.importorskip("hypothesis")`, whose exception isn't an `Exception`.
+- **`init` binds an argument named `t` to the FMU time**, also when it is a time vector (ssqueezepy's `ssq_cwt(x, t=None)`): remove `[time]` from the config.
 
 Limitations (not bugs):
 

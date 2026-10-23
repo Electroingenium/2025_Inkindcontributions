@@ -241,6 +241,7 @@ def compile_fmu(compiler, resources, interface, work, requirements=()):
         cmd += [arg for m in modules for arg in ("--hidden-import", m)]
         cmd += [arg for src, dest in data for arg in ("--add-data", f"{src}{os.pathsep}{dest}")]
         cmd += [arg for p in packages for arg in ("--collect-data", p, "--collect-binaries", p)]
+        cmd += [arg for src, dest in _loaded_libraries(packages) for arg in ("--add-binary", f"{src}{os.pathsep}{dest}")]
         cmd += [arg for p in direct for arg in ("--collect-submodules", p)]
         cmd += [arg for p in imports for arg in ("--hidden-import", p)]
         if "numpy" in packages:   # numpy 2's numpy.core aliases: what older pickles name (np.load of .npz)
@@ -274,6 +275,8 @@ def compile_fmu(compiler, resources, interface, work, requirements=()):
                else f"it exited normally, but {built} wasn't made")
         raise InterfaceError(f"--compile {compiler} failed ({why}):\n" + "\n".join(lines)[-4000:])
 
+    if compiler == "pyinstaller" and (built / "_internal").is_dir():
+        _add_package_folders(packages, built / "_internal")
     keep = {folder / MODEL_DIR for folder, model in models if model.get("cwd")}
     _remove_compiled(resources, keep, top=True)
     shutil.move(str(built), str(resources / EXE_DIR))
@@ -418,7 +421,9 @@ def _modules(interface):
 NOT_COLLECTED = {"fmugen", "pyinstaller", "pyinstaller-hooks-contrib", "nuitka", "pip", "setuptools", "wheel"}
 #: Packages that import their own submodules by name, so they are collected with all of them even when
 #: they are only a dependency (``pyomo.environ`` imports its plugins: OpenHENS).
-IMPORTS_OWN_SUBMODULES = {"pyomo"}
+#: Packages that import their own submodules by name: pyomo's plugins, tensorly's backends
+#: (neuraloperator), ray's _private modules (neuralforecast).
+IMPORTS_OWN_SUBMODULES = {"pyomo", "tensorly", "ray"}
 
 
 def _packages(modules, requirements=()):
@@ -505,7 +510,11 @@ def _editable_paths(tops):
     return folders
 
 
-NEEDS_SOURCE = {"transformers"}   # libraries that read the source of code built on them (inspect.getsource)
+#: Libraries that read the source of code built on them: inspect.getsource (transformers),
+#: torch.jit.script when a module is imported (mace, norse).
+NEEDS_SOURCE = {"transformers", "torch"}
+#: Packages that use TorchScript without declaring torch as a dependency (matgl's torch_geometric).
+SOURCE_ALWAYS = {"torch_geometric"}
 
 
 def _source_hooks(packages, hooks_dir):
@@ -528,6 +537,9 @@ def _source_hooks(packages, hooks_dir):
     names = []
     for top in packages:
         if f"hook-{top}.py" in existing or top in NEEDS_SOURCE:
+            continue
+        if top in SOURCE_ALWAYS:
+            names.append(top)
             continue
         for dist in by_top.get(top, []):
             try:
@@ -581,6 +593,67 @@ def _plugin_dirs(packages):
                                                     for parent in folder.parents if parent.is_relative_to(root)):
                     found.append((folder, Path(name, folder.relative_to(root)).as_posix()))
     return found
+
+
+def _package_folders(packages):
+    """``[(package folder, its path relative to the package's parent)]`` of each of ``packages``.
+
+    :param packages: package names.
+    :type packages: list[str]
+    :return: one pair per folder of each package (a namespace package may have several).
+    :rtype: list[tuple]
+    """
+    found = []
+    for name in packages:
+        try:
+            spec = importlib.util.find_spec(name)
+        except (ImportError, ValueError):   # ValueError: imported already, without a spec (humanfriendly)
+            continue
+        if spec is not None and spec.submodule_search_locations:
+            found += [(Path(location), Path(name)) for location in spec.submodule_search_locations]
+    return found
+
+
+def _loaded_libraries(packages):
+    """Native libraries inside ``packages`` that PyInstaller's ``--collect-binaries`` skips.
+
+    It collects ``lib*.so`` and imported extension modules; a library loaded by path, like
+    torchvision's ``_C_stable.so`` (``torch.ops.load_library``), is neither, and without it
+    ``import torchvision`` fails in the frozen FMU (timm, ultralytics).
+
+    :param packages: package names.
+    :type packages: list[str]
+    :return: ``[(file, destination folder inside the executable)]``.
+    :rtype: list[tuple]
+    """
+    found = []
+    for root, dest in _package_folders(packages):
+        for path in sorted(root.rglob("*")):
+            name = path.name
+            native = name.endswith((".so", ".pyd", ".dylib")) or ".so." in name
+            if native and not name.startswith("lib") and path.is_file():
+                found.append((path, (dest / path.parent.relative_to(root)).as_posix()))
+    return found
+
+
+def _add_package_folders(packages, internal):
+    """Create each package's folder tree in the frozen app's ``_internal``, without files.
+
+    PyInstaller keeps modules in an archive, so a package folder holding only code doesn't exist on
+    disk, and a path built from ``__file__`` through it fails on Linux and macOS
+    (chgnet's ``chgnet/model/../pretrained/...``) even though the data file is there.
+
+    :param packages: package names.
+    :type packages: list[str]
+    :param internal: the frozen app's ``_internal`` folder.
+    :type internal: pathlib.Path
+    """
+    for root, dest in _package_folders(packages):
+        for folder in [root, *(p for p in root.rglob("*") if p.is_dir() and p.name != "__pycache__")]:
+            made = internal / dest / folder.relative_to(root)
+            made.mkdir(parents=True, exist_ok=True)
+            if not any(made.iterdir()):   # the FMU is a zip, which keeps no empty folders
+                (made / ".keep").touch()
 
 
 def _canonical(name):

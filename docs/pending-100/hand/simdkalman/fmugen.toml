@@ -1,0 +1,23 @@
+# simdkalman: smooth() returns a Result object whose estimates are nested two levels down
+# (result.observations.mean), past what `init --probe` splits. The `init --probe` config
+# with those outputs added: the smoothed level of the 24-point series and the smoothed states
+# (level, slope).
+[model]
+entry = "simdkalman:KalmanFilter"
+fmi_version = 3
+call = "smooth"
+
+[model.constants]
+process_noise = { call = "numpy:diag([0.1, 0.01])" }
+observation_model = { call = "numpy:array([[1.0, 0.0]])" }
+
+[model.call_constants]
+data = { call = "numpy:array([20.0, 21.3, 22.5, 23.5, 24.3, 24.8, 25.0, 24.8, 24.3, 23.5, 22.5, 21.3, 20.0, 18.7, 17.5, 16.5, 15.7, 15.2, 15.0, 15.2, 15.7, 16.5, 17.5, 18.7])" }
+
+[parameters]
+state_transition = { dimensions = [2, 2], start = [1.0, 1.0, 0.0, 1.0] }
+observation_noise = { start = 1.0 }
+
+[outputs]
+level = { from = "return:observations.mean", dimensions = [24] }
+states = { from = "return:states.mean", dimensions = [24, 2] }
