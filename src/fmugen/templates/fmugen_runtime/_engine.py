@@ -23,7 +23,7 @@ from fmugen.templates.fmugen_runtime._helpers import (
     _capture_output, _release_output, _clock_of, _is_number, _quiet_debug_logging,
     assemble_items, coerce, converter, describe, dump_state,
     flatten, get_path, is_literal_constant, keyword_constants,
-    load_entry, load_state, outside_bundle, pick, plain_number, reshape,
+    load_entry, load_state, object_call, outside_bundle, pick, plain_number, reshape,
     resolve_constant, resolve_reference, results_of, rng_states, set_path,
     set_rng_states, split_global,
 )
@@ -436,7 +436,11 @@ class Engine:
                 result, have_result = self._call(current_time + step_size, step_size), True
                 self._read_results(result, have_result=True, update_states=False, missing_ok=False)
             elif self.interface["entry"].get("step", True):
-                result, have_result = self._call(current_time, step_size), True
+                repeat = self.interface.get("repeat", 1)   # [model] substeps without integrate
+                h = step_size / repeat
+                for i in range(repeat):
+                    result = self._call(current_time + i * h, h)
+                have_result = True
                 self._read_results(result, have_result=True, update_states=True, missing_ok=False)
             else:  # [model] call = false: only clocks run code
                 result, have_result = None, False
@@ -1627,8 +1631,11 @@ class Engine:
         if clock is None:
             if not self.is_class:
                 return self.entry
+            call = self.interface["entry"]["call"]
+            if ":" in call:   # "module:function(self, ...)": a function taking the model object
+                return object_call(call, self.obj)
             owner = type(self.obj) if self.interface["entry"].get("call_on_class") else self.obj
-            return getattr(owner, self.interface["entry"]["call"])
+            return getattr(owner, call)
         call = self.clocks[clock]["call"]
         if ":" in call:
             return resolve_reference(call)
@@ -1657,6 +1664,8 @@ class Engine:
                 if not have_result:
                     return False, None
                 return True, pick(result, source.get("name"))
+            if source["kind"] == "get":   # a getter method of the object, called after the step
+                return True, get_path(self.obj, source["name"])()
             return True, get_path(self.obj, source["name"])
         except (AttributeError, KeyError, IndexError):
             if missing_ok:

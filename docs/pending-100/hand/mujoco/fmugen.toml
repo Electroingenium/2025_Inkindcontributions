@@ -1,0 +1,19 @@
+# mujoco without a wrapper: the model object is MjData(MjModel), and each step is
+# mj_step(model, data), a C built-in function taking it, run 500 times (timestep 0.002) per
+# second as in the wrapper. Unlike the wrapper, the start angle is 0: an attr: parameter would be
+# written before every step. Needs MjData.model (MuJoCo 3); to verify on the test machine.
+[model]
+entry = "mujoco:MjData"
+call = "mujoco:mj_step(self.model, self)"
+substeps = 500
+fmi_version = 3
+
+[model.constants]
+0 = { call = "mujoco:MjModel.from_xml_string('<mujoco><option timestep=\"0.002\"/><worldbody><body><joint name=\"hinge\" type=\"hinge\" axis=\"0 1 0\"/><geom type=\"capsule\" size=\"0.05\" fromto=\"0 0 0 0 0 -1\"/></body></worldbody><actuator><motor joint=\"hinge\"/></actuator></mujoco>')" }
+
+[inputs]
+torque = { start = 0.0, to = "attr:ctrl.0" }
+
+[outputs]
+angle = { from = "attr:qpos.0" }
+velocity = { from = "attr:qvel.0" }

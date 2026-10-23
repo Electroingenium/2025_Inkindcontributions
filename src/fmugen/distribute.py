@@ -399,6 +399,10 @@ def _modules(interface):
     refs = [step["call"] for step in interface.get("setup", [])]
     refs += [td["enum"] for td in interface.get("type_definitions", {}).values() if td.get("enum")]
     refs += [c["call"] for c in interface.get("clocks", []) if c.get("call")]
+    step = interface["entry"].get("call")
+    if isinstance(step, str) and ":" in step:   # "module:function(self, ...)": the module, and dotted names in its arguments
+        refs += [step.partition("(")[0], *(name for name in _dotted_names(f"f({step.partition('(')[2]})")
+                                            if name.split(".")[0] != "self")]
     for table in ("constants", "call_constants"):
         for value in interface.get(table, {}).values():
             if isinstance(value, dict) and "ref" in value:

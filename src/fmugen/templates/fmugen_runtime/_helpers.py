@@ -661,17 +661,83 @@ def get_path(obj, path):
 
 
 def set_path(obj, path, value):
-    """Set the attribute at the end of a dotted path.
+    """Set the attribute (or item) at the end of a dotted path.
+
+    The parts before the last are followed as attributes; only where an attribute lookup fails is
+    the part read as :func:`get_path` reads it (a key, an index). The last part is set as an item
+    only where there's no such attribute and it can only be an item: a key already in a mapping or
+    a labelled pandas/xarray object (``"loads.p_set.l"`` sets ``obj.loads.p_set["l"]``), or an
+    index of a list or array (``"qpos.0"``). Everything else is set as an attribute, as before.
 
     :param obj: the start object (the model object).
-    :param path: the dotted path; all but the last part are attributes to follow.
+    :param path: the dotted path.
     :type path: str
     :param value: the new value.
     """
     *parents, last = path.split(".")
     for part in parents:
-        obj = getattr(obj, part)
-    setattr(obj, last, value)
+        try:
+            obj = getattr(obj, part)
+        except AttributeError:   # a key or an index: "loads.p_set.l", "data.qpos.0"
+            obj = get_path(obj, part)
+    try:
+        attribute = hasattr(obj, last)
+    except Exception:   # a property that fails to read: set it as before
+        attribute = True
+    if attribute:
+        setattr(obj, last, value)
+    elif (isinstance(obj, Mapping) or _labelled(obj)) and last in obj:
+        obj[last] = value
+    elif last.lstrip("-").isdigit() and last.count("-") <= 1 and _indexable(obj):
+        obj[int(last)] = value
+    else:
+        setattr(obj, last, value)
+
+
+def _self_path(node):
+    """The path after ``self`` of an argument like ``self`` or ``self.model.data``, or None.
+
+    :param node: an argument node from :func:`parse_call_text`.
+    :type node: ast.expr
+    :return: ``""`` for ``self``, ``"model.data"`` for ``self.model.data``, None for anything else.
+    :rtype: str or None
+    """
+    parts = []
+    while isinstance(node, ast.Attribute):
+        parts.append(node.attr)
+        node = node.value
+    if isinstance(node, ast.Name) and node.id == "self":
+        return ".".join(reversed(parts))
+    return None
+
+
+def object_call(text, obj):
+    """The step call ``"module:function(self, self.attr, ...)"`` of ``[model] call``, bound to ``obj``.
+
+    For libraries whose step is a function taking the model object (``pandapipes:pipeflow(self)``,
+    ``mujoco:mj_step(self.model, self.data)``). ``self`` is the model object and ``self.<path>``
+    follows a path on it (:func:`get_path`), read on every call; other arguments are evaluated like
+    those of a call constant (:func:`call_argument`). Arguments bound to variables (``arg:``,
+    ``pos:``) come after these.
+
+    :param text: the call text.
+    :type text: str
+    :param obj: the model object.
+    :return: a callable taking the remaining arguments.
+    :rtype: callable
+    """
+    target, args, kwargs = parse_call_text(text)
+    fn = resolve_reference(target)
+
+    def value(node):
+        path = _self_path(node)
+        if path is None:
+            return call_argument(node)
+        return get_path(obj, path) if path else obj
+
+    def call(*more, **more_kwargs):
+        return fn(*[value(a) for a in args], *more, **{k: value(v) for k, v in kwargs.items()}, **more_kwargs)
+    return call
 
 
 def pick(result, key):
@@ -693,13 +759,15 @@ def pick(result, key):
 def describe(source):
     """Describe a ``from`` / ``next`` source for error messages.
 
-    :param source: ``{"kind": "return" | "attr", "name": ...}``.
+    :param source: ``{"kind": "return" | "attr" | "get", "name": ...}``.
     :type source: dict
-    :return: e.g. ``"the return value ['y']"`` or ``"attribute 'state.T'"``.
+    :return: e.g. ``"the return value ['y']"``, ``"attribute 'state.T'"`` or ``"method 'getQuat6D'()"``.
     :rtype: str
     """
     if source["kind"] == "return":
         return "the return value" + (f" [{source['name']!r}]" if source.get("name") else "")
+    if source["kind"] == "get":
+        return f"method {source['name']!r}()"
     return f"attribute {source['name']!r}"
 
 
