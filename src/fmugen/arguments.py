@@ -30,6 +30,28 @@ def _time_source(name):
     """
     return TIME_NAMES.get(name.lower().replace("_", ""))
 
+
+def _horizon(p):
+    """Whether a parameter named ``h`` is a count (a forecast horizon), not a step size.
+
+    ``h`` is a step size in ODE code, but forecasters (neuralforecast's ``predict(h=None)``,
+    statsforecast's ``forecast(h)``) use it for the number of values to forecast. It's taken as one
+    when it's annotated as an integer (``int``, ``Optional[int]``) or defaults to an integer or None.
+
+    :param p: the parameter.
+    :type p: inspect.Parameter
+    :rtype: bool
+    """
+    if p.name != "h":
+        return False
+    annotation = p.annotation
+    if isinstance(annotation, str):
+        annotation_ints = re.fullmatch(r"(typing\.)?(Optional\[int\]|int( \| None)?|None \| int)", annotation)
+    else:
+        annotation_ints = annotation is int or set(typing.get_args(annotation)) in ({int}, {int, type(None)})
+    default = p.default
+    return bool(annotation_ints) or default is None or isinstance(default, int) and not isinstance(default, bool)
+
 #: Python types that are FMI scalar values.
 SCALARS = (bool, int, float, str)
 
@@ -342,8 +364,19 @@ def class_called(cls, name):
     if not isinstance(raw, types.FunctionType):
         return False
     params = list(inspect.signature(raw).parameters.values())
-    return not params or (params[0].name != "self"
-                          and params[0].kind in (params[0].POSITIONAL_ONLY, params[0].POSITIONAL_OR_KEYWORD))
+    if not params:
+        return True
+    first = params[0]
+    if first.name == "self" or first.kind not in (first.POSITIONAL_ONLY, first.POSITIONAL_OR_KEYWORD):
+        return False
+    # A method whose instance isn't called self: a function defined outside the class and attached to it
+    # (pypsa's Network.pf = pf, written as pf(n, ...)), or one whose first parameter is annotated with the class.
+    if "." not in raw.__qualname__.replace(".<locals>.", ""):
+        return False
+    annotation = first.annotation
+    if isinstance(annotation, str):
+        return annotation.strip("'\"").rpartition(".")[2] not in {k.__name__ for k in inspect.getmro(cls)}
+    return not (inspect.isclass(annotation) and issubclass(cls, annotation))
 
 
 def _keywordless(fn):
@@ -433,7 +466,7 @@ def _arguments(fn, section, data, comments, skip_self=False, allow_time=True, co
             continue
         if p.kind is p.POSITIONAL_ONLY and not positional:
             continue
-        if allow_time and _time_source(p.name) and p.name not in starts:
+        if allow_time and _time_source(p.name) and p.name not in starts and not _horizon(p):
             time_args[p.name] = _time_source(p.name)
             continue
         if allow_time and _time_source(p.name) and isinstance(starts.get(p.name), (int, float)):

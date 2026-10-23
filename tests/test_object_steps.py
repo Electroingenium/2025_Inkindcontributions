@@ -192,3 +192,45 @@ def test_get_needs_a_class(tmp_path, make_fmu):
     ''')
     with pytest.raises(InterfaceError, match="return:"):
         make_fmu(tmp_path)
+
+
+GETTER = '''
+    class Farm:
+        def __init__(self):
+            self.power, self.runs = None, 0
+
+        def run(self):
+            self.power, self.runs = 5.0, self.runs + 1
+
+        def get_power(self):
+            if self.power is None:
+                raise RuntimeError("run() first")
+            return self.power
+'''
+
+
+def test_a_getter_that_fails_at_initialization_calls_the_model_once(tmp_path, make_fmu, adapter):
+    write(tmp_path, "farm.py", GETTER, '''
+        [model]
+        entry = "farm.py:Farm"
+        call = "run"
+        [outputs]
+        power = { from = "get:get_power" }
+    ''')
+    fmu = adapter(make_fmu(tmp_path))
+    fmu.initialize()
+    assert fmu.get("power") == 5.0 and fmu.engine.obj.runs == 1
+    assert fmu.fmi2DoStep(0.0, 1.0, False) == OK and fmu.engine.obj.runs == 2
+
+
+def test_a_getter_that_works_at_initialization_doesnt_call_the_model(tmp_path, make_fmu, adapter):
+    write(tmp_path, "farm.py", GETTER.replace("None, 0", "1.0, 0"), '''
+        [model]
+        entry = "farm.py:Farm"
+        call = "run"
+        [outputs]
+        power = { from = "get:get_power" }
+    ''')
+    fmu = adapter(make_fmu(tmp_path))
+    fmu.initialize()
+    assert fmu.get("power") == 1.0 and fmu.engine.obj.runs == 0

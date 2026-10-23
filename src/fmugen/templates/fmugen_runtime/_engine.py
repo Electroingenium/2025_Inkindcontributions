@@ -367,11 +367,23 @@ class Engine:
                 self._apply_attributes(clock=None, initial=True)
                 for name in self.clocks:
                     self._apply_attributes(clock=name, initial=True)
-            if self.interface["entry"].get("init_call"):
+            init_call = self.interface["entry"].get("init_call")
+            if not init_call:
+                try:
+                    self._read_results(None, have_result=False, update_states=False, missing_ok=True)
+                except Exception as e:
+                    # a get: output whose method raises until the model has run (floris' get_farm_power()):
+                    # call the model once, as init_call = true does, then read again
+                    getters = [v["name"] for v in self.variables if v.get("from", {}).get("kind") == "get"]
+                    if not getters or not self.interface["entry"].get("step", True) or self.interface.get("integrate"):
+                        raise
+                    self.log(f"reading {', '.join(getters)} failed before the first step ({e!r}): the model is "
+                             "called once at initialization, as with [model] init_call = true",
+                             Status.ok, self.info_category)
+                    init_call = True
+            if init_call:
                 result = self._call(self.time, self.experiment.get("step_size", 0.0))
                 self._read_results(result, have_result=True, update_states=False, missing_ok=True)
-            else:
-                self._read_results(None, have_result=False, update_states=False, missing_ok=True)
             for name, clock in self.clocks.items():
                 if clock["causality"] == "input":
                     self._read_results(None, have_result=False, update_states=False, missing_ok=True, clock=name)

@@ -880,3 +880,45 @@ def test_normal_method_is_not_called_on_the_class(tmp_path):
     """))
     data, _ = infer(f"{tmp_path / 'heat.py'}:Model", call="building")
     assert "call_on_class" not in data["model"]
+
+
+@pytest.mark.parametrize("probe", [False, True])
+def test_function_attached_to_a_class_is_a_method(tmp_path, probe):
+    # like pypsa's Network.pf = pf, written as pf(n, ...): called on the object, not on the class
+    (tmp_path / "net.py").write_text(textwrap.dedent("""
+        def pf(n, scale=1.0):
+            n.flow = n.load * scale
+            return n.flow
+
+        class Network:
+            def __init__(self, load=2.0):
+                self.load = load
+            pf = pf
+    """))
+    data, _ = infer(f"{tmp_path / 'net.py'}:Network", call="pf", probe=probe)
+    assert "call_on_class" not in data["model"]
+    assert set(data["inputs"]) == {"scale"}
+
+
+def test_method_annotated_with_its_class_is_a_method(tmp_path):
+    (tmp_path / "net.py").write_text(textwrap.dedent("""
+        class Network:
+            def __init__(self, load=2.0):
+                self.load = load
+
+            def pf(n: "Network", scale=1.0):
+                return n.load * scale
+    """))
+    data, _ = infer(f"{tmp_path / 'net.py'}:Network", call="pf")
+    assert "call_on_class" not in data["model"]
+
+
+@pytest.mark.parametrize("signature, bound", [
+    ("h: int = 4", False), ("h=None", False), ("h=4", False), ("h: 'int | None' = None", False),
+    ("h=0.1", True), ("h: float = 0.1", True),
+])
+def test_h_is_a_step_size_unless_it_is_a_count(tmp_path, signature, bound):
+    # neuralforecast's predict(h=None) is the forecast horizon; an ODE solver's h is the step size
+    (tmp_path / "m.py").write_text(f"def f(x=1.0, {signature}):\n    return x\n")
+    data, _ = infer(f"{tmp_path / 'm.py'}:f", probe=False)
+    assert (data.get("time", {}).get("h") == "step_size") is bound
